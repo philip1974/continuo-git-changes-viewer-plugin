@@ -18,8 +18,8 @@ afterEach(() => {
   document.head.innerHTML = '';
 });
 
-describe('requestScope onload realpath canonicalization', () => {
-  it('T1 requests scope for the canonical workspace root', async () => {
+describe('requestScope onload (v0.1.6: no realpath canonicalize)', () => {
+  it('T1 requests scope for raw workspace root (skip realpath — chicken-and-egg)', async () => {
     globalThis.co = {
       Plugin: TestPluginBase,
       React: { createElement: vi.fn(() => null) },
@@ -27,12 +27,13 @@ describe('requestScope onload realpath canonicalization', () => {
       z: {},
     };
     const PluginClass = (await import('../../main')).default;
+    const realpath = vi.fn(async () => '/private/var/repo');
     const app = {
       panels: { register: vi.fn(() => ({ dispose: vi.fn() })) },
       commands: { register: vi.fn(() => ({ dispose: vi.fn() })) },
       workspace: { getRoot: vi.fn(async () => '/Users/me/repo-link') },
       fs: {
-        realpath: vi.fn(async () => '/private/var/repo'),
+        realpath,
         requestScope: vi.fn(async () => 'grant'),
       },
       shell: { exec: vi.fn(), execStream: vi.fn() },
@@ -42,8 +43,11 @@ describe('requestScope onload realpath canonicalization', () => {
     await plugin.onload();
     await plugin.scopeReady;
 
+    // v0.1.6 hot-fix: realpath enforce scope itself → must not call before requestScope.
+    // Skip canonicalize entirely; symlink edge case deferred.
+    expect(realpath).not.toHaveBeenCalled();
     expect(app.fs.requestScope).toHaveBeenCalledWith([
-      { path: '/private/var/repo', mode: 'r' },
+      { path: '/Users/me/repo-link', mode: 'r' },
     ]);
   });
 });

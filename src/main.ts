@@ -97,9 +97,10 @@ export default class GitChangesViewerPlugin extends Plugin {
         return 'no-workspace';
       }
 
-      const canonicalRoot = await this.app.fs.realpath(root);
+      // v0.1.6 hot-fix: realpath enforce scope itself → chicken-and-egg before grant.
+      // Skip canonicalize; symlink edge case deferred to v0.1.7+.
       const result = await this.app.fs.requestScope([
-        { path: canonicalRoot, mode: 'r' },
+        { path: root, mode: 'r' },
       ]);
       if (result === 'deny') {
         this.store.getState().setBanner({

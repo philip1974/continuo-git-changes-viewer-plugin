@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 describe('requestScope onload grant', () => {
-  it('T1 canonicalizes workspace root and requests read scope', async () => {
+  it('T1 requests read scope on raw workspace root (v0.1.6 skip realpath)', async () => {
     installCo();
     const PluginClass = (await import('../../main')).default;
     const app = makeApp();
@@ -52,9 +52,10 @@ describe('requestScope onload grant', () => {
     await plugin.onload();
     await expect(plugin.scopeReady).resolves.toBe('grant');
 
-    expect(app.fs.realpath).toHaveBeenCalledWith('/repo-link');
+    // v0.1.6 hot-fix: realpath itself enforces scope → never call before grant.
+    expect(app.fs.realpath).not.toHaveBeenCalled();
     expect(app.fs.requestScope).toHaveBeenCalledWith([
-      { path: '/repo', mode: 'r' },
+      { path: '/repo-link', mode: 'r' },
     ]);
   });
 });
