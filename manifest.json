@@ -1,9 +1,9 @@
 {
   "id": "continuo-git-changes-viewer",
   "name": "Git Changes Viewer",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "main": "dist/index.js",
-  "description": "Read-only working-tree vs HEAD diff panel (Plan 06 v0.1.7)",
+  "description": "Read-only working-tree vs HEAD diff panel (Plan 06 v0.1.8)",
   "author": "philip1974",
   "minLMVersion": "0.2.4",
   "permissions": ["shell", "fs"]

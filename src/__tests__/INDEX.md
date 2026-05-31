@@ -14,6 +14,10 @@
 
 - [`diffview-no-toast.spec.ts`](./diffview-banner-preserved/diffview-no-toast.spec.ts)
 
+## [diffview-scroll-fix (v0.1.8 hot-fix)](./diffview-scroll-fix/README.md)
+
+- [`cgv-panel-height.spec.ts`](./diffview-scroll-fix/cgv-panel-height.spec.ts)
+
 ## [Git Exec Wrapper](./exec/README.md)
 
 - [`exec.spec.ts`](./exec/exec.spec.ts)

@@ -17,7 +17,11 @@
 .cgv-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: 100%;
+  /* v0.1.8 hot-fix: must be fixed `height` not min-height — the latter lets
+     the panel grow past dockview's overflow:hidden parent, hiding the bottom
+     and disabling inner overflow:auto. With fixed height, minmax(0,1fr) caps
+     the body row and inner cgv-diff overflow:auto becomes the scroll surface. */
+  height: 100%;
   background: var(--bg-canvas);
   color: var(--text-fg);
 }
