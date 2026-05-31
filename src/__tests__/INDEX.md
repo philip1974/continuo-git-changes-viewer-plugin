@@ -18,6 +18,21 @@
 
 - [`git-store.spec.ts`](./git-store/git-store.spec.ts)
 
+## [Jump Back Onload Request Scope](./jump-back-onload-requestScope/README.md)
+
+- [`onload-deny.spec.ts`](./jump-back-onload-requestScope/onload-deny.spec.ts)
+- [`onload-grant.spec.ts`](./jump-back-onload-requestScope/onload-grant.spec.ts)
+- [`onload-no-workspace.spec.ts`](./jump-back-onload-requestScope/onload-no-workspace.spec.ts)
+- [`onload-permission-error.spec.ts`](./jump-back-onload-requestScope/onload-permission-error.spec.ts)
+- [`onload-realpath.spec.ts`](./jump-back-onload-requestScope/onload-realpath.spec.ts)
+
+## [Jump Back Real Editor](./jump-back-real/README.md)
+
+- [`failure-fallback.spec.tsx`](./jump-back-real/failure-fallback.spec.tsx)
+- [`feature-detect.spec.tsx`](./jump-back-real/feature-detect.spec.tsx)
+- [`happy.spec.tsx`](./jump-back-real/happy.spec.tsx)
+- [`success-fallback.spec.tsx`](./jump-back-real/success-fallback.spec.tsx)
+
 ## [main](./main/README.md)
 
 - [`main.spec.ts`](./main/main.spec.ts)
@@ -29,6 +44,10 @@
 ## [Git Viewer Panel](./panel/README.md)
 
 - [`panel.spec.tsx`](./panel/panel.spec.tsx)
+
+## [Path Utils](./path-utils/README.md)
+
+- [`joinRepoPath.spec.ts`](./path-utils/joinRepoPath.spec.ts)
 
 ## [Repo Detection](./repo-detect/README.md)
 

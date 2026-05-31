@@ -1,16 +1,24 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
 import type { DiffResult } from '../git/diff-fetcher';
+import type { CoPluginApp } from '../sdk/types';
 import type { GitViewerState } from '../state/git-store';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
 
 interface GitViewerPanelProps {
+  readonly app?: CoPluginApp;
   readonly store: StoreApi<GitViewerState>;
   readonly diff?: DiffResult | null;
+  readonly scopeReady?: Promise<'grant' | 'deny' | 'no-workspace' | 'error'>;
 }
 
-export function GitViewerPanel({ store, diff: diffOverride = null }: GitViewerPanelProps) {
+export function GitViewerPanel({
+  app,
+  store,
+  diff: diffOverride = null,
+  scopeReady,
+}: GitViewerPanelProps) {
   const state = useSyncExternalStore(
     store.subscribe,
     store.getState,
@@ -56,7 +64,13 @@ export function GitViewerPanel({ store, diff: diffOverride = null }: GitViewerPa
       </header>
       <div className="cgv-body">
         <FileList store={store} changes={state.changes} />
-        <DiffView store={store} change={selected} diff={diff} />
+        <DiffView
+          app={app}
+          scopeReady={scopeReady}
+          store={store}
+          change={selected}
+          diff={diff}
+        />
       </div>
       {state.banner ? (
         <div className={`cgv-banner cgv-banner--${state.banner.kind}`}>

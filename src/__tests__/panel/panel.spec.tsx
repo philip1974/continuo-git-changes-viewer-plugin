@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGitStore } from '../../state/git-store';
 import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import { DiffView } from '../../panel/DiffView';
+import type { CoPluginApp } from '../../sdk/types';
 
 afterEach(() => {
   cleanup();
@@ -34,13 +35,16 @@ describe('GitViewerPanel', () => {
     expect(screen.getByText('notes.txt', { selector: '.cgv-path' })).toBeTruthy();
   });
 
-  // v0.1.4: UnifiedDiffView rows 含行号 click 触发 jump-back banner
-  // （不是 v0.1 的独立 "1" 按钮）
-  it('T2 clicking a + line sets the jump-back banner', () => {
+  it('T2 clicking a + line opens the selected file at that line', async () => {
+    const openFile = vi.fn(async () => ({ ok: true as const, lineApplied: true }));
+    const app = { editor: { openFile } } as unknown as CoPluginApp;
     const store = createGitStore();
+    store.setState({ repoRoot: '/repo' });
 
     render(
       <DiffView
+        app={app}
+        scopeReady={Promise.resolve('grant')}
         store={store}
         change={{ path: 'src/a.ts', status: 'M', kind: 'text' }}
         diff={{
@@ -59,8 +63,10 @@ describe('GitViewerPanel', () => {
     const plusLine = screen.getByText(/\+new/);
     fireEvent.click(plusLine.closest('.cgv-line')!);
 
-    expect(store.getState().banner?.message).toContain('src/a.ts:1');
-    expect(store.getState().banner?.message).toContain('Jump-back coming in v0.2');
+    await vi.waitFor(() => {
+      expect(openFile).toHaveBeenCalledWith('/repo/src/a.ts', { line: 1 });
+    });
+    expect(store.getState().banner).toBeNull();
   });
 
   it('T3 renders too-large placeholder with exact command', () => {

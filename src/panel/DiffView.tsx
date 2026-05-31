@@ -1,12 +1,16 @@
 import type { StoreApi } from 'zustand/vanilla';
 import type { DiffResult } from '../git/diff-fetcher';
+import { joinRepoPath } from '../git/path-utils';
+import type { CoPluginApp } from '../sdk/types';
 import type { FileChange } from '../git/status-scanner';
 import type { GitViewerState } from '../state/git-store';
 
 interface DiffViewProps {
+  readonly app?: CoPluginApp;
   readonly store: StoreApi<GitViewerState>;
   readonly change: FileChange | null;
   readonly diff: DiffResult | null;
+  readonly scopeReady?: Promise<'grant' | 'deny' | 'no-workspace' | 'error'>;
 }
 
 function NewFileView({ content }: { readonly content: string }) {
@@ -87,7 +91,7 @@ function UnifiedDiffView({
   return <div className="cgv-unified-diff">{rows}</div>;
 }
 
-export function DiffView({ store, change, diff }: DiffViewProps) {
+export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps) {
   if (!change) return <main className="cgv-diff-empty">Select a file</main>;
   if (!diff) return <main className="cgv-diff-empty">Loading diff…</main>;
   if (!diff.ok) {
@@ -97,10 +101,75 @@ export function DiffView({ store, change, diff }: DiffViewProps) {
     return <main className="cgv-diff-empty">{diff.message ?? 'git diff failed'}</main>;
   }
 
-  const setJumpBanner = (line: number) => {
+  const onJumpLine = async (line: number) => {
+    const editor = app?.editor;
+    if (typeof editor?.openFile !== 'function') {
+      store.getState().setBanner({
+        kind: 'warn',
+        message: 'SDK editor unavailable; please upgrade Continuo to >= 0.2.3',
+        dismissable: true,
+      });
+      return;
+    }
+
+    const scopeState = await (scopeReady ?? Promise.resolve('error'));
+    if (scopeState !== 'grant') return;
+
+    const state = store.getState();
+    const repoRoot = state.repoRoot;
+    if (!repoRoot) {
+      state.setBanner({
+        kind: 'error',
+        message: 'Repo root unknown',
+        dismissable: true,
+      });
+      return;
+    }
+
+    const selectedPath = state.selectedPath ?? change.path;
+    const absPath = joinRepoPath(repoRoot, selectedPath);
+    let result;
+    try {
+      result = await editor.openFile(absPath, { line });
+    } catch (err) {
+      store.getState().setBanner({
+        kind: 'error',
+        message: `Open failed: ${err instanceof Error ? err.message : String(err)}`,
+        dismissable: true,
+      });
+      return;
+    }
+
+    if (result.ok && result.lineApplied) return;
+
+    if (result.ok) {
+      const reason = result.reason ?? 'no-line-arg';
+      const messageByReason = {
+        'no-line-arg': `Opened ${selectedPath}`,
+        'milkdown-engine': `Opened ${selectedPath}; cannot jump to line in Markdown editor. Press Cmd+P then paste: ${selectedPath}:${line}`,
+        'line-out-of-range': `Opened ${selectedPath}; line ${line} is beyond file end`,
+        'tab-not-mounted': `Opened ${selectedPath}; editor not mounted within 500ms. Please click again`,
+      } satisfies Record<string, string>;
+      store.getState().setBanner({
+        kind: 'info',
+        message: messageByReason[reason],
+        dismissable: true,
+      });
+      return;
+    }
+
+    const messageByCode = {
+      INVALID_PATH: `Invalid path: ${selectedPath} (need absolute path)`,
+      PERMISSION_DENIED: `Need 'fs' permission or path '${selectedPath}' not in granted scope`,
+      FS_NOT_FOUND: `File not found: ${selectedPath}`,
+      FS_NOT_FILE: `Not a regular file: ${selectedPath}`,
+      FS_DENIED: `Cannot read file: ${selectedPath} (${result.message})`,
+      FS_IO: `Read error: ${selectedPath} (${result.message})`,
+      EXCEPTION: `Open failed: ${result.message}`,
+    } satisfies Record<string, string>;
     store.getState().setBanner({
-      kind: 'info',
-      message: `Jump-back coming in v0.2. Press Cmd+P then paste: ${change.path}:${line}`,
+      kind: 'error',
+      message: messageByCode[result.code],
       dismissable: true,
     });
   };
@@ -117,7 +186,7 @@ export function DiffView({ store, change, diff }: DiffViewProps) {
   // Tracked changes → unified diff renderer
   return (
     <main className="cgv-diff">
-      <UnifiedDiffView diff={diff.unifiedDiff} onJumpLine={setJumpBanner} />
+      <UnifiedDiffView diff={diff.unifiedDiff} onJumpLine={onJumpLine} />
     </main>
   );
 }

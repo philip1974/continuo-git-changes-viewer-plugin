@@ -1,5 +1,6 @@
 // upstream: Continuo@11c5eb49d656d5c16d2a8e77e1639f4fdd7b00d6
 // src: /Users/RiGang/Desktop/Continuo/src/plugins/types.ts
+// upstream-additions: Continuo@fb18eb1 (editor namespace)
 // 严格类型；严禁 `: any`（topic-05 lesson）
 
 import type { ReactNode } from 'react';
@@ -57,6 +58,44 @@ export interface SettingTabSpec {
 
 export interface CoWorkspaceApi {
   getRoot(): Promise<string | null>;
+}
+
+export interface EditorOpenOptions {
+  readonly line?: number;
+}
+
+export type EditorOpenSuccessReason =
+  | 'no-line-arg'
+  | 'milkdown-engine'
+  | 'line-out-of-range'
+  | 'tab-not-mounted';
+
+export type EditorOpenFailureCode =
+  | 'INVALID_PATH'
+  | 'PERMISSION_DENIED'
+  | 'FS_NOT_FOUND'
+  | 'FS_NOT_FILE'
+  | 'FS_DENIED'
+  | 'FS_IO'
+  | 'EXCEPTION';
+
+export type EditorOpenResult =
+  | {
+      readonly ok: true;
+      readonly lineApplied: boolean;
+      readonly reason?: EditorOpenSuccessReason;
+    }
+  | {
+      readonly ok: false;
+      readonly code: EditorOpenFailureCode;
+      readonly message: string;
+    };
+
+export interface CoEditorApi {
+  openFile(
+    path: string,
+    opts?: EditorOpenOptions,
+  ): Promise<EditorOpenResult>;
 }
 
 export interface PluginDataStore {
@@ -174,6 +213,7 @@ export interface CoApp {
     register(spec: SettingTabSpec): Disposable;
   };
   readonly workspace: CoWorkspaceApi;
+  readonly editor: CoEditorApi;
 }
 
 export interface CoPluginApp extends CoApp {
