@@ -22,43 +22,41 @@ function makeApp(shellResult: PluginShellExecResult) {
   };
 }
 
+// v0.1.3+: untracked 不再走 `git diff --no-index`，改用 `cat <path>` 拿 WT 全文，
+// DiffView 走 NewFileView 渲染（没 unified diff 概念）。
 describe('untracked diff fetcher', () => {
-  it('T1 accepts git diff --no-index exit code 1 as diff exists', async () => {
-    const { app, exec } = makeApp(result({ stdout: 'diff --git a/dev/null b/new.txt\n', exitCode: 1 }));
+  it('T1 reads WT file via cat and returns isUntracked:true', async () => {
+    const { app, exec } = makeApp(result({ stdout: 'hello untracked\n', exitCode: 0 }));
 
     await expect(
       fetchDiff(app, '/repo', { path: 'new.txt', status: 'U', kind: 'text' }),
     ).resolves.toEqual({
       ok: true,
       path: 'new.txt',
-      diff: 'diff --git a/dev/null b/new.txt\n',
+      original: '',
+      modified: 'hello untracked\n',
+      unifiedDiff: '',
+      isUntracked: true,
     });
     expect(exec).toHaveBeenCalledWith(
-      'git',
-      [
-        '--no-optional-locks',
-        'diff',
-        '--no-index',
-        '--binary',
-        '--no-color',
-        '/dev/null',
-        'new.txt',
-      ],
+      'cat',
+      ['new.txt'],
       expect.objectContaining({ cwd: '/repo' }),
     );
   });
 
-  it('T2 maps truncated untracked diff to too-large placeholder', async () => {
-    const { app } = makeApp(result({ stdout: 'partial', exitCode: 1, truncated: true }));
+  it('T2 unreadable file (cat exit !== 0) returns empty modified', async () => {
+    const { app } = makeApp(result({ stdout: '', stderr: 'permission denied', exitCode: 1 }));
 
     await expect(
-      fetchDiff(app, '/repo', { path: 'new.txt', status: 'U', kind: 'text' }),
+      fetchDiff(app, '/repo', { path: 'locked.txt', status: 'U', kind: 'text' }),
     ).resolves.toEqual({
-      ok: false,
-      reason: 'too-large',
-      path: 'new.txt',
-      exactCommand:
-        'git diff --no-index --binary --no-color /dev/null new.txt',
+      ok: true,
+      path: 'locked.txt',
+      original: '',
+      modified: '',
+      unifiedDiff: '',
+      isUntracked: true,
     });
   });
 });

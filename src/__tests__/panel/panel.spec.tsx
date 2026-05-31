@@ -11,35 +11,53 @@ afterEach(() => {
 });
 
 describe('GitViewerPanel', () => {
-  it('T1 renders Changed and Untracked sections', () => {
-    const store = createGitStore();
-    store.setState({
-      changes: [
-        { path: 'src/a.ts', status: 'M', kind: 'text' },
-        { path: 'notes.txt', status: 'U', kind: 'text' },
-      ],
-      selectedPath: 'src/a.ts',
+  it('T1 renders Changed and Untracked sections', async () => {
+    // v0.1.1 panel mount auto-refresh → 必须经 deps.load 注入 changes
+    // 否则 setState 被 mount-time refresh 覆盖为空
+    const store = createGitStore({
+      load: async () => ({
+        repoRoot: '/repo',
+        changes: [
+          { path: 'src/a.ts', status: 'M', kind: 'text' },
+          { path: 'notes.txt', status: 'U', kind: 'text' },
+        ],
+      }),
     });
 
     render(<GitViewerPanel store={store} />);
+    // 等 auto-refresh 完成
+    await screen.findByText('Changed');
 
     expect(screen.getByText('Changed')).toBeTruthy();
     expect(screen.getByText('Untracked')).toBeTruthy();
-    expect(screen.getByText('src/a.ts')).toBeTruthy();
-    expect(screen.getByText('notes.txt')).toBeTruthy();
+    expect(screen.getByText('src/a.ts', { selector: '.cgv-path' })).toBeTruthy();
+    expect(screen.getByText('notes.txt', { selector: '.cgv-path' })).toBeTruthy();
   });
 
-  it('T2 clicking a hunk line sets the jump-back banner', () => {
+  // v0.1.4: UnifiedDiffView rows 含行号 click 触发 jump-back banner
+  // （不是 v0.1 的独立 "1" 按钮）
+  it('T2 clicking a + line sets the jump-back banner', () => {
     const store = createGitStore();
 
     render(
       <DiffView
         store={store}
         change={{ path: 'src/a.ts', status: 'M', kind: 'text' }}
-        diff={{ ok: true, path: 'src/a.ts', diff: '@@ -1 +1 @@\n-old\n+new\n' }}
+        diff={{
+          ok: true,
+          path: 'src/a.ts',
+          original: 'old\n',
+          modified: 'new\n',
+          unifiedDiff: '@@ -1 +1 @@\n-old\n+new\n',
+          isUntracked: false,
+        }}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: '1' }));
+
+    // unified diff 解析：@@ +1 起算；-old 不增计数；+new = line 1
+    // 点 "+new" 行触发 jump-back
+    const plusLine = screen.getByText(/\+new/);
+    fireEvent.click(plusLine.closest('.cgv-line')!);
 
     expect(store.getState().banner?.message).toContain('src/a.ts:1');
     expect(store.getState().banner?.message).toContain('Jump-back coming in v0.2');

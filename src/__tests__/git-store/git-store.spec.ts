@@ -16,7 +16,7 @@ describe('git viewer store', () => {
       repoRoot: '/repo',
       changes: [{ path: 'a.ts', status: 'M', kind: 'text' }],
       selectedPath: 'a.ts',
-      diffCache: new Map([['a.ts', 'diff']]),
+      diffCache: new Map([['a.ts', { ok: true, path: 'a.ts', original: '', modified: '', unifiedDiff: 'diff', isUntracked: false }]]) as Map<string, import('../../git/diff-fetcher').DiffResult>,
       isLoading: true,
       banner: { kind: 'info', message: 'hello', dismissable: true },
     });

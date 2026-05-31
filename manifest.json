@@ -1,6 +1,10 @@
 {
   "id": "continuo-git-changes-viewer",
-  "version": "0.1.0",
+  "name": "Git Changes Viewer",
+  "version": "0.1.4",
+  "main": "dist/index.js",
+  "description": "Read-only working-tree vs HEAD diff panel (Plan 06 v0.1.4)",
+  "author": "philip1974",
   "minLMVersion": "0.2.2",
   "permissions": ["shell"]
 }

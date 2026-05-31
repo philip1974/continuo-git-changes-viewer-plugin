@@ -23,7 +23,8 @@ function makeApp(shellResult: PluginShellExecResult) {
 }
 
 describe('tracked diff fetcher', () => {
-  it('T1 fetches tracked unified diff against HEAD', async () => {
+  it('T1 fetches HEAD + WT + unified diff for tracked file', async () => {
+    // v0.1.3: returns {original, modified, unifiedDiff, isUntracked:false} not {diff}
     const { app, exec } = makeApp(result({ stdout: 'diff --git a/a.ts b/a.ts\n' }));
 
     await expect(
@@ -31,8 +32,22 @@ describe('tracked diff fetcher', () => {
     ).resolves.toEqual({
       ok: true,
       path: 'src/a.ts',
-      diff: 'diff --git a/a.ts b/a.ts\n',
+      original: 'diff --git a/a.ts b/a.ts\n', // shared mock; real impl returns HEAD blob
+      modified: 'diff --git a/a.ts b/a.ts\n', // shared mock; real impl returns WT content
+      unifiedDiff: 'diff --git a/a.ts b/a.ts\n',
+      isUntracked: false,
     });
+    // v0.1.3 spawns 3 parallel calls: git show HEAD:<path>, cat <path>, git diff HEAD -- <path>
+    expect(exec).toHaveBeenCalledWith(
+      'git',
+      ['--no-optional-locks', 'show', 'HEAD:src/a.ts'],
+      expect.objectContaining({ cwd: '/repo' }),
+    );
+    expect(exec).toHaveBeenCalledWith(
+      'cat',
+      ['src/a.ts'],
+      expect.objectContaining({ cwd: '/repo' }),
+    );
     expect(exec).toHaveBeenCalledWith(
       'git',
       ['--no-optional-locks', 'diff', 'HEAD', '--', 'src/a.ts'],
@@ -40,7 +55,7 @@ describe('tracked diff fetcher', () => {
     );
   });
 
-  it('T2 maps truncated output to too-large with exact command', async () => {
+  it('T2 maps truncated unified diff to too-large with exact command', async () => {
     const { app } = makeApp(result({ stdout: 'partial', truncated: true }));
 
     await expect(

@@ -30,10 +30,6 @@
 
 - [`panel.spec.tsx`](./panel/panel.spec.tsx)
 
-## [Patience Diff And MergeView](./patienceDiff/README.md)
-
-- [`patienceDiff.spec.ts`](./patienceDiff/patienceDiff.spec.ts)
-
 ## [Repo Detection](./repo-detect/README.md)
 
 - [`repo-detect.spec.ts`](./repo-detect/repo-detect.spec.ts)

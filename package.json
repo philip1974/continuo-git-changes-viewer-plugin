@@ -1,6 +1,6 @@
 {
   "name": "continuo-git-changes-viewer-plugin",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -16,7 +16,6 @@
     "pretest": "node scripts/check-no-skip.mjs && node scripts/check-web-compat.mjs"
   },
   "dependencies": {
-    "@codemirror/merge": "^6.7.6",
     "zod": "^3.23.8"
   },
   "peerDependencies": {

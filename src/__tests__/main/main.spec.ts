@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+// v0.1.2 hotfix: main.ts onload 注入 CSS 需 document → jsdom env
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   CoPluginApp,
