@@ -1,0 +1,6 @@
+{
+  "id": "continuo-git-changes-viewer",
+  "version": "0.1.0",
+  "minLMVersion": "0.2.2",
+  "permissions": ["shell"]
+}
