@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { FileChange } from '../git/status-scanner';
+import type { BannerKind } from '../lib/notification-mapping';
 
 export interface BannerState {
   readonly kind: 'info' | 'warn' | 'error';
@@ -20,6 +21,7 @@ export interface GitStoreDeps {
     repoRoot: string,
     change: FileChange,
   ) => Promise<DiffResult>;
+  readonly onError?: (kind: BannerKind, message: string) => void;
 }
 
 export interface GitViewerState {
@@ -69,13 +71,17 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         const first = loaded.changes[0]?.path;
         if (first) void get().loadDiff(first);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.onError?.('error', message);
         set({
           isLoading: false,
-          banner: {
-            kind: 'error',
-            message: err instanceof Error ? err.message : String(err),
-            dismissable: true,
-          },
+          banner: deps.onError
+            ? null
+            : {
+                kind: 'error',
+                message,
+                dismissable: true,
+              },
         });
       }
     },

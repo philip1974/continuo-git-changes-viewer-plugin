@@ -5,6 +5,8 @@ import { scanStatus } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
 import { createGitStore } from './state/git-store';
 import { GitViewerPanel } from './panel/GitViewerPanel';
+import type { NotificationKind } from './sdk/types';
+import { toBannerKind } from './lib/notification-mapping';
 // v0.1.2 hotfix: Continuo plugin loader 只载 dist/index.js，不自动 link dist/style.css
 // → CSS 用 `?inline` import 拿字符串，onload 时 appendChild <style> 注入到 document.head。
 import css from './styles/index.css?inline';
@@ -12,6 +14,27 @@ import css from './styles/index.css?inline';
 const { Plugin, React } = co;
 
 type ScopeReadyState = 'grant' | 'deny' | 'no-workspace' | 'error';
+
+function gitCompareIcon() {
+  return React.createElement(
+    'svg',
+    {
+      width: 16,
+      height: 16,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 2,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      'aria-hidden': true,
+    },
+    React.createElement('circle', { cx: 5, cy: 6, r: 3 }),
+    React.createElement('circle', { cx: 19, cy: 18, r: 3 }),
+    React.createElement('path', { d: 'M12 6h5a2 2 0 0 1 2 2v7' }),
+    React.createElement('path', { d: 'M12 18H7a2 2 0 0 1-2-2V9' }),
+  );
+}
 
 export default class GitChangesViewerPlugin extends Plugin {
   private readonly disposables: Disposable[] = [];
@@ -24,6 +47,27 @@ export default class GitChangesViewerPlugin extends Plugin {
 
   get scopeReady(): Promise<ScopeReadyState> {
     return this.scopeReadyPromise;
+  }
+
+  private showNotification(
+    kind: NotificationKind,
+    message: string,
+    code?: string,
+  ): void {
+    if (typeof this.app.notifications?.show === 'function') {
+      this.app.notifications.show(
+        code === undefined ? { kind, message } : { kind, message, code },
+      );
+      return;
+    }
+
+    // Defensive fallback only. The SDK toast has no dismissable field; inline
+    // banners keep it because the panel banner UI supports manual dismissal.
+    this.store.getState().setBanner({
+      kind: toBannerKind(kind),
+      message,
+      dismissable: true,
+    });
   }
 
   override async onload(): Promise<void> {
@@ -47,11 +91,7 @@ export default class GitChangesViewerPlugin extends Plugin {
             repo.reason === 'no-workspace'
               ? 'Open a workspace before refreshing Git changes.'
               : 'Git Changes Viewer v0.1 requires the workspace root to be the git toplevel.';
-          store.getState().setBanner({
-            kind: 'warn',
-            message,
-            dismissable: true,
-          });
+          this.showNotification('warning', message);
           return { repoRoot: repo.root ?? null, changes: [] };
         }
 
@@ -82,6 +122,23 @@ export default class GitChangesViewerPlugin extends Plugin {
       }),
     );
 
+    if (typeof this.app.dock?.openPanel === 'function') {
+      const ribbon = this.app.ribbon.register({
+        id: 'git-changes-viewer-open',
+        title: 'Git Changes',
+        icon: gitCompareIcon(),
+        onClick: () => {
+          try {
+            this.app.dock?.openPanel('git-changes-viewer');
+          } catch {
+            // Defensive only: topic-31 host dock.openPanel is specified no-throw.
+          }
+        },
+        priority: 100,
+      });
+      this.disposables.push(ribbon);
+    }
+
     this.scopeReadyPromise = this.requestScopeOnce();
   }
 
@@ -89,11 +146,10 @@ export default class GitChangesViewerPlugin extends Plugin {
     try {
       const root = await this.app.workspace.getRoot();
       if (!root) {
-        this.store.getState().setBanner({
-          kind: 'warn',
-          message: 'Open a workspace folder to enable jump-back',
-          dismissable: true,
-        });
+        this.showNotification(
+          'warning',
+          'Open a workspace folder to enable jump-back',
+        );
         return 'no-workspace';
       }
 
@@ -103,11 +159,7 @@ export default class GitChangesViewerPlugin extends Plugin {
         { path: root, mode: 'r' },
       ]);
       if (result === 'deny') {
-        this.store.getState().setBanner({
-          kind: 'warn',
-          message: 'fs scope denied; jump-back disabled',
-          dismissable: true,
-        });
+        this.showNotification('warning', 'fs scope denied; jump-back disabled');
         return 'deny';
       }
 
@@ -116,13 +168,13 @@ export default class GitChangesViewerPlugin extends Plugin {
       const PermissionError = globalThis.co?.PermissionError;
       const isPermissionError =
         PermissionError !== undefined && err instanceof PermissionError;
-      this.store.getState().setBanner({
-        kind: 'error',
-        message: isPermissionError
+      this.showNotification(
+        'error',
+        isPermissionError
           ? "Please grant 'fs' permission via Plugin Manager"
           : `Setup failed: ${err instanceof Error ? err.message : String(err)}`,
-        dismissable: true,
-      });
+        isPermissionError ? 'PERMISSION_DENIED' : undefined,
+      );
       return 'error';
     }
   }

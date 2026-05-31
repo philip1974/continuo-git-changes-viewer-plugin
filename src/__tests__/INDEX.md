@@ -10,6 +10,10 @@
 
 - [`diff-fetcher.spec.ts`](./diff-fetcher/diff-fetcher.spec.ts)
 
+## [DiffView Banner Preserved](./diffview-banner-preserved/README.md)
+
+- [`diffview-no-toast.spec.ts`](./diffview-banner-preserved/diffview-no-toast.spec.ts)
+
 ## [Git Exec Wrapper](./exec/README.md)
 
 - [`exec.spec.ts`](./exec/exec.spec.ts)
@@ -37,9 +41,17 @@
 
 - [`main.spec.ts`](./main/main.spec.ts)
 
+## [Notification Mapping](./notification-mapping/README.md)
+
+- [`mapping.spec.ts`](./notification-mapping/mapping.spec.ts)
+
 ## [Numstat Binary Detection](./numstat/README.md)
 
 - [`numstat.spec.ts`](./numstat/numstat.spec.ts)
+
+## [Onload Toast Replacement](./onload-toast-replacement/README.md)
+
+- [`onload-toast.spec.ts`](./onload-toast-replacement/onload-toast.spec.ts)
 
 ## [Git Viewer Panel](./panel/README.md)
 
@@ -53,9 +65,21 @@
 
 - [`repo-detect.spec.ts`](./repo-detect/repo-detect.spec.ts)
 
+## [Ribbon Register](./ribbon-register/README.md)
+
+- [`ribbon-register.spec.ts`](./ribbon-register/ribbon-register.spec.ts)
+
+## [SDK Shim Dock Notifications](./sdk-shim-dock-notifications/README.md)
+
+- [`sdk-shim-append.spec.ts`](./sdk-shim-dock-notifications/sdk-shim-append.spec.ts)
+
 ## [Status Scanner](./status-scanner/README.md)
 
 - [`status-scanner.spec.ts`](./status-scanner/status-scanner.spec.ts)
+
+## [Store Load Toast](./storeload-toast/README.md)
+
+- [`storeload-toast.spec.ts`](./storeload-toast/storeload-toast.spec.ts)
 
 ## [Untracked Diff](./untracked-diff/README.md)
 

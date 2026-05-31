@@ -1,6 +1,7 @@
 // upstream: Continuo@11c5eb49d656d5c16d2a8e77e1639f4fdd7b00d6
 // src: /Users/RiGang/Desktop/Continuo/src/plugins/types.ts
 // upstream-additions: Continuo@fb18eb1 (editor namespace)
+// upstream-additions: Continuo@7d3d670 (topic-31 dock + notifications)
 // 严格类型；严禁 `: any`（topic-05 lesson）
 
 import type { ReactNode } from 'react';
@@ -96,6 +97,23 @@ export interface CoEditorApi {
     path: string,
     opts?: EditorOpenOptions,
   ): Promise<EditorOpenResult>;
+}
+
+export interface CoDockApi {
+  openPanel(panelId: string): void;
+}
+
+// Mirror upstream NotificationLevel; drift-guarded by sdk-shim tests.
+export type NotificationKind = 'info' | 'warning' | 'error' | 'success';
+
+export interface CoNotificationsShowOpts {
+  readonly kind: NotificationKind;
+  readonly message: string;
+  readonly code?: string;
+}
+
+export interface CoNotificationsApi {
+  show(opts: CoNotificationsShowOpts): void;
 }
 
 export interface PluginDataStore {
@@ -214,6 +232,10 @@ export interface CoApp {
   };
   readonly workspace: CoWorkspaceApi;
   readonly editor: CoEditorApi;
+  /** Optional for defensive feature detection; manifest minLMVersion requires 0.2.4. */
+  readonly dock?: CoDockApi;
+  /** Optional for defensive feature detection; manifest minLMVersion requires 0.2.4. */
+  readonly notifications?: CoNotificationsApi;
 }
 
 export interface CoPluginApp extends CoApp {

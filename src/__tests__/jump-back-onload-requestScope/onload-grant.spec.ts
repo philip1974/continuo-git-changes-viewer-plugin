@@ -24,15 +24,19 @@ function installCo() {
 }
 
 function makeApp() {
+  const notifications = { show: vi.fn() };
   return {
     panels: { register: vi.fn(() => ({ dispose: vi.fn() })) },
     commands: { register: vi.fn(() => ({ dispose: vi.fn() })) },
+    ribbon: { register: vi.fn(() => ({ dispose: vi.fn() })) },
     workspace: { getRoot: vi.fn(async () => '/repo-link') },
     fs: {
       realpath: vi.fn(async () => '/repo'),
       requestScope: vi.fn(async () => 'grant'),
     },
     shell: { exec: vi.fn(), execStream: vi.fn() },
+    dock: { openPanel: vi.fn() },
+    notifications,
   } as unknown as CoPluginApp;
 }
 
@@ -57,6 +61,7 @@ describe('requestScope onload grant', () => {
     expect(app.fs.requestScope).toHaveBeenCalledWith([
       { path: '/repo-link', mode: 'r' },
     ]);
+    expect(app.notifications?.show).not.toHaveBeenCalled();
+    expect(plugin.store.getState().banner).toBeNull();
   });
 });
-

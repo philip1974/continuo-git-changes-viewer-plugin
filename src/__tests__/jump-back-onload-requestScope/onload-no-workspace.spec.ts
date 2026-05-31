@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe('requestScope onload no workspace', () => {
-  it('T1 sets a workspace banner and does not request scope', async () => {
+  it('T1 shows a workspace toast and does not request scope', async () => {
     globalThis.co = {
       Plugin: TestPluginBase,
       React: { createElement: vi.fn(() => null) },
@@ -30,9 +30,12 @@ describe('requestScope onload no workspace', () => {
     const app = {
       panels: { register: vi.fn(() => ({ dispose: vi.fn() })) },
       commands: { register: vi.fn(() => ({ dispose: vi.fn() })) },
+      ribbon: { register: vi.fn(() => ({ dispose: vi.fn() })) },
       workspace: { getRoot: vi.fn(async () => null) },
       fs: { realpath: vi.fn(), requestScope: vi.fn() },
       shell: { exec: vi.fn(), execStream: vi.fn() },
+      dock: { openPanel: vi.fn() },
+      notifications: { show: vi.fn() },
     } as unknown as CoPluginApp;
     const plugin = new PluginClass(app, { id: 'git-viewer' });
 
@@ -40,9 +43,40 @@ describe('requestScope onload no workspace', () => {
     await expect(plugin.scopeReady).resolves.toBe('no-workspace');
 
     expect(app.fs.requestScope).not.toHaveBeenCalled();
-    expect(plugin.store.getState().banner?.message).toContain(
-      'Open a workspace folder',
-    );
+    expect(app.notifications?.show).toHaveBeenCalledWith({
+      kind: 'warning',
+      message: 'Open a workspace folder to enable jump-back',
+    });
+    expect(plugin.store.getState().banner).toBeNull();
+  });
+
+  it('T1b falls back to workspace banner when notifications are unavailable', async () => {
+    globalThis.co = {
+      Plugin: TestPluginBase,
+      React: { createElement: vi.fn(() => null) },
+      PermissionError: class PermissionError extends Error {},
+      z: {},
+    };
+    const PluginClass = (await import('../../main')).default;
+    const app = {
+      panels: { register: vi.fn(() => ({ dispose: vi.fn() })) },
+      commands: { register: vi.fn(() => ({ dispose: vi.fn() })) },
+      ribbon: { register: vi.fn(() => ({ dispose: vi.fn() })) },
+      workspace: { getRoot: vi.fn(async () => null) },
+      fs: { realpath: vi.fn(), requestScope: vi.fn() },
+      shell: { exec: vi.fn(), execStream: vi.fn() },
+      dock: { openPanel: vi.fn() },
+    } as unknown as CoPluginApp;
+    const plugin = new PluginClass(app, { id: 'git-viewer' });
+
+    await plugin.onload();
+    await expect(plugin.scopeReady).resolves.toBe('no-workspace');
+
+    expect(app.fs.requestScope).not.toHaveBeenCalled();
+    expect(plugin.store.getState().banner).toEqual({
+      kind: 'warn',
+      message: 'Open a workspace folder to enable jump-back',
+      dismissable: true,
+    });
   });
 });
-
