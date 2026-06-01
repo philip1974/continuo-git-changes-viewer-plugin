@@ -2,6 +2,14 @@
 
 > 由 `pnpm bdd:index` 自动生成,请勿手工编辑。
 
+## [Auto Refresh Timer](./auto-refresh-timer/README.md)
+
+- [`auto-refresh-timer.spec.ts`](./auto-refresh-timer/auto-refresh-timer.spec.ts)
+
+## [Auto Refresh Wiring](./auto-refresh-wiring/README.md)
+
+- [`wiring.spec.tsx`](./auto-refresh-wiring/wiring.spec.tsx)
+
 ## [Commands](./commands/README.md)
 
 - [`commands.spec.ts`](./commands/commands.spec.ts)
@@ -17,6 +25,10 @@
 ## [diffview-scroll-fix (v0.1.8 hot-fix)](./diffview-scroll-fix/README.md)
 
 - [`cgv-panel-height.spec.ts`](./diffview-scroll-fix/cgv-panel-height.spec.ts)
+
+## [Disposables Cleanup](./disposables-cleanup/README.md)
+
+- [`cleanup.spec.ts`](./disposables-cleanup/cleanup.spec.ts)
 
 ## [Git Exec Wrapper](./exec/README.md)
 
@@ -76,6 +88,18 @@
 ## [SDK Shim Dock Notifications](./sdk-shim-dock-notifications/README.md)
 
 - [`sdk-shim-append.spec.ts`](./sdk-shim-dock-notifications/sdk-shim-append.spec.ts)
+
+## [Settings Store](./settings-store/README.md)
+
+- [`settings-store.spec.ts`](./settings-store/settings-store.spec.ts)
+
+## [Settings Tab](./settings-tab/README.md)
+
+- [`settings-tab.spec.tsx`](./settings-tab/settings-tab.spec.tsx)
+
+## [Status Hash](./status-hash/README.md)
+
+- [`status-hash.spec.ts`](./status-hash/status-hash.spec.ts)
 
 ## [Status Scanner](./status-scanner/README.md)
 

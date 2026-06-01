@@ -1,16 +1,24 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
 import type { DiffResult } from '../git/diff-fetcher';
-import type { CoPluginApp } from '../sdk/types';
+import { readStatusHash } from '../git/status-hash';
+import { readAutoRefreshIntervalSec } from '../lib/settings-store';
+import type { CoPluginApp, PanelApi } from '../sdk/types';
+import type { AutoRefreshTimer, AutoRefreshTimerOpts } from '../state/auto-refresh-timer';
 import type { GitViewerState } from '../state/git-store';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
+
+type AutoRefreshTimerController = Pick<AutoRefreshTimer, 'start' | 'stop'>;
 
 interface GitViewerPanelProps {
   readonly app?: CoPluginApp;
   readonly store: StoreApi<GitViewerState>;
   readonly diff?: DiffResult | null;
   readonly scopeReady?: Promise<'grant' | 'deny' | 'no-workspace' | 'error'>;
+  readonly panelApi?: PanelApi;
+  readonly timer?: AutoRefreshTimerController;
+  readonly pluginId?: string;
 }
 
 export function GitViewerPanel({
@@ -18,6 +26,9 @@ export function GitViewerPanel({
   store,
   diff: diffOverride = null,
   scopeReady,
+  panelApi,
+  timer,
+  pluginId,
 }: GitViewerPanelProps) {
   const state = useSyncExternalStore(
     store.subscribe,
@@ -30,6 +41,65 @@ export function GitViewerPanel({
   useEffect(() => {
     void store.getState().refresh();
   }, [store]);
+
+  useEffect(() => {
+    if (!app || !panelApi || !timer || !pluginId) return;
+
+    let cancelled = false;
+    let lastHash = '';
+
+    const start = async () => {
+      const intervalSec = await readAutoRefreshIntervalSec(app.dataStore, pluginId);
+      if (cancelled) return;
+      if (intervalSec === 0) {
+        timer.stop();
+        return;
+      }
+
+      const repoRoot = store.getState().repoRoot;
+      if (repoRoot) {
+        try {
+          lastHash = await readStatusHash(app, repoRoot);
+        } catch {
+          lastHash = '';
+        }
+      }
+      if (cancelled || !panelApi.isVisible) return;
+
+      const opts: AutoRefreshTimerOpts = {
+        intervalMs: intervalSec * 1000,
+        onTick: async () => {
+          const currentRoot = store.getState().repoRoot;
+          if (!currentRoot) return;
+          const nextHash = await readStatusHash(app, currentRoot);
+          if (nextHash === lastHash) return;
+          lastHash = nextHash;
+          await store.getState().refresh();
+        },
+        onError: (err) => {
+          console.warn('[git-viewer] auto-refresh:', err);
+        },
+      };
+      timer.start(opts);
+    };
+
+    const disposable = panelApi.onDidVisibilityChange((event) => {
+      if (event.isVisible) {
+        void start();
+      } else {
+        timer.stop();
+      }
+    });
+
+    if (panelApi.isVisible) {
+      void start();
+    }
+
+    return () => {
+      cancelled = true;
+      disposable.dispose();
+    };
+  }, [app, panelApi, pluginId, store, timer]);
 
   // v0.1.2 hotfix: 选中变化时确保 diff 被 fetch（refresh 时已 prefetch 首个；这里覆盖手动切换）
   useEffect(() => {

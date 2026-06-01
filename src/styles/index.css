@@ -280,6 +280,42 @@
   border-left: 3px solid var(--text-fg);
 }
 
+.cgv-settings {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  background: var(--bg-canvas);
+  color: var(--text-fg);
+}
+
+.cgv-settings-legend {
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cgv-settings-hint {
+  margin: 0;
+  color: var(--text-fg);
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.cgv-settings-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 13px;
+}
+
+.cgv-settings-radio input {
+  accent-color: var(--accent);
+}
+
 @media (max-width: 720px) {
   .cgv-body {
     grid-template-columns: 1fr;

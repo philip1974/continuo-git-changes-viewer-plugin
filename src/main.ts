@@ -1,10 +1,18 @@
-import { co, type CoPluginApp, type Disposable, type PluginManifest } from './sdk/types';
+import {
+  co,
+  type CoPluginApp,
+  type Disposable,
+  type PanelFactoryProps,
+  type PluginManifest,
+} from './sdk/types';
 import { registerCommands } from './commands';
 import { detectRepo } from './git/repo-detect';
 import { scanStatus } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
+import { AutoRefreshTimer } from './state/auto-refresh-timer';
 import { createGitStore } from './state/git-store';
 import { GitViewerPanel } from './panel/GitViewerPanel';
+import { SettingsTab } from './panel/SettingsTab';
 import type { NotificationKind } from './sdk/types';
 import { toBannerKind } from './lib/notification-mapping';
 // v0.1.2 hotfix: Continuo plugin loader 只载 dist/index.js，不自动 link dist/style.css
@@ -38,6 +46,7 @@ function gitCompareIcon() {
 
 export default class GitChangesViewerPlugin extends Plugin {
   private readonly disposables: Disposable[] = [];
+  private readonly timer = new AutoRefreshTimer();
   store = createGitStore();
   scopeReadyPromise: Promise<ScopeReadyState> = Promise.resolve('error');
 
@@ -107,14 +116,32 @@ export default class GitChangesViewerPlugin extends Plugin {
     const panel = this.app.panels.register({
       type: 'git-changes-viewer',
       title: 'Git Changes Viewer',
-      factory: () =>
+      factory: (props: PanelFactoryProps) =>
         React.createElement(GitViewerPanel, {
           app: this.app,
           scopeReady: this.scopeReadyPromise,
           store,
+          panelApi: props.api,
+          timer: this.timer,
+          pluginId: this.manifest.id,
         }),
     });
     this.disposables.push(panel);
+
+    const settingTab = this.app.settingTabs?.register({
+      id: 'git-changes-viewer-settings',
+      title: 'Git Changes',
+      render: () =>
+        React.createElement(SettingsTab, {
+          app: this.app,
+          pluginId: this.manifest.id,
+        }),
+    });
+    if (settingTab) this.disposables.push(settingTab);
+
+    this.disposables.push({
+      dispose: () => this.timer.stop(),
+    });
 
     this.disposables.push(
       registerCommands(this.app, {

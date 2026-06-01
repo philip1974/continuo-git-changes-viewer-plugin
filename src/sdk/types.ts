@@ -23,9 +23,23 @@ export interface PluginManifest {
   readonly permissions?: readonly string[];
 }
 
+export interface PanelVisibilityEvent {
+  readonly isVisible: boolean;
+}
+
+export interface PanelApi {
+  readonly id: string;
+  readonly isVisible: boolean;
+  onDidVisibilityChange(cb: (event: PanelVisibilityEvent) => void): Disposable;
+}
+
+export interface PanelFactoryProps {
+  readonly api: PanelApi;
+}
+
 export interface PanelSpec {
   readonly type: string;
-  readonly factory: (props: unknown) => ReactNode;
+  readonly factory: (props: PanelFactoryProps) => ReactNode;
   readonly title: string;
   readonly titleKey?: string;
 }
