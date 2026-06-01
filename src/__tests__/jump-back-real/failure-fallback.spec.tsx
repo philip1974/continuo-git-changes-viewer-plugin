@@ -28,7 +28,7 @@ async function clickWithFailure(code: EditorOpenFailureCode) {
       app={app}
       scopeReady={Promise.resolve('grant')}
       store={store}
-      change={{ path: 'src/a.ts', status: 'M', kind: 'text' }}
+      change={{ path: 'src/a.ts', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }}
       diff={{
         ok: true,
         path: 'src/a.ts',
@@ -60,4 +60,3 @@ describe('jump-back failure fallback banners', () => {
     await expect(clickWithFailure(code)).resolves.toContain(expected);
   });
 });
-

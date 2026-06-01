@@ -4,12 +4,35 @@ import { loadNumstat, type NumstatEntry } from './numstat';
 
 export type FileStatus = 'M' | 'A' | 'D' | 'R' | 'U';
 export type FileKind = 'text' | 'binary';
+export type PorcelainStatusCode = ' ' | 'M' | 'A' | 'D' | 'R' | 'C' | '?' | 'U';
 
 export interface FileChange {
   readonly path: string;
   readonly oldPath?: string;
   readonly status: FileStatus;
+  readonly statusX: PorcelainStatusCode;
+  readonly statusY: PorcelainStatusCode;
   readonly kind: FileKind;
+}
+
+export function deriveFileStatus(change: FileChange): FileStatus {
+  return statusFromCode(`${change.statusX}${change.statusY}`);
+}
+
+function normalizeStatusCode(code: string): PorcelainStatusCode {
+  if (
+    code === ' ' ||
+    code === 'M' ||
+    code === 'A' ||
+    code === 'D' ||
+    code === 'R' ||
+    code === 'C' ||
+    code === '?' ||
+    code === 'U'
+  ) {
+    return code;
+  }
+  return 'M';
 }
 
 function statusFromCode(code: string): FileStatus {
@@ -36,6 +59,8 @@ export function parsePorcelainStatus(
     const code = record.slice(0, 2);
     const path = record.slice(3);
     const status = statusFromCode(code);
+    const statusX = normalizeStatusCode(code[0] ?? ' ');
+    const statusY = normalizeStatusCode(code[1] ?? ' ');
 
     if (status === 'R') {
       const oldPath = parts[++i];
@@ -43,6 +68,8 @@ export function parsePorcelainStatus(
         path,
         ...(oldPath ? { oldPath } : {}),
         status,
+        statusX,
+        statusY,
         kind: kindFor(path, numstat),
       });
       continue;
@@ -51,6 +78,8 @@ export function parsePorcelainStatus(
     changes.push({
       path,
       status,
+      statusX,
+      statusY,
       kind: kindFor(path, numstat),
     });
   }

@@ -94,7 +94,9 @@ async function renderHarness({
   const store = createGitStore({
     load: async () => ({
       repoRoot,
-      changes: repoRoot ? [{ path: 'src/a.ts', status: 'M', kind: 'text' }] : [],
+      changes: repoRoot
+        ? [{ path: 'src/a.ts', status: 'M' as const, statusX: ' ' as const, statusY: 'M' as const, kind: 'text' as const }]
+        : [],
     }),
   });
   store.setState({ repoRoot });

@@ -29,7 +29,7 @@ describe('untracked diff fetcher', () => {
     const { app, exec } = makeApp(result({ stdout: 'hello untracked\n', exitCode: 0 }));
 
     await expect(
-      fetchDiff(app, '/repo', { path: 'new.txt', status: 'U', kind: 'text' }),
+      fetchDiff(app, '/repo', { path: 'new.txt', status: 'U', statusX: '?', statusY: '?', kind: 'text' }),
     ).resolves.toEqual({
       ok: true,
       path: 'new.txt',
@@ -49,7 +49,7 @@ describe('untracked diff fetcher', () => {
     const { app } = makeApp(result({ stdout: '', stderr: 'permission denied', exitCode: 1 }));
 
     await expect(
-      fetchDiff(app, '/repo', { path: 'locked.txt', status: 'U', kind: 'text' }),
+      fetchDiff(app, '/repo', { path: 'locked.txt', status: 'U', statusX: '?', statusY: '?', kind: 'text' }),
     ).resolves.toEqual({
       ok: true,
       path: 'locked.txt',

@@ -10,6 +10,10 @@
 
 - [`wiring.spec.tsx`](./auto-refresh-wiring/wiring.spec.tsx)
 
+## [Stage hunk eligibility](./can-stage-hunk/README.md)
+
+- [`can-stage-hunk.spec.ts`](./can-stage-hunk/can-stage-hunk.spec.ts)
+
 ## [Commands](./commands/README.md)
 
 - [`commands.spec.ts`](./commands/commands.spec.ts)
@@ -20,7 +24,7 @@
 
 ## [DiffView Banner Preserved](./diffview-banner-preserved/README.md)
 
-- [`diffview-no-toast.spec.ts`](./diffview-banner-preserved/diffview-no-toast.spec.ts)
+- [`diffview-no-toast.spec.tsx`](./diffview-banner-preserved/diffview-no-toast.spec.tsx)
 
 ## [diffview-scroll-fix (v0.1.8 hot-fix)](./diffview-scroll-fix/README.md)
 
@@ -34,9 +38,21 @@
 
 - [`exec.spec.ts`](./exec/exec.spec.ts)
 
+## [FileList three sections](./filelist-3-segment/README.md)
+
+- [`filelist-3-segment.spec.tsx`](./filelist-3-segment/filelist-3-segment.spec.tsx)
+
 ## [Git Viewer Store](./git-store/README.md)
 
 - [`git-store.spec.ts`](./git-store/git-store.spec.ts)
+
+## [Git store selectors](./git-store-selectors/README.md)
+
+- [`git-store-selectors.spec.ts`](./git-store-selectors/git-store-selectors.spec.ts)
+
+## [Hunk patch builder](./hunk-patch-builder/README.md)
+
+- [`hunk-patch-builder.spec.ts`](./hunk-patch-builder/hunk-patch-builder.spec.ts)
 
 ## [Jump Back Onload Request Scope](./jump-back-onload-requestScope/README.md)
 
@@ -85,6 +101,10 @@
 
 - [`joinRepoPath.spec.ts`](./path-utils/joinRepoPath.spec.ts)
 
+## [PreviewDrawer FSM](./preview-drawer-fsm/README.md)
+
+- [`preview-drawer-fsm.spec.tsx`](./preview-drawer-fsm/preview-drawer-fsm.spec.tsx)
+
 ## [Repo Detection](./repo-detect/README.md)
 
 - [`repo-detect.spec.ts`](./repo-detect/repo-detect.spec.ts)
@@ -117,6 +137,14 @@
 
 - [`tab-emit.spec.tsx`](./settings-tab-emits/tab-emit.spec.tsx)
 
+## [Stage hunk shell call](./stage-hunk-shell/README.md)
+
+- [`stage-hunk-shell.spec.ts`](./stage-hunk-shell/stage-hunk-shell.spec.ts)
+
+## [Stage write integration](./stage-write-integration/README.md)
+
+- [`stage-write-integration.spec.tsx`](./stage-write-integration/stage-write-integration.spec.tsx)
+
 ## [Status Hash](./status-hash/README.md)
 
 - [`status-hash.spec.ts`](./status-hash/status-hash.spec.ts)
@@ -124,6 +152,10 @@
 ## [Status Scanner](./status-scanner/README.md)
 
 - [`status-scanner.spec.ts`](./status-scanner/status-scanner.spec.ts)
+
+## [Status scanner X/Y columns](./status-scanner-xy/README.md)
+
+- [`status-scanner-xy.spec.ts`](./status-scanner-xy/status-scanner-xy.spec.ts)
 
 ## [Store Load Toast](./storeload-toast/README.md)
 

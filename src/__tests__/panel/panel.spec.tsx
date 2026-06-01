@@ -19,8 +19,8 @@ describe('GitViewerPanel', () => {
       load: async () => ({
         repoRoot: '/repo',
         changes: [
-          { path: 'src/a.ts', status: 'M', kind: 'text' },
-          { path: 'notes.txt', status: 'U', kind: 'text' },
+          { path: 'src/a.ts', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' },
+          { path: 'notes.txt', status: 'U', statusX: '?', statusY: '?', kind: 'text' },
         ],
       }),
     });
@@ -46,7 +46,7 @@ describe('GitViewerPanel', () => {
         app={app}
         scopeReady={Promise.resolve('grant')}
         store={store}
-        change={{ path: 'src/a.ts', status: 'M', kind: 'text' }}
+        change={{ path: 'src/a.ts', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }}
         diff={{
           ok: true,
           path: 'src/a.ts',
@@ -75,17 +75,17 @@ describe('GitViewerPanel', () => {
     render(
       <DiffView
         store={store}
-        change={{ path: 'big.txt', status: 'M', kind: 'text' }}
+        change={{ path: 'big.txt', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }}
         diff={{
           ok: false,
           reason: 'too-large',
           path: 'big.txt',
-          exactCommand: 'git diff HEAD -- big.txt',
+          exactCommand: 'git diff -- big.txt',
         }}
       />,
     );
 
     expect(screen.getByText('Diff too large')).toBeTruthy();
-    expect(screen.getByText('git diff HEAD -- big.txt')).toBeTruthy();
+    expect(screen.getByText('git diff -- big.txt')).toBeTruthy();
   });
 });

@@ -28,7 +28,7 @@ async function clickWithReason(reason: EditorOpenSuccessReason) {
       app={app}
       scopeReady={Promise.resolve('grant')}
       store={store}
-      change={{ path: 'README.md', status: 'M', kind: 'text' }}
+      change={{ path: 'README.md', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }}
       diff={{
         ok: true,
         path: 'README.md',
@@ -57,4 +57,3 @@ describe('jump-back success fallback banners', () => {
     await expect(clickWithReason(reason)).resolves.toContain(expected);
   });
 });
-

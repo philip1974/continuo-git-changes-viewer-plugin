@@ -1,9 +1,18 @@
+import { useEffect, useReducer, useRef } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
+import { canStageHunk } from '../git/can-stage-hunk';
 import type { DiffResult } from '../git/diff-fetcher';
+import { extractHunkPatchFromUnifiedDiff } from '../git/hunk-patch';
 import { joinRepoPath } from '../git/path-utils';
+import { stageHunk } from '../git/stage-hunk';
 import type { CoPluginApp } from '../sdk/types';
 import type { FileChange } from '../git/status-scanner';
 import type { GitViewerState } from '../state/git-store';
+import {
+  PreviewDrawer,
+  previewDrawerReducer,
+  type PreviewDrawerState,
+} from './PreviewDrawer';
 
 interface DiffViewProps {
   readonly app?: CoPluginApp;
@@ -38,9 +47,13 @@ function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string }
 function UnifiedDiffView({
   diff,
   onJumpLine,
+  canStage,
+  onStageHunk,
 }: {
   readonly diff: string;
   readonly onJumpLine?: (line: number) => void;
+  readonly canStage?: boolean;
+  readonly onStageHunk?: (hunkLineIndex: number) => void;
 }) {
   if (!diff.trim()) {
     return <div className="cgv-diff-empty">(no textual diff — file may be binary or identical)</div>;
@@ -84,6 +97,17 @@ function UnifiedDiffView({
       >
         <span className="cgv-line-num">{lineLabel ?? ''}</span>
         <span className="cgv-line-text">{line}</span>
+        {line.startsWith('@@') && canStage && onStageHunk ? (
+          <button
+            className="cgv-hunk-stage-btn"
+            type="button"
+            onClick={() => onStageHunk(i)}
+            aria-label={`Stage hunk at ${line}`}
+            title="Stage this hunk"
+          >
+            Stage
+          </button>
+        ) : null}
       </div>
     );
   });
@@ -92,6 +116,20 @@ function UnifiedDiffView({
 }
 
 export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps) {
+  const mountedRef = useRef(true);
+  const closeTimerRef = useRef<number | null>(null);
+  const [drawer, dispatchDrawer] = useReducer(previewDrawerReducer, {
+    kind: 'idle',
+  } satisfies PreviewDrawerState);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    };
+  }, []);
+
   if (!change) return <main className="cgv-diff-empty">Select a file</main>;
   if (!diff) return <main className="cgv-diff-empty">Loading diff…</main>;
   if (!diff.ok) {
@@ -174,6 +212,63 @@ export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps
     });
   };
 
+  const showStageError = (message: string) => {
+    if (typeof app?.notifications?.show === 'function') {
+      app.notifications.show({ kind: 'error', message });
+      return;
+    }
+    store.getState().setBanner({
+      kind: 'error',
+      message,
+      dismissable: true,
+    });
+  };
+
+  const handleStageHunk = (hunkLineIndex: number) => {
+    if (!diff.ok) return;
+    const patch = extractHunkPatchFromUnifiedDiff(
+      change.path,
+      diff.unifiedDiff,
+      hunkLineIndex,
+    );
+    if (!patch) {
+      showStageError('Unable to build patch for selected hunk');
+      return;
+    }
+    dispatchDrawer({ type: 'open', filePath: change.path, patch });
+  };
+
+  const handleConfirmStage = async () => {
+    if (drawer.kind !== 'previewing' && drawer.kind !== 'error') return;
+    const repoRoot = store.getState().repoRoot;
+    if (!app || !repoRoot) {
+      const message = !repoRoot ? 'Repo root unknown' : 'SDK shell unavailable';
+      dispatchDrawer({ type: 'confirm' });
+      if (!mountedRef.current) return;
+      dispatchDrawer({ type: 'fail', error: message });
+      showStageError(message);
+      return;
+    }
+
+    dispatchDrawer({ type: 'confirm' });
+    const result = await stageHunk(app, repoRoot, drawer.patch);
+    if (!mountedRef.current) return;
+
+    if (result.ok) {
+      dispatchDrawer({ type: 'succeed' });
+      await store.getState().refresh();
+      if (!mountedRef.current) return;
+      closeTimerRef.current = window.setTimeout(() => {
+        if (mountedRef.current) dispatchDrawer({ type: 'dismiss' });
+      }, 800);
+      return;
+    }
+
+    const message = result.error || 'Hunk no longer applies; refresh';
+    dispatchDrawer({ type: 'fail', error: message });
+    showStageError(message);
+  };
+
   // Untracked / Added (HEAD 无版本) → NewFileView 显示 modified 全文
   if (diff.isUntracked || (diff.original === '' && change.status === 'A')) {
     return (
@@ -186,7 +281,17 @@ export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps
   // Tracked changes → unified diff renderer
   return (
     <main className="cgv-diff">
-      <UnifiedDiffView diff={diff.unifiedDiff} onJumpLine={onJumpLine} />
+      <UnifiedDiffView
+        diff={diff.unifiedDiff}
+        onJumpLine={onJumpLine}
+        canStage={canStageHunk(change, diff, 'changed')}
+        onStageHunk={handleStageHunk}
+      />
+      <PreviewDrawer
+        state={drawer}
+        onConfirm={handleConfirmStage}
+        onCancel={() => dispatchDrawer({ type: 'cancel' })}
+      />
     </main>
   );
 }

@@ -22,8 +22,12 @@ export type DiffResult =
       message?: string;
     };
 
-function trackedCommand(path: string): string {
-  return `git diff HEAD -- ${path}`;
+export type DiffMode = 'changed' | 'staged';
+
+function trackedCommand(path: string, mode: DiffMode): string {
+  return mode === 'staged'
+    ? `git diff --cached -- ${path}`
+    : `git diff -- ${path}`;
 }
 
 function untrackedCommand(path: string): string {
@@ -53,6 +57,7 @@ export async function fetchDiff(
   app: Pick<CoPluginApp, 'shell'>,
   repoRoot: string,
   change: FileChange,
+  mode: DiffMode = 'changed',
 ): Promise<DiffResult> {
   const untracked = change.status === 'U';
 
@@ -69,8 +74,12 @@ export async function fetchDiff(
     };
   }
 
-  const exactCommand = trackedCommand(change.path);
+  const exactCommand = trackedCommand(change.path, mode);
   const headPath = change.oldPath ?? change.path; // R<score> 用 oldPath 拿 HEAD 内容
+  const diffArgs =
+    mode === 'staged'
+      ? ['diff', '--cached', '--', change.path]
+      : ['diff', '--', change.path];
 
   // 并发跑 3 个 shell 命令
   const [originalRaw, modifiedRaw, diffR] = await Promise.all([
@@ -78,7 +87,7 @@ export async function fetchDiff(
     change.status === 'D'
       ? Promise.resolve('')
       : shellCat(app, repoRoot, change.path),
-    gitExec(app, repoRoot, ['diff', 'HEAD', '--', change.path]),
+    gitExec(app, repoRoot, diffArgs),
   ]);
 
   if (diffR.truncated) {

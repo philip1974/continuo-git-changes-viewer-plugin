@@ -5,7 +5,10 @@ import type {
 } from '../sdk/types';
 
 export interface GitExecOptions
-  extends Pick<PluginShellExecOptions, 'timeoutMs' | 'maxOutputBytes' | 'env'> {}
+  extends Pick<
+    PluginShellExecOptions,
+    'timeoutMs' | 'maxOutputBytes' | 'env' | 'input'
+  > {}
 
 export async function gitExec(
   app: Pick<CoPluginApp, 'shell'>,
@@ -17,6 +20,7 @@ export async function gitExec(
     cwd,
     timeoutMs: opts.timeoutMs,
     maxOutputBytes: opts.maxOutputBytes,
+    input: opts.input,
     env: {
       ...(opts.env ?? {}),
       GIT_OPTIONAL_LOCKS: '0',

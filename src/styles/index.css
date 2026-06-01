@@ -115,6 +115,16 @@
   background: var(--bg-canvas);
 }
 
+.cgv-file-row--readonly {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.cgv-file-row--readonly:hover {
+  outline: 0;
+  background: transparent;
+}
+
 .cgv-status,
 .cgv-count,
 .cgv-badge {
@@ -192,8 +202,9 @@
 
 .cgv-line {
   display: grid;
-  grid-template-columns: 48px 1fr;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: center;
   padding: 0 8px;
   white-space: pre;
 }
@@ -230,6 +241,26 @@
   margin-top: 4px;
 }
 
+.cgv-hunk-stage-btn {
+  align-self: center;
+  padding: 2px 8px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  background: var(--bg-canvas);
+  color: var(--accent);
+  font: inherit;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.cgv-hunk-stage-btn:hover,
+.cgv-hunk-stage-btn:focus-visible {
+  border-color: var(--accent);
+  outline: 0;
+}
+
 .cgv-line-meta {
   color: var(--text-fg);
   opacity: 0.55;
@@ -259,6 +290,80 @@
   border: 1px solid var(--border-line);
   border-radius: 6px;
   background: var(--bg-panel);
+}
+
+.cgv-preview-drawer {
+  display: grid;
+  gap: 8px;
+  max-height: min(46vh, 420px);
+  padding: 10px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+}
+
+.cgv-preview-header,
+.cgv-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cgv-preview-header strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cgv-preview-error {
+  color: #f87171;
+  font-size: 12px;
+}
+
+.cgv-preview-patch {
+  min-height: 96px;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  background: var(--bg-canvas);
+  color: var(--text-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.cgv-preview-actions {
+  justify-content: flex-end;
+}
+
+.cgv-preview-actions button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  background: var(--bg-canvas);
+  color: var(--text-fg);
+  cursor: pointer;
+}
+
+.cgv-preview-actions button:hover:not(:disabled),
+.cgv-preview-actions button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: 0;
+}
+
+.cgv-preview-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .cgv-banner {

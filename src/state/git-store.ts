@@ -39,6 +39,36 @@ export interface GitViewerState {
   dismissBanner(): void;
 }
 
+interface ChangeSlice {
+  readonly changes: readonly FileChange[];
+}
+
+export function selectStaged(state: ChangeSlice): FileChange[] {
+  return state.changes.filter(
+    (change) => change.statusX !== ' ' && change.statusX !== '?',
+  );
+}
+
+export function selectChanged(state: ChangeSlice): FileChange[] {
+  return state.changes.filter(
+    (change) => change.statusY !== ' ' && change.statusY !== '?',
+  );
+}
+
+export function selectUntracked(state: ChangeSlice): FileChange[] {
+  return state.changes.filter(
+    (change) => change.statusX === '?' || change.statusY === '?',
+  );
+}
+
+function firstSelectablePath(changes: readonly FileChange[]): string | null {
+  return (
+    selectChanged({ changes })[0]?.path ??
+    selectUntracked({ changes })[0]?.path ??
+    null
+  );
+}
+
 const emptyState = {
   repoRoot: null,
   changes: [],
@@ -60,16 +90,40 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         const loaded = deps.load
           ? await deps.load()
           : { repoRoot: null, changes: [] };
+
+        // v0.3.0 fix (post-GUI verify): preserve user selection + diffCache
+        // across polling refresh. Previously every tick wiped diffCache and
+        // reset selectedPath via firstSelectablePath → entire panel
+        // re-rendered (DiffView re-mounted, file selection jumped, 3-section
+        // UI flicker). Now only invalidate the diff for files whose presence
+        // changed; keep selection if the file is still tracked.
+        const prev = get();
+        const stillPresent =
+          prev.selectedPath !== null &&
+          loaded.changes.some((c) => c.path === prev.selectedPath);
+        const nextSelected = stillPresent
+          ? prev.selectedPath
+          : firstSelectablePath(loaded.changes);
+
+        // Keep cached diffs for files still in the list; invalidate the
+        // currently selected file (its content may have changed — that's
+        // why the polling tick fired).
+        const nextDiffCache = new Map<string, DiffResult>();
+        const presentPaths = new Set(loaded.changes.map((c) => c.path));
+        for (const [path, diff] of prev.diffCache) {
+          if (presentPaths.has(path) && path !== nextSelected) {
+            nextDiffCache.set(path, diff);
+          }
+        }
+
         set({
           repoRoot: loaded.repoRoot,
           changes: loaded.changes,
-          selectedPath: loaded.changes[0]?.path ?? null,
-          diffCache: new Map<string, DiffResult>(),
+          selectedPath: nextSelected,
+          diffCache: nextDiffCache,
           isLoading: false,
         });
-        // v0.1.2 hotfix: refresh 完自动 prefetch 首个文件 diff
-        const first = loaded.changes[0]?.path;
-        if (first) void get().loadDiff(first);
+        if (nextSelected) void get().loadDiff(nextSelected);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         deps.onError?.('error', message);

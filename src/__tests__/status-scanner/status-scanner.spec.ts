@@ -24,10 +24,10 @@ describe('porcelain status parsing', () => {
     );
 
     expect(parsed).toEqual<FileChange[]>([
-      { path: 'src/changed.ts', status: 'M', kind: 'text' },
-      { path: 'src/new.ts', status: 'A', kind: 'text' },
-      { path: 'src/deleted.ts', status: 'D', kind: 'text' },
-      { path: 'notes.txt', status: 'U', kind: 'text' },
+      { path: 'src/changed.ts', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' },
+      { path: 'src/new.ts', status: 'A', statusX: 'A', statusY: ' ', kind: 'text' },
+      { path: 'src/deleted.ts', status: 'D', statusX: ' ', statusY: 'D', kind: 'text' },
+      { path: 'notes.txt', status: 'U', statusX: '?', statusY: '?', kind: 'text' },
     ]);
   });
 
@@ -39,6 +39,8 @@ describe('porcelain status parsing', () => {
         path: 'src/new.ts',
         oldPath: 'src/old.ts',
         status: 'R',
+        statusX: 'R',
+        statusY: ' ',
         kind: 'text',
       },
     ]);
@@ -60,8 +62,8 @@ describe('porcelain status parsing', () => {
     const app = { shell: { exec } } as unknown as CoPluginApp;
 
     await expect(scanStatus(app, '/repo')).resolves.toEqual([
-      { path: 'image.png', status: 'M', kind: 'binary' },
-      { path: 'notes.txt', status: 'U', kind: 'text' },
+      { path: 'image.png', status: 'M', statusX: ' ', statusY: 'M', kind: 'binary' },
+      { path: 'notes.txt', status: 'U', statusX: '?', statusY: '?', kind: 'text' },
     ]);
     expect(exec).toHaveBeenNthCalledWith(
       1,
