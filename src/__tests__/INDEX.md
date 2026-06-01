@@ -73,6 +73,10 @@
 
 - [`onload-toast.spec.ts`](./onload-toast-replacement/onload-toast.spec.ts)
 
+## [onTick-visibility-gate (v0.2.2 simplified)](./onTick-visibility-gate/README.md)
+
+- [`visibility-skip.spec.ts`](./onTick-visibility-gate/visibility-skip.spec.ts)
+
 ## [Git Viewer Panel](./panel/README.md)
 
 - [`panel.spec.tsx`](./panel/panel.spec.tsx)

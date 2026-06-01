@@ -81,6 +81,7 @@ export function GitViewerPanel({
         timer.stop();
         return;
       }
+      if (!panelApi.isVisible) return;
 
       const repoRoot = store.getState().repoRoot;
       if (repoRoot) {
@@ -95,6 +96,13 @@ export function GitViewerPanel({
       const opts: AutoRefreshTimerOpts = {
         intervalMs: intervalSec * 1000,
         onTick: async () => {
+          // v0.2.2: window-level visibility gate via live property read
+          // (NOT event subscription — Electron macOS does not reliably fire
+          // visibilitychange/focus on Cmd+M Dock restore). document.visibilityState
+          // is an always-fresh property; reading it each tick guarantees we resume
+          // exactly when the window comes back, no events needed.
+          if (document.visibilityState !== 'visible') return;
+
           const currentRoot = store.getState().repoRoot;
           if (!currentRoot) return;
           const nextHash = await readStatusHash(app, currentRoot);
