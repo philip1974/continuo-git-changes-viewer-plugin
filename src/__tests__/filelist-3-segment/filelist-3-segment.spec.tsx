@@ -33,15 +33,16 @@ describe('FileList staged/changed/untracked sections', () => {
     expect(screen.queryByText('Untracked')).toBeNull();
   });
 
-  it('T21 keeps staged rows read-only and allows changed rows to select files', () => {
+  it('T21 allows staged and changed rows to select files with section modes', () => {
     const store = createGitStore();
     const selectFile = vi.spyOn(store.getState(), 'selectFile');
 
     render(<FileList store={store} changes={changes} />);
 
-    expect(screen.getByText('staged.ts', { selector: '.cgv-path' }).closest('button')).toBeNull();
+    fireEvent.click(screen.getByText('staged.ts', { selector: '.cgv-path' }).closest('button')!);
     fireEvent.click(screen.getByText('changed.ts', { selector: '.cgv-path' }).closest('button')!);
 
-    expect(selectFile).toHaveBeenCalledWith('changed.ts');
+    expect(selectFile).toHaveBeenNthCalledWith(1, 'staged.ts', 'staged');
+    expect(selectFile).toHaveBeenNthCalledWith(2, 'changed.ts', 'changed');
   });
 });

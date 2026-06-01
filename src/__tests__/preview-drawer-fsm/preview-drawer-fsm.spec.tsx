@@ -14,11 +14,11 @@ describe('PreviewDrawer FSM', () => {
   it('T22 transitions idle -> previewing -> applying -> success -> idle', () => {
     let state: PreviewDrawerState = { kind: 'idle' };
     state = previewDrawerReducer(state, { type: 'open', filePath: 'a.ts', patch: 'patch' });
-    expect(state).toEqual({ kind: 'previewing', filePath: 'a.ts', patch: 'patch' });
+    expect(state).toEqual({ kind: 'previewing', action: 'stage', filePath: 'a.ts', patch: 'patch' });
     state = previewDrawerReducer(state, { type: 'confirm' });
-    expect(state).toEqual({ kind: 'applying', filePath: 'a.ts', patch: 'patch' });
+    expect(state).toEqual({ kind: 'applying', action: 'stage', filePath: 'a.ts', patch: 'patch' });
     state = previewDrawerReducer(state, { type: 'succeed' });
-    expect(state).toEqual({ kind: 'success', filePath: 'a.ts' });
+    expect(state).toEqual({ kind: 'success', action: 'stage', filePath: 'a.ts' });
     state = previewDrawerReducer(state, { type: 'dismiss' });
     expect(state).toEqual({ kind: 'idle' });
   });
@@ -35,6 +35,7 @@ describe('PreviewDrawer FSM', () => {
     });
     expect(state).toEqual({
       kind: 'error',
+      action: 'stage',
       filePath: 'a.ts',
       patch: 'patch',
       error: 'patch failed',
@@ -48,7 +49,7 @@ describe('PreviewDrawer FSM', () => {
 
     render(
       <PreviewDrawer
-        state={{ kind: 'previewing', filePath: 'a.ts', patch: 'diff --git a/a.ts b/a.ts\n' }}
+        state={{ kind: 'previewing', action: 'stage', filePath: 'a.ts', patch: 'diff --git a/a.ts b/a.ts\n' }}
         onConfirm={onConfirm}
         onCancel={onCancel}
       />,
@@ -65,7 +66,7 @@ describe('PreviewDrawer FSM', () => {
     const onCancel = vi.fn();
     render(
       <PreviewDrawer
-        state={{ kind: 'previewing', filePath: 'a.ts', patch: 'patch' }}
+        state={{ kind: 'previewing', action: 'stage', filePath: 'a.ts', patch: 'patch' }}
         onConfirm={vi.fn()}
         onCancel={onCancel}
       />,

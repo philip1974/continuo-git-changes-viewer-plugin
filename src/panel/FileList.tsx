@@ -4,6 +4,7 @@ import {
   selectChanged,
   selectStaged,
   selectUntracked,
+  type DiffMode,
   type GitViewerState,
 } from '../state/git-store';
 
@@ -28,12 +29,12 @@ function Section({
   title,
   items,
   store,
-  readOnly = false,
+  mode,
 }: {
   readonly title: string;
   readonly items: readonly FileChange[];
   readonly store: StoreApi<GitViewerState>;
-  readonly readOnly?: boolean;
+  readonly mode: DiffMode;
 }) {
   if (items.length === 0) return null;
 
@@ -46,26 +47,15 @@ function Section({
       <ul>
         {items.map((change) => (
           <li key={`${title}:${change.statusX}${change.statusY}:${change.path}`}>
-            {readOnly ? (
-              <div
-                className="cgv-file-row cgv-file-row--readonly"
-                title="Staged rows are read-only in v0.3.0"
-              >
-                <span className="cgv-status">{statusIcon[change.status]}</span>
-                <span className="cgv-path">{rowLabel(change)}</span>
-                {change.kind === 'binary' ? <span className="cgv-badge">BIN</span> : null}
-              </div>
-            ) : (
-              <button
-                className="cgv-file-row"
-                type="button"
-                onClick={() => store.getState().selectFile(change.path)}
-              >
-                <span className="cgv-status">{statusIcon[change.status]}</span>
-                <span className="cgv-path">{rowLabel(change)}</span>
-                {change.kind === 'binary' ? <span className="cgv-badge">BIN</span> : null}
-              </button>
-            )}
+            <button
+              className="cgv-file-row"
+              type="button"
+              onClick={() => store.getState().selectFile(change.path, mode)}
+            >
+              <span className="cgv-status">{statusIcon[change.status]}</span>
+              <span className="cgv-path">{rowLabel(change)}</span>
+              {change.kind === 'binary' ? <span className="cgv-badge">BIN</span> : null}
+            </button>
           </li>
         ))}
       </ul>
@@ -79,9 +69,9 @@ export function FileList({ store, changes }: FileListProps) {
   const untracked = selectUntracked({ changes });
   return (
     <aside className="cgv-file-list">
-      <Section title="Staged" items={staged} store={store} readOnly />
-      <Section title="Changed" items={changed} store={store} />
-      <Section title="Untracked" items={untracked} store={store} />
+      <Section title="Staged" items={staged} store={store} mode="staged" />
+      <Section title="Changed" items={changed} store={store} mode="changed" />
+      <Section title="Untracked" items={untracked} store={store} mode="changed" />
     </aside>
   );
 }

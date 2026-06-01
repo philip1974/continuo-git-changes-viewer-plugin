@@ -5,9 +5,12 @@ describe('git viewer store', () => {
   it('T1 selectFile records selected path', () => {
     const store = createGitStore();
 
-    store.getState().selectFile('src/a.ts');
+    store.getState().selectFile('src/a.ts', 'changed');
 
-    expect(store.getState().selectedPath).toBe('src/a.ts');
+    expect(store.getState().selected).toEqual({
+      path: 'src/a.ts',
+      mode: 'changed',
+    });
   });
 
   it('T2 clear resets state', () => {
@@ -15,8 +18,8 @@ describe('git viewer store', () => {
     store.setState({
       repoRoot: '/repo',
       changes: [{ path: 'a.ts', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }],
-      selectedPath: 'a.ts',
-      diffCache: new Map([['a.ts', { ok: true, path: 'a.ts', original: '', modified: '', unifiedDiff: 'diff', isUntracked: false }]]) as Map<string, import('../../git/diff-fetcher').DiffResult>,
+      selected: { path: 'a.ts', mode: 'changed' },
+      diffCache: new Map([['changed:a.ts', { ok: true, path: 'a.ts', original: '', modified: '', unifiedDiff: 'diff', isUntracked: false }]]) as Map<string, import('../../git/diff-fetcher').DiffResult>,
       isLoading: true,
       banner: { kind: 'info', message: 'hello', dismissable: true },
     });
@@ -26,7 +29,7 @@ describe('git viewer store', () => {
     expect(store.getState()).toMatchObject({
       repoRoot: null,
       changes: [],
-      selectedPath: null,
+      selected: null,
       isLoading: false,
       banner: null,
     });
@@ -65,29 +68,29 @@ describe('git viewer store', () => {
     expect(store.getState().isLoading).toBe(false);
   });
 
-  it('T5 refresh preserves user selectedPath if file still present (v0.3.0 GUI fix)', async () => {
+  it('T5 refresh preserves user selected path+mode if still valid (v0.3.0 GUI fix)', async () => {
     const changeA = { path: 'a.ts', status: 'M' as const, statusX: ' ' as const, statusY: 'M' as const, kind: 'text' as const };
     const changeB = { path: 'b.ts', status: 'M' as const, statusX: ' ' as const, statusY: 'M' as const, kind: 'text' as const };
     const store = createGitStore({
       load: vi.fn(async () => ({ repoRoot: '/repo', changes: [changeA, changeB] })),
     });
 
-    store.setState({ selectedPath: 'b.ts' });
+    store.setState({ selected: { path: 'b.ts', mode: 'changed' } });
     await store.getState().refresh();
 
-    expect(store.getState().selectedPath).toBe('b.ts');
+    expect(store.getState().selected).toEqual({ path: 'b.ts', mode: 'changed' });
   });
 
-  it('T6 refresh falls back to firstSelectablePath if selectedPath no longer present', async () => {
+  it('T6 refresh falls back to firstSelectableEntry if selected path no longer present', async () => {
     const changeA = { path: 'a.ts', status: 'M' as const, statusX: ' ' as const, statusY: 'M' as const, kind: 'text' as const };
     const store = createGitStore({
       load: vi.fn(async () => ({ repoRoot: '/repo', changes: [changeA] })),
     });
 
-    store.setState({ selectedPath: 'deleted.ts' });
+    store.setState({ selected: { path: 'deleted.ts', mode: 'changed' } });
     await store.getState().refresh();
 
-    expect(store.getState().selectedPath).toBe('a.ts');
+    expect(store.getState().selected).toEqual({ path: 'a.ts', mode: 'changed' });
   });
 
   it('T7 refresh preserves diffCache for non-selected files still present', async () => {
@@ -100,16 +103,16 @@ describe('git viewer store', () => {
     });
 
     store.setState({
-      selectedPath: 'b.ts',
+      selected: { path: 'b.ts', mode: 'changed' },
       diffCache: new Map<string, import('../../git/diff-fetcher').DiffResult>([
-        ['a.ts', cachedDiffA],
-        ['b.ts', cachedDiffB],
+        ['changed:a.ts', cachedDiffA],
+        ['changed:b.ts', cachedDiffB],
       ]),
     });
 
     await store.getState().refresh();
 
-    expect(store.getState().diffCache.get('a.ts')).toBe(cachedDiffA);
-    expect(store.getState().diffCache.has('b.ts')).toBe(false);
+    expect(store.getState().diffCache.get('changed:a.ts')).toBe(cachedDiffA);
+    expect(store.getState().diffCache.has('changed:b.ts')).toBe(false);
   });
 });

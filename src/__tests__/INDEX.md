@@ -14,6 +14,10 @@
 
 - [`can-stage-hunk.spec.ts`](./can-stage-hunk/can-stage-hunk.spec.ts)
 
+## [Unstage hunk eligibility](./can-unstage-hunk/README.md)
+
+- [`can-unstage-hunk.spec.ts`](./can-unstage-hunk/can-unstage-hunk.spec.ts)
+
 ## [Commands](./commands/README.md)
 
 - [`commands.spec.ts`](./commands/commands.spec.ts)
@@ -34,6 +38,10 @@
 
 - [`cleanup.spec.ts`](./disposables-cleanup/cleanup.spec.ts)
 
+## [PreviewDrawer action labels](./drawer-action-param/README.md)
+
+- [`drawer-action-param.spec.tsx`](./drawer-action-param/drawer-action-param.spec.tsx)
+
 ## [Git Exec Wrapper](./exec/README.md)
 
 - [`exec.spec.ts`](./exec/exec.spec.ts)
@@ -42,9 +50,21 @@
 
 - [`filelist-3-segment.spec.tsx`](./filelist-3-segment/filelist-3-segment.spec.tsx)
 
+## [FileList staged clickable rows](./filelist-staged-clickable/README.md)
+
+- [`filelist-staged-clickable.spec.tsx`](./filelist-staged-clickable/filelist-staged-clickable.spec.tsx)
+
 ## [Git Viewer Store](./git-store/README.md)
 
 - [`git-store.spec.ts`](./git-store/git-store.spec.ts)
+
+## [Git store mode selection](./git-store-mode-selection/README.md)
+
+- [`git-store-mode-selection.spec.ts`](./git-store-mode-selection/git-store-mode-selection.spec.ts)
+
+## [Git store refresh reconciliation](./git-store-refresh-reconciliation/README.md)
+
+- [`git-store-refresh-reconciliation.spec.ts`](./git-store-refresh-reconciliation/git-store-refresh-reconciliation.spec.ts)
 
 ## [Git store selectors](./git-store-selectors/README.md)
 
@@ -160,6 +180,14 @@
 ## [Store Load Toast](./storeload-toast/README.md)
 
 - [`storeload-toast.spec.ts`](./storeload-toast/storeload-toast.spec.ts)
+
+## [Unstage hunk shell call](./unstage-hunk-shell/README.md)
+
+- [`unstage-hunk-shell.spec.ts`](./unstage-hunk-shell/unstage-hunk-shell.spec.ts)
+
+## [Unstage hunk integration](./unstage-integration/README.md)
+
+- [`unstage-integration.spec.tsx`](./unstage-integration/unstage-integration.spec.tsx)
 
 ## [Untracked Diff](./untracked-diff/README.md)
 

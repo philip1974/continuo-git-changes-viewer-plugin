@@ -1,19 +1,37 @@
 import { useEffect } from 'react';
 
+export type DrawerAction = 'stage' | 'unstage';
+
 export type PreviewDrawerState =
   | { readonly kind: 'idle' }
-  | { readonly kind: 'previewing'; readonly filePath: string; readonly patch: string }
-  | { readonly kind: 'applying'; readonly filePath: string; readonly patch: string }
-  | { readonly kind: 'success'; readonly filePath: string }
+  | {
+      readonly kind: 'previewing';
+      readonly action: DrawerAction;
+      readonly filePath: string;
+      readonly patch: string;
+    }
+  | {
+      readonly kind: 'applying';
+      readonly action: DrawerAction;
+      readonly filePath: string;
+      readonly patch: string;
+    }
+  | { readonly kind: 'success'; readonly action: DrawerAction; readonly filePath: string }
   | {
       readonly kind: 'error';
+      readonly action: DrawerAction;
       readonly filePath: string;
       readonly patch: string;
       readonly error: string;
     };
 
 export type PreviewDrawerAction =
-  | { readonly type: 'open'; readonly filePath: string; readonly patch: string }
+  | {
+      readonly type: 'open';
+      readonly action?: DrawerAction;
+      readonly filePath: string;
+      readonly patch: string;
+    }
   | { readonly type: 'confirm' }
   | { readonly type: 'succeed' }
   | { readonly type: 'fail'; readonly error: string }
@@ -28,6 +46,7 @@ export function previewDrawerReducer(
     case 'open':
       return {
         kind: 'previewing',
+        action: action.action ?? 'stage',
         filePath: action.filePath,
         patch: action.patch,
       };
@@ -35,16 +54,18 @@ export function previewDrawerReducer(
       if (state.kind !== 'previewing' && state.kind !== 'error') return state;
       return {
         kind: 'applying',
+        action: state.action,
         filePath: state.filePath,
         patch: state.patch,
       };
     case 'succeed':
       if (state.kind !== 'applying') return state;
-      return { kind: 'success', filePath: state.filePath };
+      return { kind: 'success', action: state.action, filePath: state.filePath };
     case 'fail':
       if (state.kind !== 'applying') return state;
       return {
         kind: 'error',
+        action: state.action,
         filePath: state.filePath,
         patch: state.patch,
         error: action.error,
@@ -68,6 +89,10 @@ function patchForState(state: PreviewDrawerState): string | null {
   return null;
 }
 
+function verb(action: DrawerAction): string {
+  return action === 'stage' ? 'Stage' : 'Unstage';
+}
+
 export function PreviewDrawer({
   state,
   onConfirm,
@@ -85,15 +110,18 @@ export function PreviewDrawer({
   if (state.kind === 'idle') return null;
 
   const patch = patchForState(state);
+  const verbText = verb(state.action);
   return (
     <section
       className={`cgv-preview-drawer cgv-preview-drawer--${state.kind}`}
       role="region"
-      aria-label="Stage hunk preview"
+      aria-label={`${verbText} hunk preview`}
     >
       <header className="cgv-preview-header">
         <strong>
-          {state.kind === 'success' ? 'Hunk staged' : `Stage hunk: ${state.filePath}`}
+          {state.kind === 'success'
+            ? `Hunk ${state.action === 'stage' ? 'staged' : 'unstaged'}`
+            : `${verbText} hunk: ${state.filePath}`}
         </strong>
         {state.kind === 'error' ? (
           <span className="cgv-preview-error">{state.error}</span>
@@ -111,9 +139,9 @@ export function PreviewDrawer({
               type="button"
               onClick={onConfirm}
               disabled={state.kind === 'applying'}
-              aria-label="Stage hunk"
+              aria-label={`${verbText} hunk`}
             >
-              {state.kind === 'applying' ? 'Staging...' : 'Stage'}
+              {state.kind === 'applying' ? `${verbText}...` : verbText}
             </button>
             <button
               type="button"

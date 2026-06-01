@@ -111,7 +111,8 @@ export default class GitChangesViewerPlugin extends Plugin {
           changes: await scanStatus(this.app, repo.root),
         };
       },
-      fetchDiff: (repoRoot, change) => fetchDiff(this.app, repoRoot, change),
+      fetchDiff: (repoRoot, change, mode) =>
+        fetchDiff(this.app, repoRoot, change, mode),
     });
     this.store = store;
 

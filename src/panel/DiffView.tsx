@@ -1,14 +1,17 @@
 import { useEffect, useReducer, useRef } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
 import { canStageHunk } from '../git/can-stage-hunk';
-import type { DiffResult } from '../git/diff-fetcher';
+import { canUnstageHunk } from '../git/can-unstage-hunk';
+import type { DiffMode, DiffResult } from '../git/diff-fetcher';
 import { extractHunkPatchFromUnifiedDiff } from '../git/hunk-patch';
 import { joinRepoPath } from '../git/path-utils';
 import { stageHunk } from '../git/stage-hunk';
+import { unstageHunk } from '../git/unstage-hunk';
 import type { CoPluginApp } from '../sdk/types';
 import type { FileChange } from '../git/status-scanner';
 import type { GitViewerState } from '../state/git-store';
 import {
+  type DrawerAction,
   PreviewDrawer,
   previewDrawerReducer,
   type PreviewDrawerState,
@@ -19,6 +22,7 @@ interface DiffViewProps {
   readonly store: StoreApi<GitViewerState>;
   readonly change: FileChange | null;
   readonly diff: DiffResult | null;
+  readonly mode?: DiffMode;
   readonly scopeReady?: Promise<'grant' | 'deny' | 'no-workspace' | 'error'>;
 }
 
@@ -47,13 +51,13 @@ function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string }
 function UnifiedDiffView({
   diff,
   onJumpLine,
-  canStage,
-  onStageHunk,
+  hunkAction,
+  onHunkAction,
 }: {
   readonly diff: string;
   readonly onJumpLine?: (line: number) => void;
-  readonly canStage?: boolean;
-  readonly onStageHunk?: (hunkLineIndex: number) => void;
+  readonly hunkAction?: DrawerAction | null;
+  readonly onHunkAction?: (hunkLineIndex: number, action: DrawerAction) => void;
 }) {
   if (!diff.trim()) {
     return <div className="cgv-diff-empty">(no textual diff — file may be binary or identical)</div>;
@@ -97,15 +101,15 @@ function UnifiedDiffView({
       >
         <span className="cgv-line-num">{lineLabel ?? ''}</span>
         <span className="cgv-line-text">{line}</span>
-        {line.startsWith('@@') && canStage && onStageHunk ? (
+        {line.startsWith('@@') && hunkAction && onHunkAction ? (
           <button
             className="cgv-hunk-stage-btn"
             type="button"
-            onClick={() => onStageHunk(i)}
-            aria-label={`Stage hunk at ${line}`}
-            title="Stage this hunk"
+            onClick={() => onHunkAction(i, hunkAction)}
+            aria-label={`${hunkAction === 'stage' ? 'Stage' : 'Unstage'} hunk at ${line}`}
+            title={`${hunkAction === 'stage' ? 'Stage' : 'Unstage'} this hunk`}
           >
-            Stage
+            {hunkAction === 'stage' ? 'Stage' : 'Unstage'}
           </button>
         ) : null}
       </div>
@@ -115,7 +119,14 @@ function UnifiedDiffView({
   return <div className="cgv-unified-diff">{rows}</div>;
 }
 
-export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps) {
+export function DiffView({
+  app,
+  store,
+  change,
+  diff,
+  mode = 'changed',
+  scopeReady,
+}: DiffViewProps) {
   const mountedRef = useRef(true);
   const closeTimerRef = useRef<number | null>(null);
   const [drawer, dispatchDrawer] = useReducer(previewDrawerReducer, {
@@ -164,7 +175,7 @@ export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps
       return;
     }
 
-    const selectedPath = state.selectedPath ?? change.path;
+    const selectedPath = state.selected?.path ?? change.path;
     const absPath = joinRepoPath(repoRoot, selectedPath);
     let result;
     try {
@@ -212,7 +223,7 @@ export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps
     });
   };
 
-  const showStageError = (message: string) => {
+  const showError = (message: string) => {
     if (typeof app?.notifications?.show === 'function') {
       app.notifications.show({ kind: 'error', message });
       return;
@@ -224,7 +235,7 @@ export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps
     });
   };
 
-  const handleStageHunk = (hunkLineIndex: number) => {
+  const handleHunkAction = (hunkLineIndex: number, action: DrawerAction) => {
     if (!diff.ok) return;
     const patch = extractHunkPatchFromUnifiedDiff(
       change.path,
@@ -232,13 +243,13 @@ export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps
       hunkLineIndex,
     );
     if (!patch) {
-      showStageError('Unable to build patch for selected hunk');
+      showError('Unable to build patch for selected hunk');
       return;
     }
-    dispatchDrawer({ type: 'open', filePath: change.path, patch });
+    dispatchDrawer({ type: 'open', action, filePath: change.path, patch });
   };
 
-  const handleConfirmStage = async () => {
+  const handleConfirm = async () => {
     if (drawer.kind !== 'previewing' && drawer.kind !== 'error') return;
     const repoRoot = store.getState().repoRoot;
     if (!app || !repoRoot) {
@@ -246,12 +257,15 @@ export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps
       dispatchDrawer({ type: 'confirm' });
       if (!mountedRef.current) return;
       dispatchDrawer({ type: 'fail', error: message });
-      showStageError(message);
+      showError(message);
       return;
     }
 
     dispatchDrawer({ type: 'confirm' });
-    const result = await stageHunk(app, repoRoot, drawer.patch);
+    const result =
+      drawer.action === 'stage'
+        ? await stageHunk(app, repoRoot, drawer.patch)
+        : await unstageHunk(app, repoRoot, drawer.patch);
     if (!mountedRef.current) return;
 
     if (result.ok) {
@@ -266,7 +280,7 @@ export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps
 
     const message = result.error || 'Hunk no longer applies; refresh';
     dispatchDrawer({ type: 'fail', error: message });
-    showStageError(message);
+    showError(message);
   };
 
   // Untracked / Added (HEAD 无版本) → NewFileView 显示 modified 全文
@@ -279,17 +293,26 @@ export function DiffView({ app, store, change, diff, scopeReady }: DiffViewProps
   }
 
   // Tracked changes → unified diff renderer
+  const section = mode === 'staged' ? 'staged' : 'changed';
+  const canStage = canStageHunk(change, diff, section);
+  const canUnstage = canUnstageHunk(change, diff, section);
+  const hunkAction: DrawerAction | null = canStage
+    ? 'stage'
+    : canUnstage
+      ? 'unstage'
+      : null;
+
   return (
     <main className="cgv-diff">
       <UnifiedDiffView
         diff={diff.unifiedDiff}
         onJumpLine={onJumpLine}
-        canStage={canStageHunk(change, diff, 'changed')}
-        onStageHunk={handleStageHunk}
+        hunkAction={hunkAction}
+        onHunkAction={handleHunkAction}
       />
       <PreviewDrawer
         state={drawer}
-        onConfirm={handleConfirmStage}
+        onConfirm={handleConfirm}
         onCancel={() => dispatchDrawer({ type: 'cancel' })}
       />
     </main>

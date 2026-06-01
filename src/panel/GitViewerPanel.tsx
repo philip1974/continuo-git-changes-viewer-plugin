@@ -9,7 +9,7 @@ import {
 } from '../lib/settings-store';
 import type { CoPluginApp, PanelApi } from '../sdk/types';
 import type { AutoRefreshTimer, AutoRefreshTimerOpts } from '../state/auto-refresh-timer';
-import type { GitViewerState } from '../state/git-store';
+import { cacheKey, type GitViewerState } from '../state/git-store';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
 
@@ -138,20 +138,23 @@ export function GitViewerPanel({
 
   // v0.1.2 hotfix: 选中变化时确保 diff 被 fetch（refresh 时已 prefetch 首个；这里覆盖手动切换）
   useEffect(() => {
-    if (state.selectedPath) {
-      void store.getState().loadDiff(state.selectedPath);
+    if (state.selected) {
+      void store.getState().loadDiff(state.selected.path, state.selected.mode);
     }
-  }, [store, state.selectedPath]);
+  }, [store, state.selected]);
 
+  const selectedRef = state.selected;
   const selected =
-    state.changes.find((change) => change.path === state.selectedPath) ??
-    state.changes[0] ??
-    null;
+    selectedRef
+      ? state.changes.find((change) => change.path === selectedRef.path) ?? null
+      : null;
 
   // v0.1.2 hotfix: 从 store.diffCache 读真实 diff；props.diff override 给 spec 用
   const diff: DiffResult | null =
     diffOverride ??
-    (selected ? state.diffCache.get(selected.path) ?? null : null);
+    (selectedRef
+      ? state.diffCache.get(cacheKey(selectedRef.path, selectedRef.mode)) ?? null
+      : null);
 
   return (
     <section className="cgv-panel">
@@ -175,6 +178,7 @@ export function GitViewerPanel({
           store={store}
           change={selected}
           diff={diff}
+          mode={selectedRef?.mode ?? 'changed'}
         />
       </div>
       {state.banner ? (

@@ -27,13 +27,16 @@ describe('git store section selectors', () => {
     expect(selectUntracked({ changes })).toEqual([changes[3]]);
   });
 
-  it('T18 refresh selects the first actionable Changed/Untracked row instead of a staged-only row', async () => {
+  it('T18 refresh selects the first actionable Changed row instead of a staged-only row', async () => {
     const store = createGitStore({
       load: async () => ({ repoRoot: '/repo', changes }),
     });
 
     await store.getState().refresh();
 
-    expect(store.getState().selectedPath).toBe('changed.ts');
+    expect(store.getState().selected).toEqual({
+      path: 'changed.ts',
+      mode: 'changed',
+    });
   });
 });
