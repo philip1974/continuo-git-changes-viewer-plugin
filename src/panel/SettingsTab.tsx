@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { SettingsBus } from '../lib/settings-bus';
 import type { CoPluginApp } from '../sdk/types';
 import {
   AUTO_REFRESH_INTERVALS,
@@ -11,6 +12,7 @@ import {
 interface SettingsTabProps {
   readonly app: CoPluginApp;
   readonly pluginId: string;
+  readonly bus: SettingsBus;
 }
 
 function intervalLabel(sec: AutoRefreshIntervalSec): string {
@@ -18,7 +20,7 @@ function intervalLabel(sec: AutoRefreshIntervalSec): string {
   return `${sec} seconds${sec === DEFAULT_AUTO_REFRESH_INTERVAL_SEC ? ' (default)' : ''}`;
 }
 
-export function SettingsTab({ app, pluginId }: SettingsTabProps) {
+export function SettingsTab({ app, pluginId, bus }: SettingsTabProps) {
   const [value, setValue] = useState<AutoRefreshIntervalSec>(
     DEFAULT_AUTO_REFRESH_INTERVAL_SEC,
   );
@@ -33,11 +35,19 @@ export function SettingsTab({ app, pluginId }: SettingsTabProps) {
     };
   }, [app, pluginId]);
 
+  useEffect(() => {
+    const disposable = bus.on(setValue);
+    return () => disposable.dispose();
+  }, [bus]);
+
   const onChange = async (next: AutoRefreshIntervalSec): Promise<void> => {
+    const previous = value;
     setValue(next);
     try {
       await writeAutoRefreshIntervalSec(app.dataStore, pluginId, next);
+      bus.emit(next);
     } catch {
+      setValue(previous);
       app.notifications?.show({
         kind: 'warning',
         message: 'Failed to save Auto-refresh setting',
@@ -70,7 +80,7 @@ export function SettingsTab({ app, pluginId }: SettingsTabProps) {
         </label>
       ))}
       <p className="cgv-settings-hint">
-        Changes apply when the panel becomes visible.
+        Changes take effect immediately.
       </p>
     </fieldset>
   );

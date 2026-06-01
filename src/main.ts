@@ -9,6 +9,7 @@ import { registerCommands } from './commands';
 import { detectRepo } from './git/repo-detect';
 import { scanStatus } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
+import { SettingsBus } from './lib/settings-bus';
 import { AutoRefreshTimer } from './state/auto-refresh-timer';
 import { createGitStore } from './state/git-store';
 import { GitViewerPanel } from './panel/GitViewerPanel';
@@ -47,6 +48,7 @@ function gitCompareIcon() {
 export default class GitChangesViewerPlugin extends Plugin {
   private readonly disposables: Disposable[] = [];
   private readonly timer = new AutoRefreshTimer();
+  private readonly settingsBus = new SettingsBus();
   store = createGitStore();
   scopeReadyPromise: Promise<ScopeReadyState> = Promise.resolve('error');
 
@@ -124,6 +126,7 @@ export default class GitChangesViewerPlugin extends Plugin {
           panelApi: props.api,
           timer: this.timer,
           pluginId: this.manifest.id,
+          settingsBus: this.settingsBus,
         }),
     });
     this.disposables.push(panel);
@@ -135,9 +138,14 @@ export default class GitChangesViewerPlugin extends Plugin {
         React.createElement(SettingsTab, {
           app: this.app,
           pluginId: this.manifest.id,
+          bus: this.settingsBus,
         }),
     });
     if (settingTab) this.disposables.push(settingTab);
+
+    this.disposables.push({
+      dispose: () => this.settingsBus.dispose(),
+    });
 
     this.disposables.push({
       dispose: () => this.timer.stop(),

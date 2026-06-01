@@ -57,6 +57,10 @@
 
 - [`main.spec.ts`](./main/main.spec.ts)
 
+## [Main Bus Lifecycle](./main-bus-lifecycle/README.md)
+
+- [`main-bus.spec.ts`](./main-bus-lifecycle/main-bus.spec.ts)
+
 ## [Notification Mapping](./notification-mapping/README.md)
 
 - [`mapping.spec.ts`](./notification-mapping/mapping.spec.ts)
@@ -89,6 +93,14 @@
 
 - [`sdk-shim-append.spec.ts`](./sdk-shim-dock-notifications/sdk-shim-append.spec.ts)
 
+## [Settings Bus](./settings-bus/README.md)
+
+- [`bus.spec.ts`](./settings-bus/bus.spec.ts)
+
+## [Settings Live Propagation](./settings-live-propagation/README.md)
+
+- [`live-prop.spec.tsx`](./settings-live-propagation/live-prop.spec.tsx)
+
 ## [Settings Store](./settings-store/README.md)
 
 - [`settings-store.spec.ts`](./settings-store/settings-store.spec.ts)
@@ -96,6 +108,10 @@
 ## [Settings Tab](./settings-tab/README.md)
 
 - [`settings-tab.spec.tsx`](./settings-tab/settings-tab.spec.tsx)
+
+## [Settings Tab Emits](./settings-tab-emits/README.md)
+
+- [`tab-emit.spec.tsx`](./settings-tab-emits/tab-emit.spec.tsx)
 
 ## [Status Hash](./status-hash/README.md)
 

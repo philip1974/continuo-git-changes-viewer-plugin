@@ -7,7 +7,7 @@ import { SettingsTab } from '../../panel/SettingsTab';
 import type { CoPluginApp } from '../../sdk/types';
 
 function makeApp({
-  readValue = null,
+  readValue = { autoRefresh: { intervalSec: 5 } },
   writeReject = null,
 }: {
   readonly readValue?: unknown;
@@ -28,57 +28,66 @@ afterEach(() => {
   cleanup();
 });
 
-describe('SettingsTab auto-refresh interval', () => {
-  it('T14 renders four radio options inside an accessible fieldset', () => {
+describe('SettingsTab bus emission', () => {
+  it('T6 emits after a successful settings write', async () => {
     const app = makeApp();
     const bus = new SettingsBus();
+    const emit = vi.spyOn(bus, 'emit');
 
     render(<SettingsTab app={app} pluginId="git-viewer" bus={bus} />);
-
-    expect(
-      screen.getByRole('radiogroup', { name: 'Auto-refresh interval' }),
-    ).toBeTruthy();
-    expect(screen.getAllByRole('radio')).toHaveLength(4);
-    expect(screen.getByLabelText('Off')).toBeTruthy();
-    expect(screen.getByLabelText('2 seconds')).toBeTruthy();
-    expect(screen.getByLabelText('5 seconds (default)')).toBeTruthy();
-    expect(screen.getByLabelText('10 seconds')).toBeTruthy();
-    expect(screen.getByText('Changes take effect immediately.')).toBeTruthy();
-  });
-
-  it('T15 writes the blob and updates the UI optimistically', async () => {
-    const app = makeApp({
-      readValue: { autoRefresh: { intervalSec: 10 } },
-    });
-    const bus = new SettingsBus();
-
-    render(<SettingsTab app={app} pluginId="git-viewer" bus={bus} />);
-
-    await waitFor(() =>
-      expect(screen.getByLabelText('10 seconds')).toHaveProperty('checked', true),
-    );
     fireEvent.click(screen.getByLabelText('2 seconds'));
 
-    expect(screen.getByLabelText('2 seconds')).toHaveProperty('checked', true);
     await waitFor(() =>
       expect(app.dataStore.write).toHaveBeenCalledWith('git-viewer', {
         autoRefresh: { intervalSec: 2 },
       }),
     );
+    expect(emit).toHaveBeenCalledWith(2);
   });
 
-  it('T16 shows a warning notification when the write fails', async () => {
-    const app = makeApp({ writeReject: new Error('disk full') });
+  it('T6.5 updates the selected radio when another settings tab emits', async () => {
+    const app = makeApp();
     const bus = new SettingsBus();
 
     render(<SettingsTab app={app} pluginId="git-viewer" bus={bus} />);
-    fireEvent.click(screen.getByLabelText('10 seconds'));
+    await waitFor(() =>
+      expect(screen.getByLabelText('5 seconds (default)')).toHaveProperty(
+        'checked',
+        true,
+      ),
+    );
+
+    bus.emit(10);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('10 seconds')).toHaveProperty('checked', true),
+    );
+  });
+
+  it('T7 rolls back and does not emit when the settings write fails', async () => {
+    const app = makeApp({ writeReject: new Error('store unavailable') });
+    const bus = new SettingsBus();
+    const emit = vi.spyOn(bus, 'emit');
+
+    render(<SettingsTab app={app} pluginId="git-viewer" bus={bus} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText('5 seconds (default)')).toHaveProperty(
+        'checked',
+        true,
+      ),
+    );
+    fireEvent.click(screen.getByLabelText('Off'));
 
     await waitFor(() =>
       expect(app.notifications?.show).toHaveBeenCalledWith({
         kind: 'warning',
         message: 'Failed to save Auto-refresh setting',
       }),
+    );
+    expect(emit).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('5 seconds (default)')).toHaveProperty(
+      'checked',
+      true,
     );
   });
 });

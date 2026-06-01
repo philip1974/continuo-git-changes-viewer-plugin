@@ -1,8 +1,12 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
 import type { DiffResult } from '../git/diff-fetcher';
 import { readStatusHash } from '../git/status-hash';
-import { readAutoRefreshIntervalSec } from '../lib/settings-store';
+import type { SettingsBus } from '../lib/settings-bus';
+import {
+  type AutoRefreshIntervalSec,
+  readAutoRefreshIntervalSec,
+} from '../lib/settings-store';
 import type { CoPluginApp, PanelApi } from '../sdk/types';
 import type { AutoRefreshTimer, AutoRefreshTimerOpts } from '../state/auto-refresh-timer';
 import type { GitViewerState } from '../state/git-store';
@@ -19,6 +23,7 @@ interface GitViewerPanelProps {
   readonly panelApi?: PanelApi;
   readonly timer?: AutoRefreshTimerController;
   readonly pluginId?: string;
+  readonly settingsBus?: SettingsBus;
 }
 
 export function GitViewerPanel({
@@ -29,12 +34,16 @@ export function GitViewerPanel({
   panelApi,
   timer,
   pluginId,
+  settingsBus,
 }: GitViewerPanelProps) {
   const state = useSyncExternalStore(
     store.subscribe,
     store.getState,
     store.getState,
   );
+  const [intervalSec, setIntervalSec] =
+    useState<AutoRefreshIntervalSec | null>(null);
+  const lastHashRef = useRef('');
 
   // v0.1.1 hotfix: panel mount 时 auto-refresh 一次。auto-watch（fs/git hooks/轮询）
   // 仍是 v0.2 议题，不在 mount-time 装监听。
@@ -43,13 +52,30 @@ export function GitViewerPanel({
   }, [store]);
 
   useEffect(() => {
-    if (!app || !panelApi || !timer || !pluginId) return;
+    if (!app || !pluginId) return;
+    let cancelled = false;
+
+    void readAutoRefreshIntervalSec(app.dataStore, pluginId).then((stored) => {
+      if (!cancelled) setIntervalSec(stored);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [app, pluginId]);
+
+  useEffect(() => {
+    if (!settingsBus) return;
+    const disposable = settingsBus.on(setIntervalSec);
+    return () => disposable.dispose();
+  }, [settingsBus]);
+
+  useEffect(() => {
+    if (!app || !panelApi || !timer || intervalSec === null) return;
 
     let cancelled = false;
-    let lastHash = '';
 
     const start = async () => {
-      const intervalSec = await readAutoRefreshIntervalSec(app.dataStore, pluginId);
       if (cancelled) return;
       if (intervalSec === 0) {
         timer.stop();
@@ -59,9 +85,9 @@ export function GitViewerPanel({
       const repoRoot = store.getState().repoRoot;
       if (repoRoot) {
         try {
-          lastHash = await readStatusHash(app, repoRoot);
+          lastHashRef.current = await readStatusHash(app, repoRoot);
         } catch {
-          lastHash = '';
+          // Keep the previous hash across interval-only restarts.
         }
       }
       if (cancelled || !panelApi.isVisible) return;
@@ -72,8 +98,8 @@ export function GitViewerPanel({
           const currentRoot = store.getState().repoRoot;
           if (!currentRoot) return;
           const nextHash = await readStatusHash(app, currentRoot);
-          if (nextHash === lastHash) return;
-          lastHash = nextHash;
+          if (nextHash === lastHashRef.current) return;
+          lastHashRef.current = nextHash;
           await store.getState().refresh();
         },
         onError: (err) => {
@@ -98,8 +124,9 @@ export function GitViewerPanel({
     return () => {
       cancelled = true;
       disposable.dispose();
+      timer.stop();
     };
-  }, [app, panelApi, pluginId, store, timer]);
+  }, [app, intervalSec, panelApi, store, timer]);
 
   // v0.1.2 hotfix: 选中变化时确保 diff 被 fetch（refresh 时已 prefetch 首个；这里覆盖手动切换）
   useEffect(() => {
