@@ -1,7 +1,13 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
+import { discardFile } from '../git/discard-file';
+import { discardHunk } from '../git/discard-hunk';
 import type { DiffResult } from '../git/diff-fetcher';
 import { readStatusHash } from '../git/status-hash';
+import { stageFile } from '../git/stage-file';
+import { stageHunk } from '../git/stage-hunk';
+import { unstageFile } from '../git/unstage-file';
+import { unstageHunk } from '../git/unstage-hunk';
 import type { SettingsBus } from '../lib/settings-bus';
 import {
   type AutoRefreshIntervalSec,
@@ -12,6 +18,14 @@ import type { AutoRefreshTimer, AutoRefreshTimerOpts } from '../state/auto-refre
 import { cacheKey, type GitViewerState } from '../state/git-store';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
+import {
+  PreviewDrawer,
+  previewDrawerReducer,
+  type DrawerAction,
+  type PreviewDrawerState,
+} from './PreviewDrawer';
+import type { FileChange } from '../git/status-scanner';
+import type { SectionKind } from '../git/can-stage-hunk';
 
 type AutoRefreshTimerController = Pick<AutoRefreshTimer, 'start' | 'stop'>;
 
@@ -44,6 +58,19 @@ export function GitViewerPanel({
   const [intervalSec, setIntervalSec] =
     useState<AutoRefreshIntervalSec | null>(null);
   const lastHashRef = useRef('');
+  const mountedRef = useRef(true);
+  const closeTimerRef = useRef<number | null>(null);
+  const [drawer, dispatchDrawer] = useReducer(previewDrawerReducer, {
+    kind: 'idle',
+  } satisfies PreviewDrawerState);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    };
+  }, []);
 
   // v0.1.1 hotfix: panel mount 时 auto-refresh 一次。auto-watch（fs/git hooks/轮询）
   // 仍是 v0.2 议题，不在 mount-time 装监听。
@@ -156,6 +183,105 @@ export function GitViewerPanel({
       ? state.diffCache.get(cacheKey(selectedRef.path, selectedRef.mode)) ?? null
       : null);
 
+  const showError = (message: string) => {
+    if (typeof app?.notifications?.show === 'function') {
+      app.notifications.show({ kind: 'error', message });
+      return;
+    }
+    store.getState().setBanner({ kind: 'error', message, dismissable: true });
+  };
+
+  const showInfo = (message: string) => {
+    if (typeof app?.notifications?.show === 'function') {
+      app.notifications.show({ kind: 'info', message });
+      return;
+    }
+    store.getState().setBanner({ kind: 'info', message, dismissable: true });
+  };
+
+  const runFileAction = async (
+    change: FileChange,
+    action: Extract<DrawerAction, 'stage' | 'unstage'>,
+  ) => {
+    const repoRoot = store.getState().repoRoot;
+    if (!app || !repoRoot) {
+      showError(!repoRoot ? 'Repo root unknown' : 'SDK shell unavailable');
+      return;
+    }
+
+    const result = action === 'stage'
+      ? await stageFile(app, repoRoot, change.path)
+      : await unstageFile(app, repoRoot, change.path);
+    if (!mountedRef.current) return;
+
+    if (!result.ok) {
+      showError(result.error || 'File operation failed; refresh');
+      return;
+    }
+
+    await store.getState().refresh();
+    if (!mountedRef.current) return;
+    showInfo(`${action === 'stage' ? 'Staged' : 'Unstaged'} ${change.path}`);
+  };
+
+  const openDiscardFileDrawer = (change: FileChange, _section: SectionKind) => {
+    dispatchDrawer({
+      type: 'open',
+      action: 'discard-file',
+      filePath: change.path,
+      body: `File: ${change.path} (X=${change.statusX} Y=${change.statusY})`,
+    });
+  };
+
+  const handleDrawerConfirm = async () => {
+    if (drawer.kind !== 'previewing' && drawer.kind !== 'error') return;
+    const repoRoot = store.getState().repoRoot;
+    if (!app || !repoRoot) {
+      const message = !repoRoot ? 'Repo root unknown' : 'SDK shell unavailable';
+      dispatchDrawer({ type: 'confirm' });
+      if (!mountedRef.current) return;
+      dispatchDrawer({ type: 'fail', error: message });
+      showError(message);
+      return;
+    }
+
+    dispatchDrawer({ type: 'confirm' });
+    const result =
+      drawer.action === 'stage'
+        ? drawer.patch
+          ? await stageHunk(app, repoRoot, drawer.patch)
+          : { ok: false, error: 'Patch unavailable' }
+        : drawer.action === 'unstage'
+          ? drawer.patch
+            ? await unstageHunk(app, repoRoot, drawer.patch)
+            : { ok: false, error: 'Patch unavailable' }
+          : drawer.action === 'discard'
+            ? drawer.patch
+              ? await discardHunk(app, repoRoot, drawer.patch)
+              : { ok: false, error: 'Patch unavailable' }
+            : await discardFile(app, repoRoot, drawer.filePath);
+    if (!mountedRef.current) return;
+
+    if (!result.ok) {
+      const message = result.error || 'File operation failed; refresh';
+      dispatchDrawer({ type: 'fail', error: message });
+      showError(message);
+      return;
+    }
+
+    dispatchDrawer({ type: 'succeed' });
+    if (drawer.action === 'discard') {
+      showInfo(`Hunk discarded from ${drawer.filePath}`);
+    } else if (drawer.action === 'discard-file') {
+      showInfo(`Discarded ${drawer.filePath}`);
+    }
+    await store.getState().refresh();
+    if (!mountedRef.current) return;
+    closeTimerRef.current = window.setTimeout(() => {
+      if (mountedRef.current) dispatchDrawer({ type: 'dismiss' });
+    }, 800);
+  };
+
   return (
     <section className="cgv-panel">
       <header className="cgv-header">
@@ -171,7 +297,13 @@ export function GitViewerPanel({
         </button>
       </header>
       <div className="cgv-body">
-        <FileList store={store} changes={state.changes} />
+        <FileList
+          store={store}
+          changes={state.changes}
+          onStageFile={(change) => void runFileAction(change, 'stage')}
+          onUnstageFile={(change) => void runFileAction(change, 'unstage')}
+          onDiscardFile={openDiscardFileDrawer}
+        />
         <DiffView
           app={app}
           scopeReady={scopeReady}
@@ -179,8 +311,15 @@ export function GitViewerPanel({
           change={selected}
           diff={diff}
           mode={selectedRef?.mode ?? 'changed'}
+          drawer={drawer}
+          dispatchDrawer={dispatchDrawer}
         />
       </div>
+      <PreviewDrawer
+        state={drawer}
+        onConfirm={handleDrawerConfirm}
+        onCancel={() => dispatchDrawer({ type: 'cancel' })}
+      />
       {state.banner ? (
         <div className={`cgv-banner cgv-banner--${state.banner.kind}`}>
           <span>{state.banner.message}</span>

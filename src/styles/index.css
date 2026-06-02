@@ -98,6 +98,13 @@
   list-style: none;
 }
 
+.cgv-file-li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+}
+
 .cgv-file-row {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto;
@@ -127,6 +134,45 @@
 .cgv-file-row--readonly:hover {
   outline: 0;
   background: transparent;
+}
+
+.cgv-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.cgv-file-li:hover .cgv-row-actions,
+.cgv-file-li:focus-within .cgv-row-actions {
+  opacity: 1;
+}
+
+.cgv-row-action-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-line);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+  color: var(--text-fg);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cgv-row-action-btn:hover:not(:disabled),
+.cgv-row-action-btn:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: 0;
+}
+
+.cgv-row-action-btn.cgv-discard-btn {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .cgv-status,
@@ -403,6 +449,15 @@
   font-size: 12px;
   line-height: 1.45;
   white-space: pre;
+}
+
+.cgv-preview-body {
+  padding: 8px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  background: var(--bg-canvas);
+  color: var(--text-fg);
+  font-size: 12px;
 }
 
 .cgv-preview-actions {

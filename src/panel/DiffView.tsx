@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef } from 'react';
+import { useEffect, useReducer, useRef, type Dispatch } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
 import { canDiscardHunk } from '../git/can-discard-hunk';
 import { canStageHunk } from '../git/can-stage-hunk';
@@ -15,6 +15,7 @@ import type { GitViewerState } from '../state/git-store';
 import {
   type DrawerAction,
   PreviewDrawer,
+  type PreviewDrawerAction,
   previewDrawerReducer,
   type PreviewDrawerState,
 } from './PreviewDrawer';
@@ -26,6 +27,8 @@ interface DiffViewProps {
   readonly diff: DiffResult | null;
   readonly mode?: DiffMode;
   readonly scopeReady?: Promise<'grant' | 'deny' | 'no-workspace' | 'error'>;
+  readonly drawer?: PreviewDrawerState;
+  readonly dispatchDrawer?: Dispatch<PreviewDrawerAction>;
 }
 
 function NewFileView({ content }: { readonly content: string }) {
@@ -146,12 +149,17 @@ export function DiffView({
   diff,
   mode = 'changed',
   scopeReady,
+  drawer: externalDrawer,
+  dispatchDrawer: externalDispatchDrawer,
 }: DiffViewProps) {
   const mountedRef = useRef(true);
   const closeTimerRef = useRef<number | null>(null);
-  const [drawer, dispatchDrawer] = useReducer(previewDrawerReducer, {
+  const [localDrawer, localDispatchDrawer] = useReducer(previewDrawerReducer, {
     kind: 'idle',
   } satisfies PreviewDrawerState);
+  const isDrawerLifted = externalDrawer !== undefined && externalDispatchDrawer !== undefined;
+  const drawer = externalDrawer ?? localDrawer;
+  const dispatchDrawer = externalDispatchDrawer ?? localDispatchDrawer;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -282,6 +290,14 @@ export function DiffView({
     }
 
     dispatchDrawer({ type: 'confirm' });
+    if (!drawer.patch) {
+      const message = 'Patch unavailable';
+      if (!mountedRef.current) return;
+      dispatchDrawer({ type: 'fail', error: message });
+      showError(message);
+      return;
+    }
+
     const result =
       drawer.action === 'stage'
         ? await stageHunk(app, repoRoot, drawer.patch)
@@ -345,11 +361,13 @@ export function DiffView({
         hunkActions={hunkActions}
         onHunkAction={handleHunkAction}
       />
-      <PreviewDrawer
-        state={drawer}
-        onConfirm={handleConfirm}
-        onCancel={() => dispatchDrawer({ type: 'cancel' })}
-      />
+      {!isDrawerLifted ? (
+        <PreviewDrawer
+          state={drawer}
+          onConfirm={handleConfirm}
+          onCancel={() => dispatchDrawer({ type: 'cancel' })}
+        />
+      ) : null}
     </main>
   );
 }

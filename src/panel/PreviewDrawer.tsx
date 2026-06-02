@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export type DrawerAction = 'stage' | 'unstage' | 'discard';
+export type DrawerAction = 'stage' | 'unstage' | 'discard' | 'discard-file';
 
 export type PreviewDrawerState =
   | { readonly kind: 'idle' }
@@ -8,20 +8,23 @@ export type PreviewDrawerState =
       readonly kind: 'previewing';
       readonly action: DrawerAction;
       readonly filePath: string;
-      readonly patch: string;
+      readonly patch?: string;
+      readonly body?: string;
     }
   | {
       readonly kind: 'applying';
       readonly action: DrawerAction;
       readonly filePath: string;
-      readonly patch: string;
+      readonly patch?: string;
+      readonly body?: string;
     }
   | { readonly kind: 'success'; readonly action: DrawerAction; readonly filePath: string }
   | {
       readonly kind: 'error';
       readonly action: DrawerAction;
       readonly filePath: string;
-      readonly patch: string;
+      readonly patch?: string;
+      readonly body?: string;
       readonly error: string;
     };
 
@@ -30,7 +33,8 @@ export type PreviewDrawerAction =
       readonly type: 'open';
       readonly action?: DrawerAction;
       readonly filePath: string;
-      readonly patch: string;
+      readonly patch?: string;
+      readonly body?: string;
     }
   | { readonly type: 'confirm' }
   | { readonly type: 'succeed' }
@@ -48,7 +52,8 @@ export function previewDrawerReducer(
         kind: 'previewing',
         action: action.action ?? 'stage',
         filePath: action.filePath,
-        patch: action.patch,
+        ...(action.patch !== undefined ? { patch: action.patch } : {}),
+        ...(action.body !== undefined ? { body: action.body } : {}),
       };
     case 'confirm':
       if (state.kind !== 'previewing' && state.kind !== 'error') return state;
@@ -56,7 +61,8 @@ export function previewDrawerReducer(
         kind: 'applying',
         action: state.action,
         filePath: state.filePath,
-        patch: state.patch,
+        ...(state.patch !== undefined ? { patch: state.patch } : {}),
+        ...(state.body !== undefined ? { body: state.body } : {}),
       };
     case 'succeed':
       if (state.kind !== 'applying') return state;
@@ -67,7 +73,8 @@ export function previewDrawerReducer(
         kind: 'error',
         action: state.action,
         filePath: state.filePath,
-        patch: state.patch,
+        ...(state.patch !== undefined ? { patch: state.patch } : {}),
+        ...(state.body !== undefined ? { body: state.body } : {}),
         error: action.error,
       };
     case 'cancel':
@@ -84,7 +91,14 @@ interface PreviewDrawerProps {
 
 function patchForState(state: PreviewDrawerState): string | null {
   if (state.kind === 'previewing' || state.kind === 'applying' || state.kind === 'error') {
-    return state.patch;
+    return state.patch ?? null;
+  }
+  return null;
+}
+
+function bodyForState(state: PreviewDrawerState): string | null {
+  if (state.kind === 'previewing' || state.kind === 'applying' || state.kind === 'error') {
+    return state.body ?? null;
   }
   return null;
 }
@@ -92,13 +106,23 @@ function patchForState(state: PreviewDrawerState): string | null {
 function verb(action: DrawerAction): string {
   if (action === 'stage') return 'Stage';
   if (action === 'unstage') return 'Unstage';
+  if (action === 'discard-file') return 'Discard file';
   return 'Discard';
 }
 
 function pastTense(action: DrawerAction): string {
   if (action === 'stage') return 'staged';
   if (action === 'unstage') return 'unstaged';
+  if (action === 'discard-file') return 'discarded';
   return 'discarded';
+}
+
+function targetNoun(action: DrawerAction): 'hunk' | 'file' {
+  return action === 'discard-file' ? 'file' : 'hunk';
+}
+
+function successText(action: DrawerAction): string {
+  return action === 'discard-file' ? 'File discarded' : `Hunk ${pastTense(action)}`;
 }
 
 export function PreviewDrawer({
@@ -111,7 +135,7 @@ export function PreviewDrawer({
   const targetKey =
     state.kind === 'idle'
       ? 'idle'
-      : `${state.kind}:${state.action}:${state.filePath}:${patchForState(state) ?? ''}`;
+      : `${state.kind}:${state.action}:${state.filePath}:${patchForState(state) ?? ''}:${bodyForState(state) ?? ''}`;
 
   useEffect(() => {
     setConfirmInput('');
@@ -129,9 +153,12 @@ export function PreviewDrawer({
   if (state.kind === 'idle') return null;
 
   const patch = patchForState(state);
+  const body = bodyForState(state);
   const verbText = verb(state.action);
+  const noun = targetNoun(state.action);
   const isDiscardConfirmable =
-    state.action === 'discard' && (state.kind === 'previewing' || state.kind === 'error');
+    (state.action === 'discard' || state.action === 'discard-file')
+    && (state.kind === 'previewing' || state.kind === 'error');
   const isDiscardConfirmed = isDiscardConfirmable && confirmInput === 'discard';
 
   if (isDiscardConfirmable) {
@@ -140,17 +167,18 @@ export function PreviewDrawer({
       <section
         className="cgv-preview-drawer cgv-preview-drawer--warning"
         role="region"
-        aria-label="Discard hunk preview"
+        aria-label={`Discard ${noun} preview`}
       >
         <header className="cgv-preview-header">
-          <strong>{`Discard hunk: ${state.filePath}`}</strong>
+          <strong>{`Discard ${noun}: ${state.filePath}`}</strong>
         </header>
         <div className="cgv-preview-warning">
           <strong>WARNING: This will permanently delete the unstaged change.</strong>
           <span> Use <code>git stash</code> first if uncertain.</span>
         </div>
         {isError ? <span className="cgv-preview-error">{state.error}</span> : null}
-        {patch ? <pre className="cgv-preview-patch">{patch}</pre> : null}
+        {body ? <div className="cgv-preview-body">{body}</div> : null}
+        {!body && patch ? <pre className="cgv-preview-patch">{patch}</pre> : null}
         <div className="cgv-confirm-row">
           <label htmlFor="cgv-discard-confirm">Type "discard" to confirm:</label>
           <input
@@ -174,9 +202,9 @@ export function PreviewDrawer({
             className="cgv-discard-btn"
             onClick={onConfirm}
             disabled={!isDiscardConfirmed}
-            aria-label={isError ? 'Retry discard hunk' : 'Discard hunk'}
+            aria-label={isError ? `Retry discard ${noun}` : `Discard ${noun}`}
           >
-            {isError ? 'Retry Discard' : 'Discard'}
+            {isError ? `Retry ${verbText}` : verbText}
           </button>
         </footer>
       </section>
@@ -187,19 +215,20 @@ export function PreviewDrawer({
     <section
       className={`cgv-preview-drawer cgv-preview-drawer--${state.kind}`}
       role="region"
-      aria-label={`${verbText} hunk preview`}
+      aria-label={`${verbText} ${noun} preview`}
     >
       <header className="cgv-preview-header">
         <strong>
           {state.kind === 'success'
-            ? `Hunk ${pastTense(state.action)}`
-            : `${verbText} hunk: ${state.filePath}`}
+            ? successText(state.action)
+            : `${verbText} ${noun}: ${state.filePath}`}
         </strong>
         {state.kind === 'error' ? (
           <span className="cgv-preview-error">{state.error}</span>
         ) : null}
       </header>
-      {patch ? <pre className="cgv-preview-patch">{patch}</pre> : null}
+      {body ? <div className="cgv-preview-body">{body}</div> : null}
+      {!body && patch ? <pre className="cgv-preview-patch">{patch}</pre> : null}
       <footer className="cgv-preview-actions">
         {state.kind === 'success' ? (
           <button type="button" onClick={onCancel}>
@@ -211,7 +240,7 @@ export function PreviewDrawer({
               type="button"
               onClick={onConfirm}
               disabled={state.kind === 'applying'}
-              aria-label={`${verbText} hunk`}
+              aria-label={`${verbText} ${noun}`}
             >
               {state.kind === 'applying' ? `${verbText}...` : verbText}
             </button>

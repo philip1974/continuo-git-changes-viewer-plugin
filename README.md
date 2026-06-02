@@ -44,11 +44,26 @@ first. Use `git stash` first if uncertain.
 Staged text files show an Unstage button on each hunk header. Unstage affects
 the Git index only; it does not discard working-tree content.
 
+## File Operations
+
+FileList rows expose whole-file action buttons for cases that hunk patching does
+not cover. Untracked rows show Stage only, which runs `git add -- <file>`.
+Changed rows with modified or deleted working-tree content show Stage and
+Discard. Staged modified, added, or deleted rows show Unstage.
+
+File-level Discard is destructive and requires typing `discard` exactly. It runs
+`git checkout -- <file>`, which restores the working tree from the index and
+preserves already-staged content for `MM` files. Untracked file deletion is not
+supported in v0.3.4.
+
 ## v0.1 Limits
 
 - Hunk stage, unstage, and discard are supported for modified text files only.
   Added, deleted, renamed, copied, binary, and untracked files do not expose
   hunk write buttons in this version.
+- File-level actions in v0.3.4 are intentionally narrow: Untracked can be
+  staged; Changed M/D can be staged or discarded; Staged M/A/D can be unstaged.
+  Rename/copy rows do not expose file-level action buttons yet.
 - There is no commit or stash UI.
 - Jump-back currently shows an inline panel banner with a `path:line` hint. A
   future v0.2 SDK expansion is expected to add real editor navigation.

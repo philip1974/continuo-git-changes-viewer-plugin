@@ -14,6 +14,10 @@
 
 - [`can-discard-hunk.spec.ts`](./can-discard-hunk/can-discard-hunk.spec.ts)
 
+## [can-file-ops](./can-file-ops/README.md)
+
+- [`can-file-ops.spec.ts`](./can-file-ops/can-file-ops.spec.ts)
+
 ## [Stage hunk eligibility](./can-stage-hunk/README.md)
 
 - [`can-stage-hunk.spec.ts`](./can-stage-hunk/can-stage-hunk.spec.ts)
@@ -42,6 +46,10 @@
 
 - [`cgv-panel-height.spec.ts`](./diffview-scroll-fix/cgv-panel-height.spec.ts)
 
+## [discard-file-shell](./discard-file-shell/README.md)
+
+- [`discard-file-shell.spec.ts`](./discard-file-shell/discard-file-shell.spec.ts)
+
 ## [discard-hunk-integration](./discard-hunk-integration/README.md)
 
 - [`discard-hunk-integration.spec.ts`](./discard-hunk-integration/discard-hunk-integration.spec.ts)
@@ -62,6 +70,10 @@
 
 - [`drawer-action-param.spec.tsx`](./drawer-action-param/drawer-action-param.spec.tsx)
 
+## [drawer-discard-file-variant](./drawer-discard-file-variant/README.md)
+
+- [`drawer-discard-file-variant.spec.tsx`](./drawer-discard-file-variant/drawer-discard-file-variant.spec.tsx)
+
 ## [drawer-discard-warning](./drawer-discard-warning/README.md)
 
 - [`drawer-discard-warning.spec.tsx`](./drawer-discard-warning/drawer-discard-warning.spec.tsx)
@@ -74,9 +86,17 @@
 
 - [`exec.spec.ts`](./exec/exec.spec.ts)
 
+## [file-level-integration](./file-level-integration/README.md)
+
+- [`file-level-integration.spec.tsx`](./file-level-integration/file-level-integration.spec.tsx)
+
 ## [FileList three sections](./filelist-3-segment/README.md)
 
 - [`filelist-3-segment.spec.tsx`](./filelist-3-segment/filelist-3-segment.spec.tsx)
+
+## [filelist-row-actions](./filelist-row-actions/README.md)
+
+- [`filelist-row-actions.spec.tsx`](./filelist-row-actions/filelist-row-actions.spec.tsx)
 
 ## [FileList staged clickable rows](./filelist-staged-clickable/README.md)
 
@@ -120,6 +140,10 @@
 - [`feature-detect.spec.tsx`](./jump-back-real/feature-detect.spec.tsx)
 - [`happy.spec.tsx`](./jump-back-real/happy.spec.tsx)
 - [`success-fallback.spec.tsx`](./jump-back-real/success-fallback.spec.tsx)
+
+## [lift-regression](./lift-regression/README.md)
+
+- [`lift-regression.spec.tsx`](./lift-regression/lift-regression.spec.tsx)
 
 ## [main](./main/README.md)
 
@@ -189,6 +213,10 @@
 
 - [`tab-emit.spec.tsx`](./settings-tab-emits/tab-emit.spec.tsx)
 
+## [stage-file-shell](./stage-file-shell/README.md)
+
+- [`stage-file-shell.spec.ts`](./stage-file-shell/stage-file-shell.spec.ts)
+
 ## [Stage hunk shell call](./stage-hunk-shell/README.md)
 
 - [`stage-hunk-shell.spec.ts`](./stage-hunk-shell/stage-hunk-shell.spec.ts)
@@ -212,6 +240,10 @@
 ## [Store Load Toast](./storeload-toast/README.md)
 
 - [`storeload-toast.spec.ts`](./storeload-toast/storeload-toast.spec.ts)
+
+## [unstage-file-shell](./unstage-file-shell/README.md)
+
+- [`unstage-file-shell.spec.ts`](./unstage-file-shell/unstage-file-shell.spec.ts)
 
 ## [Unstage hunk shell call](./unstage-hunk-shell/README.md)
 
