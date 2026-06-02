@@ -10,6 +10,10 @@
 
 - [`wiring.spec.tsx`](./auto-refresh-wiring/wiring.spec.tsx)
 
+## [can-commit](./can-commit/README.md)
+
+- [`can-commit.spec.ts`](./can-commit/can-commit.spec.ts)
+
 ## [can-discard-hunk](./can-discard-hunk/README.md)
 
 - [`can-discard-hunk.spec.ts`](./can-discard-hunk/can-discard-hunk.spec.ts)
@@ -29,6 +33,18 @@
 ## [Commands](./commands/README.md)
 
 - [`commands.spec.ts`](./commands/commands.spec.ts)
+
+## [commit-editor-component](./commit-editor-component/README.md)
+
+- [`commit-editor-component.spec.tsx`](./commit-editor-component/commit-editor-component.spec.tsx)
+
+## [commit-integration](./commit-integration/README.md)
+
+- [`commit-integration.spec.tsx`](./commit-integration/commit-integration.spec.tsx)
+
+## [commit-shell](./commit-shell/README.md)
+
+- [`commit-shell.spec.ts`](./commit-shell/commit-shell.spec.ts)
 
 ## [Diff Fetcher](./diff-fetcher/README.md)
 
@@ -172,6 +188,10 @@
 ## [Git Viewer Panel](./panel/README.md)
 
 - [`panel.spec.tsx`](./panel/panel.spec.tsx)
+
+## [panel-grid-regression](./panel-grid-regression/README.md)
+
+- [`panel-grid-regression.spec.ts`](./panel-grid-regression/panel-grid-regression.spec.ts)
 
 ## [Path Utils](./path-utils/README.md)
 

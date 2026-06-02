@@ -15,9 +15,10 @@ import {
 } from '../lib/settings-store';
 import type { CoPluginApp, PanelApi } from '../sdk/types';
 import type { AutoRefreshTimer, AutoRefreshTimerOpts } from '../state/auto-refresh-timer';
-import { cacheKey, type GitViewerState } from '../state/git-store';
+import { cacheKey, selectStaged, type GitViewerState } from '../state/git-store';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
+import { CommitEditor } from './CommitEditor';
 import {
   PreviewDrawer,
   previewDrawerReducer,
@@ -182,6 +183,7 @@ export function GitViewerPanel({
     (selectedRef
       ? state.diffCache.get(cacheKey(selectedRef.path, selectedRef.mode)) ?? null
       : null);
+  const stagedCount = selectStaged({ changes: state.changes }).length;
 
   const showError = (message: string) => {
     if (typeof app?.notifications?.show === 'function') {
@@ -296,6 +298,13 @@ export function GitViewerPanel({
           {state.isLoading ? 'Refreshing…' : 'Refresh'}
         </button>
       </header>
+      <CommitEditor
+        app={app}
+        store={store}
+        commitMessage={state.commitMessage}
+        stagedCount={stagedCount}
+        repoRoot={state.repoRoot}
+      />
       <div className="cgv-body">
         <FileList
           store={store}

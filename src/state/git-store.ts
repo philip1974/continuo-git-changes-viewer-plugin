@@ -38,12 +38,14 @@ export interface GitViewerState {
   diffCache: Map<string, DiffResult>;
   isLoading: boolean;
   banner: BannerState | null;
+  commitMessage: string;
   refresh(): Promise<void>;
   selectFile(path: string, mode: DiffMode): void;
   loadDiff(path: string, mode: DiffMode): Promise<void>;
   clear(): void;
   setBanner(banner: BannerState): void;
   dismissBanner(): void;
+  setCommitMessage(message: string): void;
 }
 
 interface ChangeSlice {
@@ -119,9 +121,16 @@ const emptyState = {
   diffCache: new Map<string, DiffResult>(),
   isLoading: false,
   banner: null,
+  commitMessage: '',
 } satisfies Pick<
   GitViewerState,
-  'repoRoot' | 'changes' | 'selected' | 'diffCache' | 'isLoading' | 'banner'
+  | 'repoRoot'
+  | 'changes'
+  | 'selected'
+  | 'diffCache'
+  | 'isLoading'
+  | 'banner'
+  | 'commitMessage'
 >;
 
 export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState> {
@@ -214,6 +223,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         diffCache: new Map(),
         isLoading: false,
         banner: null,
+        commitMessage: '',
       });
     },
     setBanner(banner) {
@@ -221,6 +231,9 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
     },
     dismissBanner() {
       set({ banner: null });
+    },
+    setCommitMessage(message) {
+      set({ commitMessage: message });
     },
   }));
 }

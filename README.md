@@ -5,7 +5,7 @@ with a file list on the left and a diff view on the right.
 
 ## Install
 
-This v0.1 build is for manual development installs only. It is not published in
+This v0.4 build is for manual development installs only. It is not published in
 the Continuo plugin catalog.
 
 ```bash
@@ -25,8 +25,8 @@ and `README.md`; it does not symlink the repository.
 Open a git workspace where the Continuo workspace root is also the git toplevel.
 Then open the panel from More Actions -> "Git Changes Viewer".
 
-The plugin does not register a ribbon action in v0.1. Use the command palette or
-More Actions command surface to run "Refresh Git Changes".
+Use the Git Changes ribbon action or More Actions command surface to open the
+panel and run "Refresh Git Changes".
 
 ## Hunk Operations
 
@@ -54,17 +54,31 @@ Discard. Staged modified, added, or deleted rows show Unstage.
 File-level Discard is destructive and requires typing `discard` exactly. It runs
 `git checkout -- <file>`, which restores the working tree from the index and
 preserves already-staged content for `MM` files. Untracked file deletion is not
-supported in v0.3.4.
+supported in v0.4.0.
 
-## v0.1 Limits
+## Commit
+
+The top of the panel includes a commit message editor. The Commit button is
+enabled only when the message contains non-whitespace text and at least one file
+is staged. Messages are passed to Git with `git commit -F -`, so subject/body
+formatting and blank lines are preserved.
+
+Commit hooks run normally; this plugin does not pass `--no-verify`. If a hook
+fails, the hook output is shown and the message draft stays in the editor. On
+success, the plugin clears the draft, refreshes the working tree, and reads the
+real subject from `git log -1 --pretty=%s` so commit-msg hook rewrites are
+reflected in the toast.
+
+## v0.4 Limits
 
 - Hunk stage, unstage, and discard are supported for modified text files only.
   Added, deleted, renamed, copied, binary, and untracked files do not expose
   hunk write buttons in this version.
-- File-level actions in v0.3.4 are intentionally narrow: Untracked can be
+- File-level actions in v0.4.0 are intentionally narrow: Untracked can be
   staged; Changed M/D can be staged or discarded; Staged M/A/D can be unstaged.
   Rename/copy rows do not expose file-level action buttons yet.
-- There is no commit or stash UI.
+- Commit is intentionally vanilla in v0.4.0: amend, signoff, author override,
+  commit signing, hook bypass, and stash UI are not supported.
 - Jump-back currently shows an inline panel banner with a `path:line` hint. A
   future v0.2 SDK expansion is expected to add real editor navigation.
 - The workspace root must be the git toplevel. Opening a subdirectory of a repo

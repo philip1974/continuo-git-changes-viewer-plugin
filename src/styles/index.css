@@ -20,11 +20,12 @@
 
 .cgv-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   /* v0.1.8 hot-fix: must be fixed `height` not min-height — the latter lets
      the panel grow past dockview's overflow:hidden parent, hiding the bottom
      and disabling inner overflow:auto. With fixed height, minmax(0,1fr) caps
-     the body row and inner cgv-diff overflow:auto becomes the scroll surface. */
+     the body row and inner cgv-diff overflow:auto becomes the scroll surface.
+     v0.4.0 adds CommitEditor as row 2; cgv-body remains the only 1fr row. */
   height: 100%;
   background: var(--bg-canvas);
   color: var(--text-fg);
@@ -63,6 +64,79 @@
 .cgv-refresh-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.cgv-commit-editor {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-line);
+  background: var(--bg-panel);
+}
+
+.cgv-commit-message {
+  width: 100%;
+  min-height: 52px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--border-line);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+  color: var(--text-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.cgv-commit-message:focus-visible {
+  border-color: var(--accent);
+  outline: 0;
+}
+
+.cgv-commit-message:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.cgv-commit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cgv-commit-hint {
+  overflow: hidden;
+  color: var(--text-fg);
+  font-size: 11px;
+  opacity: 0.72;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cgv-commit-btn {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  background: var(--bg-canvas);
+  color: var(--text-fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cgv-commit-btn:hover:not(:disabled),
+.cgv-commit-btn:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: 0;
+}
+
+.cgv-commit-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .cgv-body {
@@ -554,6 +628,15 @@
 }
 
 @media (max-width: 720px) {
+  .cgv-commit-editor {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+
+  .cgv-commit-message {
+    min-height: 48px;
+  }
+
   .cgv-body {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
