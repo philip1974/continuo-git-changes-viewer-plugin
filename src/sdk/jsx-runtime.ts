@@ -25,14 +25,25 @@ function resolveType(type: any): any {
   return type;
 }
 
-// react/jsx-runtime 真正的 jsx(type, props, key) 签名：
-// children 在 props.children；这里直接 createElement 也接受 props.children。
+// react/jsx-runtime: jsx(type, props, key). Children live on props.children.
+// v0.3.3 hot-fix: forward children as positional args to createElement.
+// Passing them via props.children makes React think `props.children`
+// is a runtime array and emits "Each child in a list should have a
+// unique 'key' prop" warnings for every static JSX sibling pair.
+// createElement(type, props, ...children) is the legacy form React
+// trusts as compile-time-known and never warns about.
 export function jsx(type: any, props: any, key?: any): any {
   const resolved = resolveType(type);
-  if (key !== undefined) {
-    return getR().createElement(resolved, { ...props, key });
+  const R = getR();
+  const finalProps = key !== undefined ? { ...props, key } : props;
+  if (finalProps && 'children' in finalProps) {
+    const { children, ...rest } = finalProps;
+    if (Array.isArray(children)) {
+      return R.createElement(resolved, rest, ...children);
+    }
+    return R.createElement(resolved, rest, children);
   }
-  return getR().createElement(resolved, props);
+  return R.createElement(resolved, finalProps);
 }
 
 export const jsxs = jsx; // 18 的 jsxs（static children 优化）签名同 jsx

@@ -102,6 +102,10 @@
 
 - [`hunk-patch-builder.spec.ts`](./hunk-patch-builder/hunk-patch-builder.spec.ts)
 
+## [jsx-runtime-shim (v0.3.2/v0.3.3 regression guards)](./jsx-runtime-shim/README.md)
+
+- [`jsx-runtime-shim.spec.ts`](./jsx-runtime-shim/jsx-runtime-shim.spec.ts)
+
 ## [Jump Back Onload Request Scope](./jump-back-onload-requestScope/README.md)
 
 - [`onload-deny.spec.ts`](./jump-back-onload-requestScope/onload-deny.spec.ts)
