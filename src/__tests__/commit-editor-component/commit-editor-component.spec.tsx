@@ -70,6 +70,7 @@ describe('CommitEditor', () => {
   it('T18 empty messages keep Commit disabled and do not shell out', () => {
     const { app, exec } = appWithShell();
     renderEditor({ message: '', app });
+    exec.mockClear();
 
     fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
 
@@ -80,6 +81,7 @@ describe('CommitEditor', () => {
   it('T19 zero staged files keep Commit disabled and do not shell out', () => {
     const { app, exec } = appWithShell();
     renderEditor({ stagedCount: 0, app });
+    exec.mockClear();
 
     fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
 
@@ -130,7 +132,7 @@ describe('CommitEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
 
     await vi.waitFor(() => {
-      expect(commit).toHaveBeenCalledWith(app, '/repo', 'subject');
+      expect(commit).toHaveBeenCalledWith(app, '/repo', 'subject', { amend: false });
     });
   });
 

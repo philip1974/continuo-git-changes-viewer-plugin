@@ -99,6 +99,38 @@
   opacity: 0.72;
 }
 
+.cgv-amend-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-fg);
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.cgv-amend-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cgv-amend-label input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.cgv-amend-label input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.cgv-amend-warning {
+  color: var(--danger);
+  font-weight: 500;
+}
+
 .cgv-commit-actions {
   display: flex;
   align-items: center;
@@ -137,6 +169,18 @@
 .cgv-commit-btn:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.cgv-amend-btn {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.cgv-amend-btn:hover:not(:disabled),
+.cgv-amend-btn:focus-visible {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .cgv-body {

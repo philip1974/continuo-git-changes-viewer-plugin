@@ -31,8 +31,16 @@ function renderWithChanges(
   withNotifications = true,
 ) {
   const notifications = { show: vi.fn() };
+  const shellExec = vi.fn(
+    async (cmd: string, args: readonly string[], opts?: unknown) => {
+      if (args[0] === '--no-optional-locks' && args[1] === 'rev-parse') {
+        return result({ exitCode: 0, stdout: 'HEAD\n' });
+      }
+      return exec(cmd, args, opts);
+    },
+  );
   const app = {
-    shell: { exec },
+    shell: { exec: shellExec },
     ...(withNotifications ? { notifications } : {}),
   } as unknown as CoPluginApp;
   const refresh = vi.fn(async () => undefined);

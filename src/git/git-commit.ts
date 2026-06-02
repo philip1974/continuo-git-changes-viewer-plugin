@@ -11,6 +11,10 @@ export interface CommitResult {
   readonly exitCode?: number | null;
 }
 
+export interface GitCommitOptions {
+  readonly amend?: boolean;
+}
+
 export function formatGitCommitError(
   result: {
     readonly timedOut?: boolean;
@@ -36,8 +40,12 @@ export async function gitCommit(
   app: Pick<CoPluginApp, 'shell'>,
   repoRoot: string,
   message: string,
+  options: GitCommitOptions = {},
 ): Promise<CommitResult> {
-  const result = await gitExec(app, repoRoot, ['commit', '-F', '-'], {
+  const args = options.amend
+    ? ['commit', '--amend', '-F', '-']
+    : ['commit', '-F', '-'];
+  const result = await gitExec(app, repoRoot, args, {
     input: message,
     timeoutMs: 120_000,
   });

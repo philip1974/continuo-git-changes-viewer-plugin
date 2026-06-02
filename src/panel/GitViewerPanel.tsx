@@ -304,6 +304,7 @@ export function GitViewerPanel({
         commitMessage={state.commitMessage}
         stagedCount={stagedCount}
         repoRoot={state.repoRoot}
+        amend={state.amend}
       />
       <div className="cgv-body">
         <FileList

@@ -39,6 +39,7 @@ export interface GitViewerState {
   isLoading: boolean;
   banner: BannerState | null;
   commitMessage: string;
+  amend: boolean;
   refresh(): Promise<void>;
   selectFile(path: string, mode: DiffMode): void;
   loadDiff(path: string, mode: DiffMode): Promise<void>;
@@ -46,6 +47,7 @@ export interface GitViewerState {
   setBanner(banner: BannerState): void;
   dismissBanner(): void;
   setCommitMessage(message: string): void;
+  setAmend(value: boolean): void;
 }
 
 interface ChangeSlice {
@@ -122,6 +124,7 @@ const emptyState = {
   isLoading: false,
   banner: null,
   commitMessage: '',
+  amend: false,
 } satisfies Pick<
   GitViewerState,
   | 'repoRoot'
@@ -131,6 +134,7 @@ const emptyState = {
   | 'isLoading'
   | 'banner'
   | 'commitMessage'
+  | 'amend'
 >;
 
 export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState> {
@@ -224,6 +228,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         isLoading: false,
         banner: null,
         commitMessage: '',
+        amend: false,
       });
     },
     setBanner(banner) {
@@ -234,6 +239,9 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
     },
     setCommitMessage(message) {
       set({ commitMessage: message });
+    },
+    setAmend(value) {
+      set({ amend: value });
     },
   }));
 }

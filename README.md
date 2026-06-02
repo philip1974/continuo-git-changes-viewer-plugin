@@ -69,6 +69,17 @@ success, the plugin clears the draft, refreshes the working tree, and reads the
 real subject from `git log -1 --pretty=%s` so commit-msg hook rewrites are
 reflected in the toast.
 
+### Amend
+
+The commit editor can amend the last commit. Enable "Amend last commit" to load
+the current HEAD message into the editor, then edit the message or stage more
+changes and click Amend. Amend runs `git commit --amend -F -`, then refreshes
+the panel and clears amend mode on success.
+
+Amend rewrites local HEAD. If the commit was already pushed, integrating the
+rewrite may require a force-push. v0.4.1 shows a visible warning but does not
+detect whether HEAD is already on a remote branch.
+
 ## v0.4 Limits
 
 - Hunk stage, unstage, and discard are supported for modified text files only.
@@ -77,8 +88,8 @@ reflected in the toast.
 - File-level actions in v0.4.0 are intentionally narrow: Untracked can be
   staged; Changed M/D can be staged or discarded; Staged M/A/D can be unstaged.
   Rename/copy rows do not expose file-level action buttons yet.
-- Commit is intentionally vanilla in v0.4.0: amend, signoff, author override,
-  commit signing, hook bypass, and stash UI are not supported.
+- Commit is intentionally narrow in v0.4.1: signoff, author override, commit
+  signing, hook bypass, amend push detection, and stash UI are not supported.
 - Jump-back currently shows an inline panel banner with a `path:line` hint. A
   future v0.2 SDK expansion is expected to add real editor navigation.
 - The workspace root must be the git toplevel. Opening a subdirectory of a repo

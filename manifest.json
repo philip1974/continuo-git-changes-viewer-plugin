@@ -1,9 +1,9 @@
 {
   "id": "continuo-git-changes-viewer",
   "name": "Git Changes Viewer",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "main": "dist/index.js",
-  "description": "Stage, unstage, discard, and commit Git changes",
+  "description": "Stage, unstage, discard, commit, and amend Git changes",
   "author": "philip1974",
   "minLMVersion": "0.2.4",
   "permissions": ["shell", "fs"]

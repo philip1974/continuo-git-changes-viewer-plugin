@@ -2,6 +2,14 @@
 
 > 由 `pnpm bdd:index` 自动生成,请勿手工编辑。
 
+## [amend-component](./amend-component/README.md)
+
+- [`amend-component.spec.tsx`](./amend-component/amend-component.spec.tsx)
+
+## [amend-integration](./amend-integration/README.md)
+
+- [`amend-integration.spec.tsx`](./amend-integration/amend-integration.spec.tsx)
+
 ## [Auto Refresh Timer](./auto-refresh-timer/README.md)
 
 - [`auto-refresh-timer.spec.ts`](./auto-refresh-timer/auto-refresh-timer.spec.ts)
@@ -9,6 +17,10 @@
 ## [Auto Refresh Wiring](./auto-refresh-wiring/README.md)
 
 - [`wiring.spec.tsx`](./auto-refresh-wiring/wiring.spec.tsx)
+
+## [can-amend](./can-amend/README.md)
+
+- [`can-amend.spec.ts`](./can-amend/can-amend.spec.ts)
 
 ## [can-commit](./can-commit/README.md)
 
@@ -33,6 +45,10 @@
 ## [Commands](./commands/README.md)
 
 - [`commands.spec.ts`](./commands/commands.spec.ts)
+
+## [commit-amend-shell](./commit-amend-shell/README.md)
+
+- [`commit-amend-shell.spec.ts`](./commit-amend-shell/commit-amend-shell.spec.ts)
 
 ## [commit-editor-component](./commit-editor-component/README.md)
 
@@ -133,6 +149,10 @@
 ## [Git store selectors](./git-store-selectors/README.md)
 
 - [`git-store-selectors.spec.ts`](./git-store-selectors/git-store-selectors.spec.ts)
+
+## [head-meta-shell](./head-meta-shell/README.md)
+
+- [`head-meta-shell.spec.ts`](./head-meta-shell/head-meta-shell.spec.ts)
 
 ## [Hunk patch builder](./hunk-patch-builder/README.md)
 
