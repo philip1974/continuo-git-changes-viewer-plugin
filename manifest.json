@@ -1,9 +1,9 @@
 {
   "id": "continuo-git-changes-viewer",
   "name": "Git Changes Viewer",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "main": "dist/index.js",
-  "description": "Stage and unstage individual diff hunks",
+  "description": "Stage, unstage, and discard individual diff hunks",
   "author": "philip1974",
   "minLMVersion": "0.2.4",
   "permissions": ["shell", "fs"]

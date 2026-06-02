@@ -4,6 +4,8 @@
   --text-fg: #111;
   --border-line: #ddd;
   --accent: #3b82f6;
+  --danger: #c0392b;
+  --danger-bg: rgba(192, 57, 43, 0.12);
 }
 
 .dark {
@@ -12,6 +14,8 @@
   --text-fg: #eee;
   --border-line: #444;
   --accent: #60a5fa;
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.15);
 }
 
 .cgv-panel {
@@ -241,6 +245,12 @@
   margin-top: 4px;
 }
 
+.cgv-hunk-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .cgv-hunk-stage-btn {
   align-self: center;
   padding: 2px 8px;
@@ -259,6 +269,18 @@
 .cgv-hunk-stage-btn:focus-visible {
   border-color: var(--accent);
   outline: 0;
+}
+
+.cgv-discard-btn {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.cgv-discard-btn:hover:not(:disabled),
+.cgv-discard-btn:focus-visible {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .cgv-line-meta {
@@ -303,6 +325,11 @@
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
 }
 
+.cgv-preview-drawer--warning {
+  border: 2px solid var(--danger);
+  background: var(--bg-panel);
+}
+
 .cgv-preview-header,
 .cgv-preview-actions {
   display: flex;
@@ -320,8 +347,46 @@
 }
 
 .cgv-preview-error {
-  color: #f87171;
+  color: var(--danger);
   font-size: 12px;
+}
+
+.cgv-preview-warning {
+  padding: 8px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--danger-bg);
+  color: var(--text-fg);
+  font-size: 12px;
+}
+
+.cgv-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.cgv-confirm-row label {
+  flex: 0 0 auto;
+}
+
+.cgv-confirm-input {
+  min-width: 120px;
+  flex: 1 1 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border-line);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+  color: var(--text-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.cgv-confirm-input:focus-visible {
+  border-color: var(--danger);
+  outline: 0;
 }
 
 .cgv-preview-patch {
@@ -364,6 +429,18 @@
 .cgv-preview-actions button:disabled {
   cursor: wait;
   opacity: 0.55;
+}
+
+.cgv-preview-actions .cgv-discard-btn:hover:not(:disabled),
+.cgv-preview-actions .cgv-discard-btn:focus-visible {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.cgv-preview-actions .cgv-discard-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .cgv-banner {

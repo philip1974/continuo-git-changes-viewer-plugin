@@ -28,20 +28,28 @@ Then open the panel from More Actions -> "Git Changes Viewer".
 The plugin does not register a ribbon action in v0.1. Use the command palette or
 More Actions command surface to run "Refresh Git Changes".
 
-## Stage Hunks
+## Hunk Operations
 
-Modified text files in the Changed section show a Stage button on each unified
-diff hunk header. Clicking it opens a PreviewDrawer with the exact patch that
-will be applied to the Git index; the hunk is staged only after confirming in
-that drawer.
+Modified text files in the Changed section show Stage and Discard buttons on
+each unified diff hunk header. Stage opens a PreviewDrawer with the exact patch
+that will be applied to the Git index; the hunk is staged only after confirming
+in that drawer.
 
-Staged rows are read-only in v0.3.0. To undo a staged hunk or file, run
-`git reset HEAD <file>` in a terminal.
+Discard is destructive. It reverse-applies the selected unstaged hunk to the
+working tree with `git apply --reverse`, and the drawer requires typing
+`discard` exactly before the button is enabled. Uncommitted working-tree changes
+cannot be recovered by Git after discard unless you stashed or committed them
+first. Use `git stash` first if uncertain.
+
+Staged text files show an Unstage button on each hunk header. Unstage affects
+the Git index only; it does not discard working-tree content.
 
 ## v0.1 Limits
 
-- Only hunk staging is supported. There is no discard, unstage, commit, or stash
-  UI.
+- Hunk stage, unstage, and discard are supported for modified text files only.
+  Added, deleted, renamed, copied, binary, and untracked files do not expose
+  hunk write buttons in this version.
+- There is no commit or stash UI.
 - Jump-back currently shows an inline panel banner with a `path:line` hint. A
   future v0.2 SDK expansion is expected to add real editor navigation.
 - The workspace root must be the git toplevel. Opening a subdirectory of a repo

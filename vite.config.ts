@@ -29,6 +29,7 @@ export default defineConfig({
     ],
   },
   build: {
+    sourcemap: true,
     lib: {
       entry: 'src/main.ts',
       formats: ['es'],

@@ -10,6 +10,10 @@
 
 - [`wiring.spec.tsx`](./auto-refresh-wiring/wiring.spec.tsx)
 
+## [can-discard-hunk](./can-discard-hunk/README.md)
+
+- [`can-discard-hunk.spec.ts`](./can-discard-hunk/can-discard-hunk.spec.ts)
+
 ## [Stage hunk eligibility](./can-stage-hunk/README.md)
 
 - [`can-stage-hunk.spec.ts`](./can-stage-hunk/can-stage-hunk.spec.ts)
@@ -30,9 +34,25 @@
 
 - [`diffview-no-toast.spec.tsx`](./diffview-banner-preserved/diffview-no-toast.spec.tsx)
 
+## [diffview-hunk-actions](./diffview-hunk-actions/README.md)
+
+- [`diffview-hunk-actions.spec.tsx`](./diffview-hunk-actions/diffview-hunk-actions.spec.tsx)
+
 ## [diffview-scroll-fix (v0.1.8 hot-fix)](./diffview-scroll-fix/README.md)
 
 - [`cgv-panel-height.spec.ts`](./diffview-scroll-fix/cgv-panel-height.spec.ts)
+
+## [discard-hunk-integration](./discard-hunk-integration/README.md)
+
+- [`discard-hunk-integration.spec.ts`](./discard-hunk-integration/discard-hunk-integration.spec.ts)
+
+## [discard-hunk-shell](./discard-hunk-shell/README.md)
+
+- [`discard-hunk-shell.spec.ts`](./discard-hunk-shell/discard-hunk-shell.spec.ts)
+
+## [discard-integration](./discard-integration/README.md)
+
+- [`discard-integration.spec.tsx`](./discard-integration/discard-integration.spec.tsx)
 
 ## [Disposables Cleanup](./disposables-cleanup/README.md)
 
@@ -41,6 +61,14 @@
 ## [PreviewDrawer action labels](./drawer-action-param/README.md)
 
 - [`drawer-action-param.spec.tsx`](./drawer-action-param/drawer-action-param.spec.tsx)
+
+## [drawer-discard-warning](./drawer-discard-warning/README.md)
+
+- [`drawer-discard-warning.spec.tsx`](./drawer-discard-warning/drawer-discard-warning.spec.tsx)
+
+## [drawer-typed-confirm](./drawer-typed-confirm/README.md)
+
+- [`drawer-typed-confirm.spec.tsx`](./drawer-typed-confirm/drawer-typed-confirm.spec.tsx)
 
 ## [Git Exec Wrapper](./exec/README.md)
 

@@ -1,8 +1,10 @@
 import { useEffect, useReducer, useRef } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
+import { canDiscardHunk } from '../git/can-discard-hunk';
 import { canStageHunk } from '../git/can-stage-hunk';
 import { canUnstageHunk } from '../git/can-unstage-hunk';
 import type { DiffMode, DiffResult } from '../git/diff-fetcher';
+import { discardHunk } from '../git/discard-hunk';
 import { extractHunkPatchFromUnifiedDiff } from '../git/hunk-patch';
 import { joinRepoPath } from '../git/path-utils';
 import { stageHunk } from '../git/stage-hunk';
@@ -51,12 +53,12 @@ function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string }
 function UnifiedDiffView({
   diff,
   onJumpLine,
-  hunkAction,
+  hunkActions,
   onHunkAction,
 }: {
   readonly diff: string;
   readonly onJumpLine?: (line: number) => void;
-  readonly hunkAction?: DrawerAction | null;
+  readonly hunkActions?: readonly DrawerAction[];
   readonly onHunkAction?: (hunkLineIndex: number, action: DrawerAction) => void;
 }) {
   if (!diff.trim()) {
@@ -64,6 +66,7 @@ function UnifiedDiffView({
   }
 
   const lines = diff.split('\n');
+  const actions = hunkActions ?? [];
   // 解析当前文件新版行号（用于 jump-back banner）：从 @@ -a,b +c,d @@ 的 c 起算
   let currentNewLine = 0;
   const rows = lines.map((line, i) => {
@@ -101,16 +104,33 @@ function UnifiedDiffView({
       >
         <span className="cgv-line-num">{lineLabel ?? ''}</span>
         <span className="cgv-line-text">{line}</span>
-        {line.startsWith('@@') && hunkAction && onHunkAction ? (
-          <button
-            className="cgv-hunk-stage-btn"
-            type="button"
-            onClick={() => onHunkAction(i, hunkAction)}
-            aria-label={`${hunkAction === 'stage' ? 'Stage' : 'Unstage'} hunk at ${line}`}
-            title={`${hunkAction === 'stage' ? 'Stage' : 'Unstage'} this hunk`}
-          >
-            {hunkAction === 'stage' ? 'Stage' : 'Unstage'}
-          </button>
+        {line.startsWith('@@') && actions.length > 0 && onHunkAction ? (
+          <div className="cgv-hunk-actions">
+            {actions.map((action) => {
+              const label =
+                action === 'stage' ? 'Stage' : action === 'unstage' ? 'Unstage' : 'Discard';
+              const className =
+                action === 'discard'
+                  ? 'cgv-hunk-stage-btn cgv-discard-btn'
+                  : 'cgv-hunk-stage-btn';
+              return (
+                <button
+                  key={action}
+                  className={className}
+                  type="button"
+                  onClick={() => onHunkAction(i, action)}
+                  aria-label={`${label} hunk at ${line}`}
+                  title={
+                    action === 'discard'
+                      ? 'Discard is destructive. Use git stash first if uncertain.'
+                      : `${label} this hunk`
+                  }
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
         ) : null}
       </div>
     );
@@ -265,11 +285,26 @@ export function DiffView({
     const result =
       drawer.action === 'stage'
         ? await stageHunk(app, repoRoot, drawer.patch)
-        : await unstageHunk(app, repoRoot, drawer.patch);
+        : drawer.action === 'unstage'
+          ? await unstageHunk(app, repoRoot, drawer.patch)
+          : await discardHunk(app, repoRoot, drawer.patch);
     if (!mountedRef.current) return;
 
     if (result.ok) {
       dispatchDrawer({ type: 'succeed' });
+      // v0.3.2 hot-fix: when the action removes the last file from the
+      // current section, store.refresh sets selected=null → DiffView
+      // unmounts → PreviewDrawer (rendered inside DiffView) disappears
+      // before the user can see the 'success' state. Surface a toast so
+      // the destructive action always has visible confirmation.
+      // (Stage/unstage also benefit, less critical since they don't
+      // destroy work.)
+      if (drawer.action === 'discard' && typeof app?.notifications?.show === 'function') {
+        app.notifications.show({
+          kind: 'info',
+          message: `Hunk discarded from ${drawer.filePath}`,
+        });
+      }
       await store.getState().refresh();
       if (!mountedRef.current) return;
       closeTimerRef.current = window.setTimeout(() => {
@@ -296,18 +331,18 @@ export function DiffView({
   const section = mode === 'staged' ? 'staged' : 'changed';
   const canStage = canStageHunk(change, diff, section);
   const canUnstage = canUnstageHunk(change, diff, section);
-  const hunkAction: DrawerAction | null = canStage
-    ? 'stage'
-    : canUnstage
-      ? 'unstage'
-      : null;
+  const canDiscard = canDiscardHunk(change, diff, section);
+  const hunkActions: DrawerAction[] = [];
+  if (canStage) hunkActions.push('stage');
+  if (canUnstage) hunkActions.push('unstage');
+  if (canDiscard) hunkActions.push('discard');
 
   return (
     <main className="cgv-diff">
       <UnifiedDiffView
         diff={diff.unifiedDiff}
         onJumpLine={onJumpLine}
-        hunkAction={hunkAction}
+        hunkActions={hunkActions}
         onHunkAction={handleHunkAction}
       />
       <PreviewDrawer
