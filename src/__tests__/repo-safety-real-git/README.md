@@ -188,7 +188,7 @@ File names that look like revision syntax:
   `a@{1}`, `a^{tree}`, `a~1`, `a^`, `:(top)x`, `:x`, `-x`, `-n`, `--help`,
   `ab:c`, `@{u}`, `a b`, `d/e..b`, `中文 文件.txt`, `d/名字 带 空格.md` → the
   original pane is the HEAD blob of exactly that path. (`a:b` looks like a
-  drive-relative path and is an inoperable row instead: R59.)
+  drive-relative path and is an inoperable row instead: R60.)
   `git show HEAD:a..b` (the earlier command) prints branch `b`'s commit log.
 - R51: a path that is a directory in HEAD or absent from it → empty original
   (`cat-file blob` fails; no tree listing).
@@ -246,3 +246,20 @@ Extensions (`repo-safety` K12–K13):
   trusted, status / stage / commit work; `extensions.futureThing` in a
   version-0 repository (git ignores it) → `unknown-config`; the same name and
   a new `feature.*` preset in global config → trusted.
+
+Fixed arguments on an older git (the system git 2.50.1 knows neither `hook.*`
+nor the per-event switch; also run with 2.56.1):
+
+- R59: safety probes (including `git help --config`), refresh (status,
+  numstat, hash, diff, HEAD message), stage / unstage / discard at file and
+  hunk level, commit and amend through a recording `shell.exec`: every git
+  call exits 0 with an **empty stderr** — the 28 `-c hook.<event>.enabled=false`
+  switches and every other pin are accepted silently — and each parsed result
+  (status codes, diff shape, HEAD message / subject / sha, index and
+  working-tree state) is right. Every non-commit call carries all 28 switches,
+  commit carries none. The `restore -h` capability probe exits 129 on git
+  before 2.5x and 0 after; either way `restore --staged` is what runs (before
+  the fix only 0 counted, so 2.50.1 always took the `reset HEAD --` fallback).
+- R59b: `-c hook.<event>.enabled=false` for a real and for a made-up event
+  name → `git status` exits 0 with empty output on a git that knows the key
+  and on one that does not.

@@ -5,6 +5,8 @@ import type { FileOpResult } from './stage-file';
 
 let restoreSupported: boolean | null = null;
 
+const USAGE_EXIT_CODE = 129;
+
 async function supportsRestore(
   app: Pick<CoPluginApp, 'shell'>,
   repoRoot: string,
@@ -14,7 +16,9 @@ async function supportsRestore(
   const result = await gitExec(app, repoRoot, ['restore', '-h'], {
     timeoutMs: 5_000,
   });
-  restoreSupported = result.exitCode === 0;
+  // `git <cmd> -h` 打印用法:git 2.5x 之前以 129 退出(实测 2.50.1),较新的版本以 0 退出(实测 2.56.1);
+  // 命令不存在是 1(`'restore' is not a git command`)。只认 0 会让旧版本永远走 reset 兜底。
+  restoreSupported = result.exitCode === 0 || result.exitCode === USAGE_EXIT_CODE;
   return restoreSupported;
 }
 

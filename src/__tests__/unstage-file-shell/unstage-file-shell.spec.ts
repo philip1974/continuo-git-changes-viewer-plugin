@@ -39,6 +39,34 @@ describe('unstageFile shell wrapper', () => {
     });
   });
 
+  it('T5b `git restore -h` exits 129 (usage) on git before 2.5x and 0 on newer ones: both mean the command exists → restore --staged is used', async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce(result({ exitCode: 129, stdout: 'usage: git restore [<options>] [--source=<branch>] <file>...\n' }))
+      .mockResolvedValue(result({ exitCode: 0 }));
+    const app = { shell: { exec } } as unknown as CoPluginApp;
+
+    await expect(unstageFile(app, '/repo', 'a.ts')).resolves.toEqual({ ok: true });
+    await unstageFile(app, '/repo', 'b.ts');
+
+    expect(exec.mock.calls.map((call) => (call[1] as string[]).slice((call[1] as string[]).indexOf('restore')))).toEqual([
+      ['restore', '-h'],
+      ['restore', '--staged', '--', 'a.ts'],
+      ['restore', '--staged', '--', 'b.ts'],
+    ]);
+  });
+
+  it.each([
+    ['a timeout', result({ exitCode: null, timedOut: true })],
+    ['a signal', result({ exitCode: null, signal: 'SIGKILL' })],
+    ['a refusal by the repository guard (128)', result({ exitCode: 128, stderr: 'Git commands are disabled for this repository: x' })],
+  ])('T6b the probe ending in %s is not taken as support: the reset fallback is used', async (_label, probe) => {
+    const exec = vi.fn().mockResolvedValueOnce(probe).mockResolvedValue(result({ exitCode: 0 }));
+    const app = { shell: { exec } } as unknown as CoPluginApp;
+    await unstageFile(app, '/repo', 'a.ts');
+    expect(exec).toHaveBeenLastCalledWith('git', buildGitArgs(['reset', 'HEAD', '--', 'a.ts']), expect.anything());
+  });
+
   it('T6 uses git reset HEAD when restore support is unavailable', async () => {
     const exec = vi
       .fn()

@@ -10,15 +10,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchDiff, MAX_FILE_BYTES } from '../../git/diff-fetcher';
 import { discardFile } from '../../git/discard-file';
 import { discardHunk } from '../../git/discard-hunk';
-import { DISABLED_HOOKS_PATH, gitExec } from '../../git/exec';
+import { DISABLED_HOOKS_PATH, gitExec, KNOWN_HOOK_EVENTS } from '../../git/exec';
 import { detectRepoHooks } from '../../git/repo-hooks';
 import { stageHunk } from '../../git/stage-hunk';
 import { extractHunkPatchFromUnifiedDiff } from '../../git/hunk-patch';
 import { PINNED_OUTPUT_CONFIG } from '../../git/exec';
 import { _resetRestoreCache, unstageFile } from '../../git/unstage-file';
 import { unstageHunk } from '../../git/unstage-hunk';
-import { gitCommit } from '../../git/git-commit';
-import { hasHeadCommit, readHeadMessage } from '../../git/head-meta';
+import { gitCommit, readLastCommitSubject } from '../../git/git-commit';
+import { hasHeadCommit, readHeadMessage, readHeadSha } from '../../git/head-meta';
 import { installRepoSafetyGuard, isKnownSafeConfigKey, isUnsafeConfigEntry, probeRepoSafety } from '../../git/repo-safety';
 import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
@@ -1432,7 +1432,7 @@ describe('config enumeration: keys neutralized by fixed arguments / environment,
     git(repo, 'commit', '-qm', 'héllo wörld');
     git(repo, 'notes', 'add', '-m', 'NOTE-TEXT');
     writeFileSync(join(repo, 'f.txt'), readFileSync(join(repo, 'f.txt'), 'utf8').replace('line 5', 'line five'));
-    writeFileSync(join(repo, 'new file.txt'), 'n\n');
+    writeFileSync(join(repo, 'new.txt'), 'n\n');
 
     const read = async (app: CoPluginApp) => {
       const changes = await scanStatus(app, repo);
@@ -1444,7 +1444,7 @@ describe('config enumeration: keys neutralized by fixed arguments / environment,
       };
     };
     const baseline = await read(realApp());
-    expect(baseline.changes).toEqual([' M f.txt', '?? new file.txt']);
+    expect(baseline.changes).toEqual([' M f.txt', '?? new.txt']);
     expect(baseline.diff).toBe(
       'diff --git a/f.txt b/f.txt\nindex\n--- a/f.txt\n+++ b/f.txt\n@@ -2,7 +2,7 @@ line 1\n line 2\n line 3\n line 4\n-line 5\n+line five\n line 6\n line 7\n line 8\n',
     );
@@ -1816,6 +1816,115 @@ describe('extensions: only reviewed names, and extensions.refStorage only as a f
   });
 });
 
+describe('the fixed arguments are harmless on a git that predates some of them (real git)', () => {
+  interface Call { readonly sub: string; readonly args: readonly string[]; readonly stderr: string; readonly exitCode: number | null }
+  function recordingApp(): { app: CoPluginApp; calls: Call[] } {
+    const inner = realApp();
+    const calls: Call[] = [];
+    const exec = async (cmd: string, args: readonly string[], opts?: PluginShellExecOptions) => {
+      const r = await inner.shell.exec(cmd, args, opts);
+      if (cmd === 'git') {
+        // 子命令 = 全局选项(`--x`、`-c k=v`)之后的第一个词
+        let i = 0;
+        while (i < args.length && args[i]!.startsWith('-')) i += args[i] === '-c' ? 2 : 1;
+        calls.push({ sub: args[i] ?? '', args, stderr: r.stderr, exitCode: r.exitCode });
+      }
+      return r;
+    };
+    return { app: { ...inner, shell: { exec } } as unknown as CoPluginApp, calls };
+  }
+  const NOISE = /^(warning|error|hint|fatal|usage)\b/im;
+  const porcelain = () => git(repo, 'status', '--porcelain=v1');
+  const hunkPatch = async (app: CoPluginApp, path: string, mode: 'changed' | 'staged') => {
+    const d = await fetchDiff(app, repo, { path, status: 'M', statusX: mode === 'staged' ? 'M' : ' ', statusY: mode === 'staged' ? ' ' : 'M', kind: 'text' }, mode);
+    if (!d.ok) throw new Error(`diff failed: ${d.message}`);
+    const header = d.unifiedDiff.split('\n').findIndex((l) => l.startsWith('@@'));
+    return extractHunkPatchFromUnifiedDiff(path, d.unifiedDiff, header)!;
+  };
+
+  it('R59 safety probes, refresh, stage / unstage / discard (file and hunk), commit and amend: every git call exits 0 with an empty stderr (no warning / error / hint about the 28 `-c hook.<event>.enabled=false` or any other fixed argument), and each parsed result is right', async () => {
+    const { app, calls } = recordingApp();
+    const { guard } = installRepoSafetyGuard(app);
+    // 一个未审计、git 也不认识的私有键:让受限检测把 `git help --config` 也跑一遍
+    git(repo, 'config', 'branch.main.gh-merge-base', 'main');
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    appendFileSync(join(repo, 'g.txt'), 'more\n');
+    writeFileSync(join(repo, 'new.txt'), 'n\n');
+
+    expect(await guard.check(repo, { fresh: true })).toEqual({ kind: 'trusted' });
+    expect(await detectRepoHooks(app, repo)).toMatchObject({ kind: 'none' });
+
+    // 刷新:status / numstat / hash / diff / HEAD 信息
+    expect((await scanStatus(app, repo)).map((c) => [c.statusX + c.statusY, c.path, c.kind])).toEqual([
+      [' M', 'f.txt', 'text'], [' M', 'g.txt', 'text'], ['??', 'new.txt', 'text'],
+    ]);
+    expect(await readStatusHash(app, repo)).toMatch(/\S/);
+    expect(await readHeadMessage(app, repo)).toBe('init');
+    expect(await hasHeadCommit(app, repo)).toBe(true);
+    const diff = await fetchDiff(app, repo, { path: 'f.txt', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' });
+    expect(diff).toMatchObject({ ok: true, original: 'one\n', modified: 'one\ntwo\n' });
+    expect(diff.ok && diff.unifiedDiff.split('\n').slice(2)).toEqual(['--- a/f.txt', '+++ b/f.txt', '@@ -1 +1,2 @@', ' one', '+two', '']);
+
+    // 文件级:stage / unstage(restore --staged 与 reset 兜底两条路径)/ discard
+    expect(await stageFile(app, repo, 'f.txt')).toEqual({ ok: true });
+    expect(await stageFile(app, repo, 'new.txt')).toEqual({ ok: true });
+    expect(porcelain()).toBe('M  f.txt\n M g.txt\nA  new.txt\n');
+    _resetRestoreCache();
+    expect(await unstageFile(app, repo, 'f.txt')).toEqual({ ok: true });
+    // 能力探测 `restore -h`:git < 2.5x 以 129(用法说明)退出,新版本以 0 退出——两种都表示支持,真正执行的是 restore
+    expect(calls.filter((c) => c.sub === 'restore').map((c) => c.args.slice(c.args.indexOf('restore')))).toEqual([['restore', '-h'], ['restore', '--staged', '--', 'f.txt']]);
+    expect((await gitExec(app, repo, ['reset', 'HEAD', '--', 'new.txt'])).exitCode).toBe(0);
+    expect(porcelain()).toBe(' M f.txt\n M g.txt\n?? new.txt\n');
+    expect(await discardFile(app, repo, 'g.txt')).toEqual({ ok: true });
+    expect(readFileSync(join(repo, 'g.txt'), 'utf8')).toBe('gee\n');
+
+    // hunk 级:stage → unstage → discard
+    expect(await stageHunk(app, repo, await hunkPatch(app, 'f.txt', 'changed'))).toMatchObject({ ok: true });
+    expect(porcelain()).toBe('M  f.txt\n?? new.txt\n');
+    expect(await unstageHunk(app, repo, await hunkPatch(app, 'f.txt', 'staged'))).toMatchObject({ ok: true });
+    expect(porcelain()).toBe(' M f.txt\n?? new.txt\n');
+    expect(await discardHunk(app, repo, await hunkPatch(app, 'f.txt', 'changed'))).toMatchObject({ ok: true });
+    expect(readFileSync(join(repo, 'f.txt'), 'utf8')).toBe('one\n');
+
+    // commit / amend
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'config', 'user.email', 't@t');
+    expect(await stageFile(app, repo, 'new.txt')).toEqual({ ok: true });
+    expect(await gitCommit(app, repo, 'second\n\nbody line')).toEqual({ ok: true });
+    expect(await readLastCommitSubject(app, repo)).toBe('second');
+    expect(await readHeadMessage(app, repo)).toBe('second\n\nbody line');
+    const before = await readHeadSha(app, repo);
+    expect(await gitCommit(app, repo, 'second, amended', { amend: true })).toEqual({ ok: true });
+    expect(await readHeadMessage(app, repo)).toBe('second, amended');
+    expect(await readHeadSha(app, repo)).not.toBe(before);
+    expect(git(repo, 'rev-list', '--count', 'HEAD').trim()).toBe('2');
+    expect(porcelain()).toBe('');
+
+    // 每个子命令都真的跑过,而且带着固定参数
+    expect([...new Set(calls.map((c) => c.sub))].sort()).toEqual(
+      ['add', 'apply', 'cat-file', 'checkout', 'commit', 'config', 'diff', 'help', 'log', 'reset', 'restore', 'rev-parse', 'status'],
+    );
+    const hookSwitches = (c: Call) => c.args.filter((a) => /^hook\.[a-z0-9-]+\.enabled=false$/.test(a)).length;
+    expect(KNOWN_HOOK_EVENTS).toHaveLength(28);
+    for (const c of calls) {
+      expect({ sub: c.sub, switches: hookSwitches(c) }).toEqual({ sub: c.sub, switches: c.sub === 'commit' ? 0 : 28 });
+      const exitCode = c.args[c.args.length - 1] === '-h' && c.exitCode === 129 ? 0 : c.exitCode;
+      expect({ sub: c.sub, args: c.args.slice(-4), exitCode, stderr: c.stderr }).toEqual({ sub: c.sub, args: c.args.slice(-4), exitCode: 0, stderr: '' });
+      expect(NOISE.test(c.stderr)).toBe(false);
+    }
+  });
+
+  it('R59b the event switch is a key this git may not know: it is accepted in command scope without complaint either way, and an unknown hook event name is equally silent', async () => {
+    const known = gitDocumentsKey('hook.<event>.enabled');
+    const r = await realApp().shell.exec(
+      'git',
+      ['-c', 'hook.pre-commit.enabled=false', '-c', 'hook.post-index-change.enabled=false', '-c', 'hook.no-such-event.enabled=false', 'status', '--porcelain=v1'],
+      { cwd: repo, env: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', LC_ALL: 'C' } },
+    );
+    expect({ known, exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr }).toEqual({ known, exitCode: 0, stdout: '', stderr: '' });
+  });
+});
+
 describe('HEAD content of a file whose name looks like revision syntax (real git)', () => {
   // 冒号后的部分应整体是路径;`git show` 却先把整个参数按 `..` / `...` 拆成修订区间
   const NAMES = ['a..b', 'a...b', 'a@{1}', 'a^{tree}', 'a~1', 'a^', ':(top)x', '-x', '-n', '--help', 'ab:c', ':x', '@{u}', 'a b', 'd/e..b', '中文 文件.txt', 'd/名字 带 空格.md'];
@@ -1840,7 +1949,7 @@ describe('HEAD content of a file whose name looks like revision syntax (real git
 
     const changes = await scanStatus(app, repo);
     expect(changes.map((c) => c.path).sort()).toEqual([...NAMES].sort());
-    // (`a:b` 这类"盘符形"名字不在此列:它不满足 isSafeRepoRelativePath,列表里是不可操作行,插件不为它运行 git——见 R59。)
+    // (`a:b` 这类"盘符形"名字不在此列:它不满足 isSafeRepoRelativePath,列表里是不可操作行,插件不为它运行 git——见 R60。)
     for (const change of changes) {
       const d = await fetchDiff(app, repo, change);
       expect({ path: change.path, original: d.ok && d.original, modified: d.ok && d.modified }).toEqual({
