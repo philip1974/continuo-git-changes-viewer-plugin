@@ -71,6 +71,9 @@ refresh is in flight (that refresh brings its own fingerprint) and while
 - T23: a tick compares with the stored fingerprint, not with what the previous
   tick read — a change whose refresh did not land is still a change.
 - T24: a stored fingerprint of null never compares equal.
+- T28: the fingerprint cannot be read on a tick: one full refresh, whose
+  `load` puts the reason into `statusError`; later ticks follow the same
+  back-off as T14–T16 instead of logging an error on every tick.
 - T25: `visibilitychange` to visible compares at once; nothing happens while
   the window or the panel is hidden. (The event is unreliable in Electron on
   macOS; the next tick runs the same comparison.)

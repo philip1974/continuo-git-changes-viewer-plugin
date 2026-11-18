@@ -6,6 +6,7 @@ import {
   CommitEditor,
   DIFF_REFRESHING_MESSAGE,
   REPO_CHANGED_MESSAGE,
+  repoStateUnconfirmedMessage,
   VIEW_REFRESHED_MESSAGE,
   VIEW_REFRESHING_MESSAGE,
 } from '../../panel/CommitEditor';
@@ -277,17 +278,26 @@ describe('CommitEditor', () => {
       expect(readFingerprint).toHaveBeenCalledTimes(2);
     });
 
-    it('T31 fail-closed: a fingerprint that cannot be read now, or a list that came without one (null in the store), does not commit either', async () => {
-      const failing = changedSetup({ readFingerprint: async () => { throw new Error('git status failed'); } });
+    it('T31 fail-closed: a fingerprint that cannot be read now, or a list that came without one (null in the store), does not commit either — and the message says the state could not be confirmed (with the reason), not that the repository changed', async () => {
+      const failing = changedSetup({ readFingerprint: async () => { throw new Error('git status failed (timed out)'); } });
       fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
-      await vi.waitFor(() => expect(failing.notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: REPO_CHANGED_MESSAGE }));
+      await vi.waitFor(() => expect(failing.notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: repoStateUnconfirmedMessage('git status failed (timed out)') }));
+      expect(repoStateUnconfirmedMessage('git status failed (timed out)')).toBe(
+        'Could not confirm the current state of the repository (git status failed (timed out)). Nothing was committed — try again once the view has refreshed.',
+      );
+      expect(failing.notifications.show).not.toHaveBeenCalledWith({ kind: 'warning', message: REPO_CHANGED_MESSAGE });
       expect(failing.commit).not.toHaveBeenCalled();
+      // 视图随即刷新:持续读不到时由 refresh 把原因挂到面板上(statusError),而不是每次点击都重复同一句
+      expect(failing.refresh).toHaveBeenCalledTimes(1);
       cleanup();
 
       const unknown = changedSetup({ readFingerprint: async () => 'fp', storedFingerprint: null });
       unknown.store.setState({ refresh: vi.fn(async () => {}) });
       fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
-      await vi.waitFor(() => expect(unknown.notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: REPO_CHANGED_MESSAGE }));
+      await vi.waitFor(() => expect(unknown.notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: repoStateUnconfirmedMessage(null) }));
+      expect(repoStateUnconfirmedMessage(null)).toBe(
+        'Could not confirm the current state of the repository. Nothing was committed — try again once the view has refreshed.',
+      );
       expect(unknown.commit).not.toHaveBeenCalled();
     });
 

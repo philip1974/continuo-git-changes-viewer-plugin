@@ -169,7 +169,16 @@ export function GitViewerPanel({
       if (before.statusError !== null || before.isLoading) return;
       const currentRoot = before.repoRoot;
       if (!currentRoot) return;
-      const nextHash = await readStatusHash(app, currentRoot);
+      let nextHash: string;
+      try {
+        nextHash = await readStatusHash(app, currentRoot);
+      } catch {
+        // 指纹读不到(status 失败 / 超时):与"status 不可用"同样对待,不另起一套——完整刷新一次,load 会把
+        // 原因放进 statusError(面板显示、Commit / Amend 禁用);此后的 tick 走上面 statusError 的退避重试。
+        // 此前这里直接抛出:每个 tick 一条 console 警告,面板上什么都看不出来。
+        if (!cancelled) await store.getState().refresh();
+        return;
+      }
       if (cancelled) return;
       const { statusFingerprint, selected: shown, diffCache, diffRefreshingKey } = store.getState();
       if (nextHash === statusFingerprint) {

@@ -123,11 +123,19 @@ export default class GitChangesViewerPlugin extends Plugin {
           return { repoRoot: repo.root ?? null, changes: [] };
         }
 
-        // 指纹在列表**之前**读(见 git-store 的 statusFingerprint):它不比列表新。读不到 → null,
-        // 之后的任何比较都判为"变了"(刷新 / 中止提交)。
-        const statusFingerprint = await readStatusHash(this.app, repo.root).catch(() => null);
+        // 指纹在列表**之前**读(见 git-store 的 statusFingerprint):它不比列表新。
+        // 读不到:与列表读不到同样对待——statusError 带上原因(面板显示它、禁用 Commit / Amend,自动刷新的 tick
+        // 按退避重试)。此前只是静默地记成 null:列表照常显示,而每次点 Commit 都提示"仓库已变化"、永远提交不了。
+        let statusFingerprint: string | null = null;
+        let fingerprintError: string | null = null;
         try {
-          return { repoRoot: repo.root, changes: await scanStatus(this.app, repo.root), statusFingerprint };
+          statusFingerprint = await readStatusHash(this.app, repo.root);
+        } catch (err) {
+          fingerprintError = err instanceof Error ? err.message : String(err);
+        }
+        try {
+          const changes = await scanStatus(this.app, repo.root);
+          return { repoRoot: repo.root, changes, statusFingerprint, ...(fingerprintError !== null ? { statusError: fingerprintError } : {}) };
         } catch (err) {
           if (err instanceof StatusUnavailableError) {
             // status 失败 / 超时 / 被截断:列表不可信。仓库本身没有问题(不受限),但面板要说明原因并禁用

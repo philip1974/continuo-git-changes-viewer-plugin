@@ -159,7 +159,7 @@ export class StatusUnavailableError extends Error {
 
 const MAX_FAILURE_DETAIL = 200;
 
-function failureDetail(result: { exitCode: number | null; stderr: string; timedOut: boolean }): string {
+export function failureDetail(result: { exitCode: number | null; stderr: string; timedOut: boolean }): string {
   if (result.timedOut) return 'timed out';
   const line = result.stderr.split('\n').find((l) => l.trim() !== '')?.trim();
   if (!line) return `exit ${result.exitCode ?? 'unknown'}`;

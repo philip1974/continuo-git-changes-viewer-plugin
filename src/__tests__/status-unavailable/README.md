@@ -57,7 +57,12 @@ Specs:
 - S13: a plugin refresh runs the fingerprint status (porcelain v2) before the
   list status (v1) and stores the fingerprint of the earlier read
   (`git-store` T16).
-- S14: an unreadable fingerprint is stored as null while the list is still
-  shown; with an unusable status the fingerprint read before it is kept.
+- S14: an unreadable fingerprint (status failed / timed out) is an unusable
+  status too: the list is still shown, the fingerprint is null and
+  `statusError` carries the reason, so the panel says so, Commit / Amend are
+  disabled and the tick retries with back-off; it clears on the next good
+  read. (It used to be a silent null: every Commit click then answered "the
+  repository changed".) With an unusable list the fingerprint read before it
+  is kept.
 
 Real-git coverage: `repo-safety-real-git` R63–R63b.

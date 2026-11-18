@@ -28,6 +28,8 @@ const git = (cwd: string, ...args: string[]) =>
 // 可控的时序(不靠真实时间):非 null 时,每次 exec 发起时问它一次;它返回 promise 的那次调用,进程照常跑完,
 // 但结果要等这个 promise 兑现才交还给插件——"这次读取还在 await"的状态可以保持任意久。
 let holdExec: ((args: readonly string[]) => Promise<void> | undefined) | null = null;
+// 非 null 时,它返回结果的那次调用不起进程、直接得到这个结果(模拟宿主报告的超时)。
+let stubExec: ((args: readonly string[]) => PluginShellExecResult | undefined) | null = null;
 const deferred = () => {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => { resolve = r; });
@@ -37,6 +39,8 @@ const deferred = () => {
 // 对应宿主 shell.exec / fs.lstat 的最小实现(见 repo-safety-real-git.spec.ts 的 realApp)
 function realApp(intervalSec: number): CoPluginApp {
   const exec = async (cmd: string, args: readonly string[], opts: PluginShellExecOptions = {}) => {
+    const stubbed = stubExec?.(args);
+    if (stubbed) return stubbed;
     const held = holdExec?.(args);
     const result = await run(cmd, args, opts);
     await held;
@@ -105,6 +109,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   holdExec = null;
+  stubExec = null;
   cleanup();
   rmSync(repo, { recursive: true, force: true });
 });
@@ -114,8 +119,16 @@ function mount(intervalSec: number) {
   const app = realApp(intervalSec);
   const store = createGitStore({
     load: async () => {
-      const statusFingerprint = await readStatusHash(app, repo).catch(() => null);
-      return { repoRoot: repo, changes: await scanStatus(app, repo), statusFingerprint };
+      // 指纹读不到 → statusError(与 main.ts 相同)
+      let statusFingerprint: string | null = null;
+      let fingerprintError: string | null = null;
+      try {
+        statusFingerprint = await readStatusHash(app, repo);
+      } catch (err) {
+        fingerprintError = err instanceof Error ? err.message : String(err);
+      }
+      const changes = await scanStatus(app, repo);
+      return { repoRoot: repo, changes, statusFingerprint, ...(fingerprintError !== null ? { statusError: fingerprintError } : {}) };
     },
     fetchDiff: (root, change, mode) => fetchDiff(app, root, change, mode),
   });
@@ -356,6 +369,74 @@ describe('a commit takes what was on screen at the click, or nothing — a refre
     fireEvent.click(commitButton());
     await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
     expect(git(repo, 'cat-file', 'blob', 'HEAD:f')).toBe('v2 UNREVIEWED\n');
+    await settled(store);
+  });
+});
+
+// F4:指纹读不到(status 超时)不是"仓库变了"。此前指纹读取 5 s 超时、失败后静默记成 null:列表照常显示,
+// 每次点 Commit 都提示"仓库已变化"并刷新,再读还是超时——永远提交不了,文案还是错的。
+describe('a fingerprint that cannot be read is reported as such, and recovers by itself (real panel, real git)', () => {
+  const timedOut: PluginShellExecResult = { stdout: '', stderr: '', exitCode: null, signal: 'SIGTERM', timedOut: true, truncated: false };
+  const commitButton = () => screen.getByRole('button', { name: 'Commit staged changes' }) as HTMLButtonElement;
+
+  it('P7 the fingerprint status times out while the list status still answers: the panel shows the list, says the status could not be read (with the reason) and disables Commit; when status answers again the next tick clears it and the commit goes through', async () => {
+    writeFileSync(join(repo, 'f'), 'v1 reviewed\n');
+    git(repo, 'add', 'f');
+    stubExec = (args) => (args.includes('--porcelain=v2') ? timedOut : undefined);
+    const { store, timer } = mount(5);
+    await waitFor(() => expect(timer.starts).toBe(1));
+    await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, statusError: 'git status failed (timed out)', statusFingerprint: null }));
+    expect([...document.querySelectorAll('.cgv-path')].map((el) => el.textContent)).toEqual(['f']);
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Could not read the repository status: git status failed (timed out). Commit and Amend are disabled until a refresh succeeds.',
+    );
+    store.getState().setCommitMessage('msg');
+    expect(commitButton().disabled).toBe(true);
+
+    // 仍然超时:tick 重试,状态不变
+    await timer.opts!.onTick();
+    expect(store.getState().statusError).toBe('git status failed (timed out)');
+
+    // status 恢复:下一个该重试的 tick 清除错误(退避:上一次失败后隔一个 tick)
+    stubExec = null;
+    await timer.opts!.onTick();
+    await timer.opts!.onTick();
+    await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, statusError: null }));
+    expect(store.getState().statusFingerprint).not.toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    await waitFor(() => expect(store.getState().diffRefreshingKey).toBeNull());
+    await waitFor(() => expect(commitButton().disabled).toBe(false));
+    fireEvent.click(commitButton());
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
+    await settled(store);
+  });
+
+  it('P8 the fingerprint cannot be read at the moment of the click (the view itself is fine): nothing is committed and the panel says the state could not be confirmed — not that the repository changed', async () => {
+    writeFileSync(join(repo, 'f'), 'v1 reviewed\n');
+    git(repo, 'add', 'f');
+    const { store } = mount(0);
+    await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, statusError: null }));
+    await waitFor(() => expect(store.getState().diffCache.size).toBe(1));
+    store.getState().setCommitMessage('msg');
+    await waitFor(() => expect(commitButton().disabled).toBe(false));
+
+    // 只有这一次读取超时;随后的 refresh 正常
+    let failed = 0;
+    stubExec = (args) => (args.includes('--porcelain=v2') && failed++ === 0 ? timedOut : undefined);
+    fireEvent.click(commitButton());
+    await waitFor(() => expect(store.getState().banner).toEqual({
+      kind: 'warn',
+      message: 'Could not confirm the current state of the repository (git status failed (timed out)). Nothing was committed — try again once the view has refreshed.',
+      dismissable: true,
+    }));
+    expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('init');
+    expect(store.getState()).toMatchObject({ statusError: null, commitMessage: 'msg' });
+
+    await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
+    await waitFor(() => expect(commitButton().textContent).toBe('Commit'));
+    fireEvent.click(commitButton());
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
     await settled(store);
   });
 });

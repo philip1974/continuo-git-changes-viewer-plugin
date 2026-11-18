@@ -418,6 +418,13 @@ driven by the test; run with git 2.50.1 and 2.56.1):
 - P6: a refresh is already in flight at the click (its list read is held):
   nothing is committed and the panel asks to wait (`commit-editor-component`
   T38).
+- P7: the fingerprint `git status` times out (stubbed host timeout) while the
+  list `git status` answers: the list is shown, the alert gives the reason and
+  Commit is disabled; once status answers again a retrying tick clears it and
+  the commit goes through (`status-unavailable` S14, `status-hash` T6d).
+- P8: only the read at the click times out: nothing is committed and the panel
+  says the state could not be confirmed, not that the repository changed; the
+  next click commits (`commit-editor-component` T31).
 
 Bytes that are not valid UTF-8 (`hunk-patch-builder` T8, `path-utils` T8,
 `status-scanner` T10; run with git 2.50.1 and 2.56.1):

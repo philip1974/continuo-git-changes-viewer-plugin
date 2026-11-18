@@ -91,7 +91,11 @@ the state the panel last read (the same fingerprint the auto-refresh uses:
 `git status --porcelain=v2`, i.e. what is staged). If something changed in
 between — for example you staged another edit in a terminal — nothing is
 committed: the panel refreshes and asks you to review and commit again. The
-same check runs before an amend. A very short window remains between that
+same check runs before an amend. If the state cannot be read at all (`git
+status` failed or timed out — it has the same time limit as the list), nothing
+is committed either and the panel says that the state could not be confirmed
+and why; while it stays unreadable the panel shows the reason and Commit /
+Amend are disabled until a refresh succeeds. A very short window remains between that
 check and git reading the index for the commit (two process starts); a change
 landing exactly there is committed without having been shown.
 

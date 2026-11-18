@@ -16,6 +16,12 @@ its output); the shown working-tree diff is checked separately — see
 
 - T6: readStatusHash returns raw porcelain v2 stdout through the read-only git wrapper.
 - T6b: a non-zero git status result throws.
+- T6d: the fingerprint read has the same time limit as the list read (no
+  limit of its own: the host default). It used to give up after 5 s: in a
+  repository where `git status` takes longer the list loaded, the fingerprint
+  never did, and every Commit click answered "the repository changed". A
+  timeout or a cut output throws with its reason; it is never returned as a
+  fingerprint.
 - T6c: the command asks for the branch header and skips the ahead / behind
   count; the output is returned untouched, header records included.
 

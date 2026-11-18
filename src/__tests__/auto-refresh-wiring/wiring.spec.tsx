@@ -270,6 +270,34 @@ describe('GitViewerPanel auto-refresh wiring', () => {
       expect(refresh).toHaveBeenCalledTimes(1);
     });
 
+    it('T28 the fingerprint cannot be read on a tick (status failed / timed out): that is handled like any unusable status — one full refresh, whose load reports the reason into statusError; from then on the retries follow the same back-off as T14–T16 instead of an error on every tick', async () => {
+      const { store, timer, loaded } = await renderHarness();
+      await waitFor(() => expect(timer.start).toHaveBeenCalled());
+      const { onTick } = timer.start.mock.calls[0]![0];
+      const before = loaded.count;
+      readStatusHashMock.mockRejectedValue(new Error('git status failed (timed out)'));
+      // load 与真实的 main.ts 一致:指纹读不到 → statusError
+      const realRefresh = store.getState().refresh;
+      const refresh = vi.fn(async () => {
+        await realRefresh();
+        store.setState({ statusError: 'git status failed (timed out)', statusFingerprint: null });
+      });
+      store.setState({ refresh });
+
+      await expect(onTick()).resolves.toBeUndefined();
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(loaded.count).toBe(before + 1);
+      expect(store.getState().statusError).toBe('git status failed (timed out)');
+
+      // 之后走 statusError 的退避:第 1 个 tick 立即重试,失败后隔一个 tick;这期间不再单独读指纹
+      readStatusHashMock.mockClear();
+      await onTick();
+      await onTick();
+      await onTick();
+      expect(refresh).toHaveBeenCalledTimes(3);
+      expect(readStatusHashMock).not.toHaveBeenCalled();
+    });
+
     it('T25 the window becoming visible again (visibilitychange) compares at once; while the window or the panel is hidden the event does nothing', async () => {
       const { timer, store, panelApi } = await renderHarness();
       await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(1));

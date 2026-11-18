@@ -183,15 +183,24 @@ describe('plugin refresh: the fingerprint is read before the list it is stored w
     expect(plugin.store.getState().statusFingerprint).toBe('M  a.txt\0#1');
   });
 
-  it('S14 a fingerprint that cannot be read is stored as null (the list is still shown); with an unusable status the fingerprint read before it is kept', async () => {
+  it('S14 a fingerprint that cannot be read is an unusable status too: the list is still shown, but statusError carries the reason (the panel says so, Commit / Amend are disabled, the tick retries) — it used to be a silent null, and every Commit click then answered "the repository changed"; with an unusable list the fingerprint read before it is kept', async () => {
     const { plugin, app } = await loadPlugin(() => ({ stdout: 'M  a.txt\0' }));
     const exec = vi.mocked(app.shell.exec);
     const base = exec.getMockImplementation()!;
     exec.mockImplementation(async (cmd, args, opts) =>
       isV2(args as readonly string[]) ? res({ exitCode: 128, stderr: 'fatal' }) : base(cmd, args, opts));
     await plugin.store.getState().refresh();
-    expect(plugin.store.getState()).toMatchObject({ statusFingerprint: null, statusError: null });
+    expect(plugin.store.getState()).toMatchObject({ statusFingerprint: null, statusError: 'git status failed (fatal)' });
     expect(plugin.store.getState().changes).toHaveLength(1);
+    // 超时同样带原因
+    exec.mockImplementation(async (cmd, args, opts) =>
+      isV2(args as readonly string[]) ? res({ exitCode: null, timedOut: true }) : base(cmd, args, opts));
+    await plugin.store.getState().refresh();
+    expect(plugin.store.getState()).toMatchObject({ statusFingerprint: null, statusError: 'git status failed (timed out)' });
+    // 恢复后错误清除
+    exec.mockImplementation(base);
+    await plugin.store.getState().refresh();
+    expect(plugin.store.getState()).toMatchObject({ statusFingerprint: 'M  a.txt\0', statusError: null });
 
     exec.mockImplementation(async (cmd, args, opts) =>
       isV1(args as readonly string[]) ? res({ exitCode: 128, stderr: 'fatal: index file corrupt' }) : isV2(args as readonly string[]) ? res({ stdout: 'fp' }) : base(cmd, args, opts));

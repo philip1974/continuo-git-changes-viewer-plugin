@@ -1,5 +1,6 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
+import { failureDetail } from './status-scanner';
 
 /**
  * 仓库状态的指纹:自动刷新的 tick 用它判断"有没有变",没变就不刷新。
@@ -23,6 +24,13 @@ import { gitExec } from './exec';
  *
  * 不覆盖的:工作树文件的内容(status 不为未暂存的文件输出 id)——同一个未暂存文件再次被编辑时 XY 与 id
  * 都不变。面板为此另外比较当前显示的工作树 diff 的 worktreeStamp(见 diff-fetcher 的 isWorktreeDiffStale)。
+ *
+ * 时间上限与读列表的那条 status(status-scanner 的 scanStatus)相同:都不另设,用宿主的默认值。此前这里是 5 s——
+ * status 要跑更久的仓库(很大的工作树、慢盘)里列表读得出来而指纹永远读不出来:面板照常显示,每次点 Commit
+ * 都被拦下并提示"仓库已变化",永远提交不了。
+ * 读不到(非零退出 / 超时 / 输出被截断)一律抛错并带原因,绝不返回半截输出冒充指纹(截断点之后的变化比较不出来)。
+ * 调用方:main.ts 的 load 把它并入 statusError(面板显示原因、禁用 Commit / Amend、tick 按退避重试);
+ * 提交前的确认(CommitEditor)单独说明"无法确认仓库状态"。
  */
 export async function readStatusHash(
   app: Pick<CoPluginApp, 'shell'>,
@@ -32,10 +40,10 @@ export async function readStatusHash(
     app,
     repoRoot,
     ['status', '--porcelain=v2', '--branch', '--no-ahead-behind', '-z'],
-    { timeoutMs: 5000 },
   );
-  if (result.exitCode !== 0) {
-    throw new Error(`git status failed: ${result.stderr}`);
+  if (result.exitCode !== 0 || result.timedOut) {
+    throw new Error(`git status failed (${failureDetail(result)})`);
   }
+  if (result.truncated) throw new Error('git status output was too large');
   return result.stdout;
 }

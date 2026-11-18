@@ -23,6 +23,8 @@ Residual: the window between reading the fingerprint and git reading the index
 - T30: the next click (fingerprint now equal) commits; the fingerprint is read
   on every attempt.
 - T31: fail-closed when the fingerprint cannot be read, or the store has none.
+  The message says the state of the repository could not be confirmed (with
+  the reason), not that it changed; the view is refreshed once.
 - T32: Amend goes through the same check.
 - T33: with repository hooks the check runs after the user confirmed them —
   last thing before `git commit`.

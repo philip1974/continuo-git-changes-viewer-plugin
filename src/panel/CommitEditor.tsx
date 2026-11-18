@@ -69,6 +69,11 @@ export const AMEND_HEAD_CHANGED_MESSAGE =
 export const AMEND_NON_UTF8_MESSAGE =
   'The last commit message contains bytes that are not valid UTF-8. They are shown as \uFFFD, and amending will save the message as shown here.';
 
+// 提交前读不到当前指纹(status 失败 / 超时),或面板这份列表本来就没有指纹:无从比较。这不是"仓库变了"。
+export const repoStateUnconfirmedMessage = (reason: string | null): string =>
+  `Could not confirm the current state of the repository${reason ? ` (${reason})` : ''}. ` +
+  'Nothing was committed — try again once the view has refreshed.';
+
 export const DIFF_REFRESHING_MESSAGE =
   'The staged diff on screen is still being refreshed. Nothing was committed — wait for it to finish, review it and commit again.';
 
@@ -273,19 +278,34 @@ export function CommitEditor({
       // 与仓库都是新的,拿它们互相比较必然相等,而点击时屏幕上是旧内容(实测:点击时显示 v1,提交了 v2)。
       // 所以另外要求快照之后没有任何 refresh 落盘(shownReplaced)。
       let current: string | null;
+      let readError: string | null = null;
       try {
         current = await readFingerprint(app, repoRoot);
-      } catch {
+      } catch (err) {
         current = null;
+        readError = err instanceof Error ? err.message : String(err);
       }
       const now = store.getState();
+      if (current === null) {
+        // 读不到:无从比较(fail-closed)。刷新一次——持续读不到时 load 会把原因挂到面板上(statusError,
+        // Commit / Amend 随之禁用、tick 按退避重试),而不是每次点击都得到同一句提示。
+        await now.refresh();
+        showWarning(app, store, repoStateUnconfirmedMessage(readError));
+        return;
+      }
       if (shownReplaced(shown, now)) {
-        // 视图已被换过。它若仍不是仓库现在的状态(或读不到),再刷一次;否则已经是当前的,不多刷。
-        if (current === null || current !== now.statusFingerprint) await now.refresh();
+        // 视图已被换过。它若仍不是仓库现在的状态,再刷一次;否则已经是当前的,不多刷。
+        if (current !== now.statusFingerprint) await now.refresh();
         showWarning(app, store, VIEW_REFRESHED_MESSAGE);
         return;
       }
-      if (current === null || current !== shown.fingerprint) {
+      if (shown.fingerprint === null) {
+        // 这份列表没有指纹(正常的 load 此时会带 statusError、按钮已禁用;这里是兜底)
+        await now.refresh();
+        showWarning(app, store, repoStateUnconfirmedMessage(null));
+        return;
+      }
+      if (current !== shown.fingerprint) {
         await now.refresh();
         showWarning(app, store, REPO_CHANGED_MESSAGE);
         return;
