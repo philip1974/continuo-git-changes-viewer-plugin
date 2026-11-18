@@ -43,11 +43,21 @@ function NewFileView({
   readonly symlink?: boolean;
 }) {
   // 新增的符号链接:git 存的"内容"是链接目标路径。标明它是链接,不当成文件内容显示。
+  // 目标路径同样受整文件读取的大小 / 时间上限约束(伪造的 index 里 mode 120000 的 blob 可以任意大):只读到一部分时照样说明。
   if (symlink) {
     return (
-      <div className="cgv-symlink-note" role="note">
-        {`Symbolic link → ${content}`}
-      </div>
+      <>
+        <div className="cgv-symlink-note" role="note">
+          {`Symbolic link → ${content}`}
+        </div>
+        {truncated ? (
+          <div className="cgv-truncated-note" role="note">
+            {timedOut
+              ? 'Reading this link took too long — showing only the part of its target that was read.'
+              : `Link target too long — showing only the first ${MAX_FILE_BYTES / (1024 * 1024)} MB of it.`}
+          </div>
+        ) : null}
+      </>
     );
   }
   return (

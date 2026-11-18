@@ -35,3 +35,6 @@ index → working-tree hunk (`can-stage-hunk` T13, `can-discard-hunk` T8).
   (merged status `A`, index side not an addition) → unified diff.
 
 Real-git coverage: `repo-safety-real-git` R70.
+
+- V4b: a staged symbolic link whose target was only partly read (size limit or
+  timeout) carries the same kind of "only part is shown" notice as a file.

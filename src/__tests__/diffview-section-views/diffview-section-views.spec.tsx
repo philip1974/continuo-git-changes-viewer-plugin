@@ -66,6 +66,19 @@ describe('which view a row gets is decided per section', () => {
     expect(screen.queryByRole('note')).toBeNull();
   });
 
+  it('V4b a staged symbolic link whose stored target was only partly read (over the size limit, or the read timed out) says so, like a file does; a link read in full has no such notice', () => {
+    const ln = { ...change('A', ' ', 'A'), path: 'ln' };
+    const notes = () => screen.getAllByRole('note').map((n) => n.textContent);
+    view(ln, 'staged', { path: 'ln', modified: 'aaaa', modifiedIsSymlink: true, modifiedTruncated: true });
+    expect(notes()).toEqual(['Symbolic link → aaaa', 'Link target too long — showing only the first 1 MB of it.']);
+    cleanup();
+    view(ln, 'staged', { path: 'ln', modified: 'aa', modifiedIsSymlink: true, modifiedTruncated: true, modifiedTimedOut: true });
+    expect(notes()).toEqual(['Symbolic link → aa', 'Reading this link took too long — showing only the part of its target that was read.']);
+    cleanup();
+    view(ln, 'staged', { path: 'ln', modified: 'target', modifiedIsSymlink: true });
+    expect(notes()).toEqual(['Symbolic link → target']);
+  });
+
   it('V5 untracked rows keep the whole-file view; a staged-new row whose staged version was withheld shows the notice', () => {
     const untracked = view(change('?', '?', 'U'), 'changed', { modified: 'new\n', isUntracked: true });
     expect(untracked.container.querySelector('.cgv-new-file')!.textContent).toBe('new\n');
