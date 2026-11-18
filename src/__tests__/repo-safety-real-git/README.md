@@ -142,3 +142,18 @@ Paths reported by git:
   pinned rename detection the list is the same whatever the repository
   configures (`copies`, `false`), and with the pins stripped the copy record is
   still parsed without producing a bogus entry.
+
+Config enumeration (see `doc/git-config-classification.md`):
+
+- R44: a repository setting colour to `always`, custom diff prefixes, zero
+  context, `i18n.logOutputEncoding=UTF-16`, `i18n.commitEncoding`, status /
+  log presentation keys, `apply.ignoreWhitespace` → stays trusted and the
+  parsed status, diff and HEAD message are identical to a default repository;
+  hunk staging works; the commit carries no wrong `encoding` header. With the
+  output pins stripped the diff has ANSI escapes, no `a/` `b/` prefixes and
+  zero context, and the message is not UTF-8.
+- R45: program-valued keys outside the restricted list (pager, editor, alias
+  shadowing built-ins, ssh / credential / proxy without a fetch, help / man /
+  browser / difftool / mergetool commands, local `trace2.*Target`) → stays
+  trusted, and status / diff / every write op / commit / amend start none of
+  them; the same `trace2` key in global scope does write (fixture proof).

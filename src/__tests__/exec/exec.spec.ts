@@ -36,12 +36,30 @@ const GLOBALS = [
   'maintenance.auto=false',
   '-c',
   'gc.auto=0',
+  '-c',
+  'core.protectHFS=true',
+  '-c',
+  'core.protectNTFS=true',
+  '-c',
+  'i18n.commitEncoding=UTF-8',
 ];
 const NO_NETWORK = [
   '-c', 'protocol.allow=never',
   '-c', 'core.hooksPath=/dev/null',
   '-c', 'status.renames=true',
   '-c', 'diff.renames=true',
+  '-c', 'color.ui=false',
+  '-c', 'color.diff=false',
+  '-c', 'diff.noprefix=false',
+  '-c', 'diff.mnemonicPrefix=false',
+  '-c', 'diff.srcPrefix=a/',
+  '-c', 'diff.dstPrefix=b/',
+  '-c', 'diff.context=3',
+  '-c', 'diff.interHunkContext=0',
+  '-c', 'diff.suppressBlankEmpty=false',
+  '-c', 'diff.relative=false',
+  '-c', 'i18n.logOutputEncoding=UTF-8',
+  '-c', 'apply.ignoreWhitespace=no',
 ];
 const ENV = {
   GIT_OPTIONAL_LOCKS: '0',
@@ -84,7 +102,7 @@ describe('gitExec hardened shell wrapper', () => {
 
     expect(exec).toHaveBeenCalledWith(
       'git',
-      [...GLOBALS, ...NO_NETWORK, 'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short'],
+      [...GLOBALS, ...NO_NETWORK, 'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short', '--no-color'],
       { cwd: '/repo', env: { LANG: 'C', ...ENV } },
     );
   });
@@ -92,15 +110,15 @@ describe('gitExec hardened shell wrapper', () => {
   it('T3 diff/show/log never run external diff, textconv or signature verification', () => {
     expect(buildGitArgs(['diff', '--cached', '--', 'a.ts'])).toEqual([
       ...GLOBALS, ...NO_NETWORK,
-      'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short', '--cached', '--', 'a.ts',
+      'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short', '--no-color', '--cached', '--', 'a.ts',
     ]);
     expect(buildGitArgs(['show', 'HEAD:a.ts'])).toEqual([
       ...GLOBALS, ...NO_NETWORK,
-      'show', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', 'HEAD:a.ts',
+      'show', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', 'HEAD:a.ts',
     ]);
     expect(buildGitArgs(['log', '-1', '--pretty=%B'])).toEqual([
       ...GLOBALS, ...NO_NETWORK,
-      'log', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '-1', '--pretty=%B',
+      'log', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', '-1', '--pretty=%B',
     ]);
   });
 
@@ -201,6 +219,27 @@ describe('gitExec hardened shell wrapper', () => {
     const confirmed = buildGitEnv(['commit', '-F', '-'], {}, { repoHooksConfirmed: true });
     expect(confirmed).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
     expect(confirmed).not.toHaveProperty('GIT_NO_LAZY_FETCH');
+  });
+});
+
+describe('output-shaping config is pinned', () => {
+  it('T12 parsed output never depends on repository config: colour, diff prefixes / context, rename detection, log encoding (every command but commit, whose -c values reach hooks)', () => {
+    const pinned = (args: string[]) => {
+      const out: string[] = [];
+      for (let i = 0; i < args.length; i++) if (args[i] === '-c') out.push(args[i + 1]!);
+      return out;
+    };
+    const output = ['color.ui=false', 'color.diff=false', 'diff.noprefix=false', 'diff.mnemonicPrefix=false', 'diff.srcPrefix=a/',
+      'diff.dstPrefix=b/', 'diff.context=3', 'diff.interHunkContext=0', 'diff.suppressBlankEmpty=false', 'diff.relative=false',
+      'status.renames=true', 'diff.renames=true', 'i18n.logOutputEncoding=UTF-8', 'apply.ignoreWhitespace=no'];
+    for (const sub of [['status'], ['diff', '--', 'a'], ['show', 'HEAD:a'], ['log', '-1'], ['apply', '--cached', '-'], ['add', '--', 'a']]) {
+      expect(pinned(buildGitArgs(sub))).toEqual(expect.arrayContaining(output));
+    }
+    const commit = pinned(buildGitArgs(['commit', '-F', '-']));
+    for (const pin of output) expect(commit).not.toContain(pin);
+    // 与安全 / 提交内容有关的固定值对 commit 同样生效
+    expect(commit).toEqual(expect.arrayContaining(['i18n.commitEncoding=UTF-8', 'core.protectHFS=true', 'core.protectNTFS=true']));
+    for (const sub of ['diff', 'show', 'log']) expect(buildGitArgs([sub])).toContain('--no-color');
   });
 });
 

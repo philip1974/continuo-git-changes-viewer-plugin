@@ -62,6 +62,13 @@ export const PINNED_CONFIG: ReadonlyArray<readonly [key: string, value: string]>
   // 用户在终端里的 git 操作照常触发。gc.auto=0 兼顾没有 maintenance.auto 的旧版 git。
   ['maintenance.auto', 'false'],
   ['gc.auto', '0'],
+  // git 自己的"路径不得解析成 .git"保护(apply / checkout 写工作树时生效)可被仓库 config 关掉;固定为开。
+  // 插件另有不依赖它的 isSafeRepoRelativePath(见 path-utils)。
+  ['core.protectHFS', 'true'],
+  ['core.protectNTFS', 'true'],
+  // 插件经 stdin 传入的提交信息一律是 UTF-8;仓库设成别的编码会给提交打上错误的 encoding 头,
+  // 之后 log 按它转码就成了乱码。
+  ['i18n.commitEncoding', 'UTF-8'],
 ];
 
 // 只影响"插件要解析的输出"的固定配置:除 commit 外的每次调用都加。commit 不加——它的输出插件不解析,
@@ -71,6 +78,26 @@ export const PINNED_OUTPUT_CONFIG: ReadonlyArray<readonly [key: string, value: s
   // 复制记录(`C  新\0原\0`),设 false 则重命名显示成一删一增——文件列表不应随仓库 config 变形。
   ['status.renames', 'true'],
   ['diff.renames', 'true'],
+  // 颜色:`color.diff=always` / `color.ui=always` 让非终端输出也带 ANSI 转义,hunk 头(`@@`)识别、
+  // 行号计算、hunk 补丁提取全部错位(实测)。更具体的 color.diff 优先于 color.ui,两个都要固定;
+  // diff / show / log 另加 `--no-color`。
+  ['color.ui', 'false'],
+  ['color.diff', 'false'],
+  // diff 头与 hunk 形状:插件按 `a/<path>` / `b/<path>` 生成 hunk 补丁,并假设 git 默认的 3 行上下文。
+  // 仓库可以把前缀改掉(noprefix / mnemonicPrefix / srcPrefix / dstPrefix)、把上下文设成 0
+  // (零上下文补丁 `git apply` 可能落到错误位置)、去掉空上下文行的前导空格、按子目录裁剪路径。
+  ['diff.noprefix', 'false'],
+  ['diff.mnemonicPrefix', 'false'],
+  ['diff.srcPrefix', 'a/'],
+  ['diff.dstPrefix', 'b/'],
+  ['diff.context', '3'],
+  ['diff.interHunkContext', '0'],
+  ['diff.suppressBlankEmpty', 'false'],
+  ['diff.relative', 'false'],
+  // `i18n.logOutputEncoding=UTF-16` 之类会让 log 输出(读 HEAD 提交信息供 amend 预填)变成别的编码。
+  ['i18n.logOutputEncoding', 'UTF-8'],
+  // hunk 补丁必须按原样匹配;`apply.ignoreWhitespace=change` 会让它模糊匹配到别处。
+  ['apply.ignoreWhitespace', 'no'],
 ];
 
 const pins = (config: ReadonlyArray<readonly [string, string]>): string[] =>
@@ -102,12 +129,13 @@ export const HOOK_RUNNING_SUBCOMMANDS: ReadonlySet<string> = new Set(['commit'])
 //   partial clone 里旧 blob 缺失即触发惰性拉取(→ core.sshCommand / credential.helper,实测),
 //   断网后则以 `fatal: unable to read <oid>` 退出 128——提交其实已创建,却报告失败。加 --quiet 后
 //   根本不读旧 blob(实测:不断网也不拉取),"nothing to commit" 等失败信息照常输出;插件不使用该摘要。
+// - diff/show/log:`--no-color`(与 -c color.ui / color.diff=false 双保险,见 PINNED_OUTPUT_CONFIG)。
 export const SUBCOMMAND_HARDENING: Readonly<Record<string, readonly string[]>> = {
   commit: ['--quiet'],
   status: ['--ignore-submodules=dirty'],
-  diff: ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short'],
-  show: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short'],
-  log: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short'],
+  diff: ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short', '--no-color'],
+  show: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color'],
+  log: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color'],
 };
 
 // GIT_TERMINAL_PROMPT=0:不在终端提示凭据;GIT_EDITOR=':':git 把 ':' 视为"不启动编辑器",

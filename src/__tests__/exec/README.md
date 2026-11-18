@@ -19,8 +19,13 @@ invocation against executable settings in an untrusted repository config:
   hooks (see `commit-hooks-confirm`).
 - Output pins (`PINNED_OUTPUT_CONFIG`, every command except `commit`, whose
   output is not parsed and whose `-c` values reach hooks): `status.renames=true`,
-  `diff.renames=true` — the file list must not change shape with repository
-  config (`copies` adds copy records, `false` splits renames).
+  `diff.renames=true` (the file list must not change shape with repository
+  config), `color.ui=false`, `color.diff=false`, `diff.noprefix=false`,
+  `diff.mnemonicPrefix=false`, `diff.srcPrefix=a/`, `diff.dstPrefix=b/`,
+  `diff.context=3`, `diff.interHunkContext=0`, `diff.suppressBlankEmpty=false`,
+  `diff.relative=false` (hunk patches are generated from this output),
+  `i18n.logOutputEncoding=UTF-8`, `apply.ignoreWhitespace=no`. Always pinned:
+  `core.protectHFS=true`, `core.protectNTFS=true`, `i18n.commitEncoding=UTF-8`.
 - Per subcommand: `diff` → `--no-ext-diff --no-textconv --ignore-submodules=dirty
   --submodule=short`; `show` / `log` → `--no-ext-diff --no-textconv
   --no-show-signature --submodule=short`; `status` → `--ignore-submodules=dirty`
@@ -45,4 +50,4 @@ T1 status argv + env. T2 caller env preserved, hardening values win. T3 diff/sho
 flags. T3b nested-repository pins/flags on every subcommand. T4 commit keeps hooks enabled, `--quiet`, network blocked unless `repoHooksConfirmed`. T4b the option affects commit only. T5 guard refusal skips spawn.
 T6 throwing guard fails closed. T7 passing guard runs the hardened command. T8 every non-commit subcommand disables hooks.
 T9 `GIT_ALLOW_PROTOCOL` is empty (caller env cannot re-enable it) and unset only for a hooks-confirmed commit.
-T11 literal pathspecs for every non-commit call. T10 `stripTrailingNewline` (used for path-valued git output instead of `trim()`) removes one trailing LF/CRLF only.
+T11 literal pathspecs for every non-commit call. T12 output pins. T10 `stripTrailingNewline` (used for path-valued git output instead of `trim()`) removes one trailing LF/CRLF only.

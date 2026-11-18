@@ -13,6 +13,8 @@ import { discardHunk } from '../../git/discard-hunk';
 import { DISABLED_HOOKS_PATH, gitExec } from '../../git/exec';
 import { detectRepoHooks } from '../../git/repo-hooks';
 import { stageHunk } from '../../git/stage-hunk';
+import { extractHunkPatchFromUnifiedDiff } from '../../git/hunk-patch';
+import { PINNED_OUTPUT_CONFIG } from '../../git/exec';
 import { _resetRestoreCache, unstageFile } from '../../git/unstage-file';
 import { unstageHunk } from '../../git/unstage-hunk';
 import { gitCommit } from '../../git/git-commit';
@@ -199,6 +201,53 @@ async function runEverything(app: CoPluginApp): Promise<void> {
   await hasHeadCommit(app, repo);
 }
 
+// 每个写操作:准备状态 → 运行 → 返回触发的 hook 标记
+const WRITE_OPS: ReadonlyArray<readonly [string, (app: CoPluginApp) => Promise<{ ok: boolean }>]> = [
+  ['stageFile (git add)', async (app) => {
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    clearMarks();
+    return stageFile(app, repo, 'f.txt');
+  }],
+  ['unstageFile (git restore --staged)', async (app) => {
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    clearMarks();
+    _resetRestoreCache();
+    return unstageFile(app, repo, 'f.txt');
+  }],
+  ['unstage fallback (git reset HEAD --)', async (app) => {
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    clearMarks();
+    const r = await gitExec(app, repo, ['reset', 'HEAD', '--', 'f.txt']);
+    return { ok: r.exitCode === 0 };
+  }],
+  ['stageHunk (git apply --cached)', async (app) => {
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    const patch = git(repo, 'diff');
+    clearMarks();
+    return stageHunk(app, repo, patch);
+  }],
+  ['unstageHunk (git apply --cached --reverse)', async (app) => {
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    const patch = git(repo, 'diff', '--cached');
+    clearMarks();
+    return unstageHunk(app, repo, patch);
+  }],
+  ['discardHunk (git apply --reverse)', async (app) => {
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    const patch = git(repo, 'diff');
+    clearMarks();
+    return discardHunk(app, repo, patch);
+  }],
+  ['discardFile (git checkout --)', async (app) => {
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    clearMarks();
+    return discardFile(app, repo, 'f.txt');
+  }],
+];
+
 describe('repo safety against a real git with a hostile .git/config', () => {
   it('R1 baseline sanity: without the plugin hardening the hostile config does execute (proves the fixture)', () => {
     git(repo, 'config', 'filter.x.clean', marker('clean'));
@@ -315,53 +364,6 @@ describe('repo safety against a real git with a hostile .git/config', () => {
     expect(marks()).toEqual(['pre-commit']);
     expect(existsSync(join(repo, '.git', 'index'))).toBe(true);
   });
-
-  // 每个写操作:准备状态 → 运行 → 返回触发的 hook 标记
-  const WRITE_OPS: ReadonlyArray<readonly [string, (app: CoPluginApp) => Promise<{ ok: boolean }>]> = [
-    ['stageFile (git add)', async (app) => {
-      appendFileSync(join(repo, 'f.txt'), 'two\n');
-      clearMarks();
-      return stageFile(app, repo, 'f.txt');
-    }],
-    ['unstageFile (git restore --staged)', async (app) => {
-      appendFileSync(join(repo, 'f.txt'), 'two\n');
-      git(repo, 'add', 'f.txt');
-      clearMarks();
-      _resetRestoreCache();
-      return unstageFile(app, repo, 'f.txt');
-    }],
-    ['unstage fallback (git reset HEAD --)', async (app) => {
-      appendFileSync(join(repo, 'f.txt'), 'two\n');
-      git(repo, 'add', 'f.txt');
-      clearMarks();
-      const r = await gitExec(app, repo, ['reset', 'HEAD', '--', 'f.txt']);
-      return { ok: r.exitCode === 0 };
-    }],
-    ['stageHunk (git apply --cached)', async (app) => {
-      appendFileSync(join(repo, 'f.txt'), 'two\n');
-      const patch = git(repo, 'diff');
-      clearMarks();
-      return stageHunk(app, repo, patch);
-    }],
-    ['unstageHunk (git apply --cached --reverse)', async (app) => {
-      appendFileSync(join(repo, 'f.txt'), 'two\n');
-      git(repo, 'add', 'f.txt');
-      const patch = git(repo, 'diff', '--cached');
-      clearMarks();
-      return unstageHunk(app, repo, patch);
-    }],
-    ['discardHunk (git apply --reverse)', async (app) => {
-      appendFileSync(join(repo, 'f.txt'), 'two\n');
-      const patch = git(repo, 'diff');
-      clearMarks();
-      return discardHunk(app, repo, patch);
-    }],
-    ['discardFile (git checkout --)', async (app) => {
-      appendFileSync(join(repo, 'f.txt'), 'two\n');
-      clearMarks();
-      return discardFile(app, repo, 'f.txt');
-    }],
-  ];
 
   it('R7 baseline: without the hooksPath override, stage / unstage / discard run planted .git/hooks (proves the fixture)', async () => {
     plantHooks();
@@ -1341,5 +1343,122 @@ describe('paths reported by git are not trusted: forged index entries and copy r
     git(repo, 'config', 'status.renames', 'false');
     git(repo, 'config', 'diff.renames', 'false');
     expect(summary(await scanStatus(realApp(), repo))).toEqual(expected);
+  });
+});
+
+describe('config enumeration: keys neutralized by fixed arguments / environment, one real-git assertion each', () => {
+  const setAll = (pairs: Record<string, string>) => {
+    for (const [k, v] of Object.entries(pairs)) git(repo, 'config', k, v);
+  };
+
+  it('R44 output-shaping keys (colour, diff prefixes, context, encodings, status / log presentation): parsed output is identical to a default repository; with the pins stripped it is not', async () => {
+    writeFileSync(join(repo, 'f.txt'), Array.from({ length: 9 }, (_, i) => `line ${i + 1}\n`).join(''));
+    git(repo, 'add', 'f.txt');
+    git(repo, 'commit', '-qm', 'héllo wörld');
+    git(repo, 'notes', 'add', '-m', 'NOTE-TEXT');
+    writeFileSync(join(repo, 'f.txt'), readFileSync(join(repo, 'f.txt'), 'utf8').replace('line 5', 'line five'));
+    writeFileSync(join(repo, 'new file.txt'), 'n\n');
+
+    const read = async (app: CoPluginApp) => {
+      const changes = await scanStatus(app, repo);
+      const diff = await fetchDiff(app, repo, changes.find((c) => c.path === 'f.txt')!);
+      return {
+        changes: changes.map((c) => `${c.statusX}${c.statusY} ${c.path}`),
+        diff: diff.ok ? diff.unifiedDiff.replace(/^index .*$/m, 'index') : diff,
+        head: await readHeadMessage(app, repo),
+      };
+    };
+    const baseline = await read(realApp());
+    expect(baseline.changes).toEqual([' M f.txt', '?? new file.txt']);
+    expect(baseline.diff).toBe(
+      'diff --git a/f.txt b/f.txt\nindex\n--- a/f.txt\n+++ b/f.txt\n@@ -2,7 +2,7 @@ line 1\n line 2\n line 3\n line 4\n-line 5\n+line five\n line 6\n line 7\n line 8\n',
+    );
+    expect(baseline.head).toBe('héllo wörld');
+
+    setAll({
+      'color.ui': 'always', 'color.diff': 'always', 'color.status': 'always',
+      'diff.noprefix': 'true', 'diff.mnemonicPrefix': 'true', 'diff.srcPrefix': 'x/', 'diff.dstPrefix': 'y/',
+      'diff.context': '0', 'diff.interHunkContext': '9', 'diff.suppressBlankEmpty': 'true', 'diff.relative': 'true',
+      'diff.algorithm': 'patience', 'diff.wsErrorHighlight': 'all', 'diff.colorMoved': 'zebra',
+      'i18n.logOutputEncoding': 'UTF-16', 'i18n.commitEncoding': 'ISO-8859-1',
+      'status.branch': 'true', 'status.short': 'true', 'status.showStash': 'true', 'status.aheadBehind': 'true',
+      'status.relativePaths': 'false', 'column.ui': 'always', 'column.status': 'always',
+      'format.pretty': 'fuller', 'log.decorate': 'full', 'log.showRoot': 'true', 'log.date': 'relative',
+      'notes.displayRef': 'refs/notes/*', 'core.quotePath': 'true', 'core.abbrev': '40',
+      'apply.ignoreWhitespace': 'change', 'apply.whitespace': 'error',
+    });
+
+    // 这些键只改呈现,不执行、不越界:仓库不受限,靠固定参数中和
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('trusted');
+    expect(await read(app)).toEqual(baseline);
+
+    // 证明 fixture:去掉输出类固定参数后,同一仓库的 diff 带 ANSI 转义、没有 a/ b/ 前缀、零上下文,提交信息变成 UTF-16
+    const loose = await read(tamperedApp({ dropPins: PINNED_OUTPUT_CONFIG.map(([k]) => k), dropArgs: ['--no-color'] }));
+    expect(loose.diff).toContain('\u001b[');
+    expect(loose.diff).not.toContain('--- a/f.txt');
+    expect(loose.diff).toContain('@@ -5 +5 @@');
+    expect(loose.head).not.toBe('héllo wörld');
+    // --no-color 单独也挡得住颜色(color.diff 比 color.ui 具体,仅 -c color.ui=false 不够)
+    const flagOnly = await read(tamperedApp({ dropPins: ['color.ui', 'color.diff'] }));
+    expect(flagOnly).toEqual(baseline);
+
+    // hunk 级暂存用的是这份 diff:补丁能应用,暂存内容正确
+    const diff = await fetchDiff(app, repo, { path: 'f.txt', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' });
+    const lines = diff.ok ? diff.unifiedDiff.split('\n') : [];
+    const patch = extractHunkPatchFromUnifiedDiff('f.txt', lines.join('\n'), lines.findIndex((l) => l.startsWith('@@')));
+    expect((await stageHunk(app, repo, patch!)).ok).toBe(true);
+    expect(git(repo, 'show', ':f.txt')).toContain('line five');
+
+    // 提交信息按 UTF-8 记录(不带错误的 encoding 头),读回一致
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'config', 'user.email', 't@t');
+    expect(await gitCommit(app, repo, 'ünïcödé subject')).toMatchObject({ ok: true });
+    expect(git(repo, 'cat-file', 'commit', 'HEAD')).not.toMatch(/^encoding /m);
+    expect(await readHeadMessage(app, repo)).toBe('ünïcödé subject');
+  });
+
+  it('R45 program-valued keys that are not in the restricted list (pager, editor, alias, trace2 targets, ssh / credential / proxy without a fetch): the repository stays trusted and nothing they name is ever started', async () => {
+    const trace = (n: string) => join(markDir, `trace2-${n}`);
+    setAll({
+      'core.pager': marker('pager'), 'pager.status': marker('pager-status'), 'pager.diff': marker('pager-diff'),
+      'pager.log': marker('pager-log'), 'pager.show': marker('pager-show'), 'pager.commit': marker('pager-commit'),
+      'core.editor': marker('editor'), 'sequence.editor': marker('seq-editor'),
+      'alias.status': `!${marker('alias-status')}`, 'alias.diff': `!${marker('alias-diff')}`, 'alias.commit': `!${marker('alias-commit')}`,
+      'core.sshCommand': marker('ssh'), 'credential.helper': `!${marker('cred')}`,
+      'http.proxy': 'http://127.0.0.1:1', 'url.ext::sh.insteadOf': 'https://', 'remote.origin.url': 'https://host.invalid/x',
+      'remote.origin.vcs': 'ext', 'help.autoCorrect': 'immediate', 'help.format': 'web', 'web.browser': marker('browser'),
+      'man.viewer': 'x', 'man.x.cmd': marker('man'), 'browser.x.cmd': marker('browser-cmd'),
+      'interactive.diffFilter': marker('diff-filter'), 'difftool.x.cmd': marker('difftool'), 'diff.tool': 'x',
+      'mergetool.x.cmd': marker('mergetool'), 'merge.tool': 'x',
+      'trace2.normalTarget': trace('normal'), 'trace2.eventTarget': trace('event'), 'trace2.perfTarget': trace('perf'),
+      'commit.cleanup': 'strip', 'commit.status': 'true', 'commit.verbose': 'true',
+      'user.name': 't', 'user.email': 't@t',
+    });
+    clearMarks();
+
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('trusted');
+
+    await runEverything(app);
+    for (const [, op] of WRITE_OPS) {
+      git(repo, 'reset', '-q', '--hard');
+      expect((await op(app)).ok).toBe(true);
+    }
+    appendFileSync(join(repo, 'f.txt'), 'again\n');
+    expect((await stageFile(app, repo, 'f.txt')).ok).toBe(true);
+    expect(await gitCommit(app, repo, 'subject')).toMatchObject({ ok: true });
+    expect(await gitCommit(app, repo, 'amended', { amend: true })).toMatchObject({ ok: true });
+    await gitExec(app, repo, ['restore', '-h']);
+    expect(marks()).toEqual([]);
+
+    // 证明 fixture(trace2):同样的键放在 global 作用域时 git 确实会写文件——local 作用域被 git 忽略
+    const globalCfg = join(base, 'global.cfg');
+    writeFileSync(globalCfg, `[trace2]\n\tnormalTarget = ${trace('global')}\n`);
+    process.env.GIT_CONFIG_GLOBAL = globalCfg;
+    await scanStatus(app, repo);
+    expect(marks()).toEqual(['trace2-global']);
   });
 });
