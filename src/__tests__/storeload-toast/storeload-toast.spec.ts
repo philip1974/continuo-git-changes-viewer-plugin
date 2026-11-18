@@ -41,7 +41,18 @@ function makeApp(notifications?: { show: ReturnType<typeof vi.fn> }): CoPluginAp
     ribbon: { register: vi.fn(() => ({ dispose: vi.fn() })) },
     workspace: { getRoot: vi.fn(async () => '/repo') },
     fs: { requestScope: vi.fn(async () => 'grant') },
-    shell: { exec: vi.fn(), execStream: vi.fn() },
+    // 受限仓库探测(git config --list)返回空配置 = 可信仓库
+    shell: {
+      exec: vi.fn(async () => ({
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        truncated: false,
+      })),
+      execStream: vi.fn(),
+    },
     dock: { openPanel: vi.fn() },
     ...(notifications ? { notifications } : {}),
   } as unknown as CoPluginApp;

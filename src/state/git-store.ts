@@ -14,6 +14,8 @@ export interface BannerState {
 export interface GitStoreLoadResult {
   readonly repoRoot: string | null;
   readonly changes: FileChange[];
+  /** 受限仓库(本地 config 含可执行项)时的提示;此时 repoRoot 为 null,不运行任何 git。 */
+  readonly restriction?: string | null;
 }
 
 export interface SelectedRef {
@@ -40,6 +42,7 @@ export interface GitViewerState {
   banner: BannerState | null;
   commitMessage: string;
   amend: boolean;
+  restriction: string | null;
   refresh(): Promise<void>;
   selectFile(path: string, mode: DiffMode): void;
   loadDiff(path: string, mode: DiffMode): Promise<void>;
@@ -125,6 +128,7 @@ const emptyState = {
   banner: null,
   commitMessage: '',
   amend: false,
+  restriction: null,
 } satisfies Pick<
   GitViewerState,
   | 'repoRoot'
@@ -135,6 +139,7 @@ const emptyState = {
   | 'banner'
   | 'commitMessage'
   | 'amend'
+  | 'restriction'
 >;
 
 export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState> {
@@ -176,6 +181,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
           selected: nextSelected,
           diffCache: nextDiffCache,
           isLoading: false,
+          restriction: loaded.restriction ?? null,
         });
         if (nextSelected) void get().loadDiff(nextSelected.path, nextSelected.mode);
       } catch (err) {
@@ -229,6 +235,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         banner: null,
         commitMessage: '',
         amend: false,
+        restriction: null,
       });
     },
     setBanner(banner) {

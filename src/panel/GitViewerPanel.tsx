@@ -330,7 +330,11 @@ export function GitViewerPanel({
         onConfirm={handleDrawerConfirm}
         onCancel={() => dispatchDrawer({ type: 'cancel' })}
       />
-      {state.banner ? (
+      {state.restriction ? (
+        <div className="cgv-banner cgv-banner--warn cgv-restricted" role="alert">
+          <span>{state.restriction}</span>
+        </div>
+      ) : state.banner ? (
         <div className={`cgv-banner cgv-banner--${state.banner.kind}`}>
           <span>{state.banner.message}</span>
           {state.banner.dismissable ? (

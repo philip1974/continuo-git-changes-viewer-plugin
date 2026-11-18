@@ -7,6 +7,7 @@ import {
 } from './sdk/types';
 import { registerCommands } from './commands';
 import { detectRepo } from './git/repo-detect';
+import { installRepoSafetyGuard } from './git/repo-safety';
 import { scanStatus } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
 import { SettingsBus } from './lib/settings-bus';
@@ -94,8 +95,21 @@ export default class GitChangesViewerPlugin extends Plugin {
       });
     }
 
+    // 安全:此后本插件所有经 gitExec 的 git 调用都先过受限仓库检测(fail-closed)。
+    const safety = installRepoSafetyGuard(this.app);
+    this.disposables.push(safety);
+
     const store = createGitStore({
       load: async () => {
+        // 每次 refresh 都强制重新探测(不走缓存),再运行任何 git 命令。
+        const root = await this.app.workspace.getRoot();
+        if (root) {
+          const verdict = await safety.guard.check(root, { fresh: true });
+          if (verdict.kind === 'restricted') {
+            return { repoRoot: null, changes: [], restriction: verdict.message };
+          }
+        }
+
         const repo = await detectRepo(this.app);
         if (!repo.ok) {
           const message =
