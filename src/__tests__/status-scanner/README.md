@@ -27,6 +27,9 @@ numstat binary detection.
   forged paths are still dropped by the parser and still fail the scan, even
   next to inoperable ones.
 
+- T10: a path or rename source containing U+FFFD (file-name bytes that were
+  not valid UTF-8, see `path-utils` T8) is an inoperable row as well.
+
 What an inoperable row means in the panel: `inoperable-entries`.
 
 When `git status` fails, times out or its output is truncated, `scanStatus`

@@ -71,4 +71,10 @@ describe('canUnstageHunk', () => {
     expect(canUnstageHunk(row, withDiff(CHMOD), 'staged')).toBe(true);
     expect(canUnstageHunk(row, withDiff(RETARGET), 'staged')).toBe(true);
   });
+  it('T22 disables a diff whose text contains U+FFFD (bytes that were not valid UTF-8): the patch would write the replacement character back instead of the original bytes', () => {
+    const row = change({ statusX: 'M', statusY: ' ' });
+    expect(canUnstageHunk(row, withDiff(CHMOD), 'staged')).toBe(true);
+    expect(canUnstageHunk(row, withDiff(CHMOD.replace('+y', '+caf\uFFFD')), 'staged')).toBe(false);
+    expect(canUnstageHunk(row, withDiff(CHMOD.replace(' x', ' na\uFFFDve')), 'staged')).toBe(false);
+  });
 });

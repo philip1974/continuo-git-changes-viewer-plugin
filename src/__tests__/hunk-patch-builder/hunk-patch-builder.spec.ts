@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildHunkPatch,
   extractHunkPatchFromUnifiedDiff,
+  hasUndecodableText,
   isHunkPatchableDiff,
   isPathSafeForPatch,
 } from '../../git/hunk-patch';
@@ -115,5 +116,21 @@ describe('hunk patch builder', () => {
     const hunks = lines.map((l, i) => (l.startsWith('@@') ? i : -1)).filter((i) => i >= 0);
     expect(hunks).toHaveLength(2);
     for (const i of hunks) expect(extractHunkPatchFromUnifiedDiff('f', typeChange, i)).toBeNull();
+  });
+  // 宿主按 UTF-8 解码 git 的输出:非法字节 → U+FFFD,补丁写回去的是 EF BF BD,不是原来的字节
+  it('T8 a diff whose text contains U+FFFD (a byte that was not valid UTF-8, or the character itself) is not hunk-patchable, wherever it sits — an added, removed or context line — and no patch is built from it', () => {
+    const clean = ['diff --git a/f b/f', 'index 1..2 100644', '--- a/f', '+++ b/f', '@@ -1,2 +1,2 @@', ' ctx', '-old', '+new', ''].join('\n');
+    expect(hasUndecodableText(clean)).toBe(false);
+    expect(isHunkPatchableDiff(clean)).toBe(true);
+    for (const line of [' ctx', '-old', '+new']) {
+      const diff = clean.replace(line, `${line} caf\uFFFD`);
+      expect(hasUndecodableText(diff), line).toBe(true);
+      expect(isHunkPatchableDiff(diff), line).toBe(false);
+      expect(extractHunkPatchFromUnifiedDiff('f', diff, 4), line).toBeNull();
+    }
+    // 其它非 ASCII 文本不受影响
+    const utf8 = clean.replace('+new', '+café 한글 \u{1F600}');
+    expect(isHunkPatchableDiff(utf8)).toBe(true);
+    expect(extractHunkPatchFromUnifiedDiff('f', utf8, 4)).toContain('+café 한글 \u{1F600}\n');
   });
 });

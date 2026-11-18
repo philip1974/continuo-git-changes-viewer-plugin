@@ -15,7 +15,7 @@ import { discardHunk } from '../../git/discard-hunk';
 import { DISABLED_HOOKS_PATH, gitExec, KNOWN_HOOK_EVENTS, LITERAL_ARGV_CONFIG } from '../../git/exec';
 import { detectRepoHooks } from '../../git/repo-hooks';
 import { stageHunk } from '../../git/stage-hunk';
-import { extractHunkPatchFromUnifiedDiff } from '../../git/hunk-patch';
+import { extractHunkPatchFromUnifiedDiff, NON_UTF8_HUNK_NOTE } from '../../git/hunk-patch';
 import { canDiscardFile } from '../../git/can-discard-file';
 import { canStageFile } from '../../git/can-stage-file';
 import { canUnstageFile } from '../../git/can-unstage-file';
@@ -3111,5 +3111,113 @@ describe('a submodule entry has no hunks and no file content to discard (real gi
     _resetRestoreCache();
     expect(await unstageFile(app, repo, 'sub')).toEqual({ ok: true });
     expect(git(repo, 'status', '--porcelain', '--', 'sub')).toBe(' M sub\n');
+  });
+});
+
+// 宿主把命令输出按 UTF-8 解码(非法字节 → U+FFFD),补丁再按 UTF-8 写回:经过这条路的非 UTF-8 内容回不去
+describe('bytes that are not valid UTF-8 never make a round trip through a hunk patch (real git)', () => {
+  const LATIN1_E = Buffer.from([0xe9]); // "é" in Latin-1 / the lead byte of a GBK character
+  const bytes = (...parts: Array<string | Buffer>) => Buffer.concat(parts.map((p) => (typeof p === 'string' ? Buffer.from(p, 'utf8') : p)));
+  const hex = (b: Buffer) => b.toString('hex');
+  const indexBlob = (path: string) => execFileSync('git', ['cat-file', 'blob', `:0:${path}`], { cwd: repo, env: ENV });
+  // 旧的做法:不看内容,直接从 diff 文本拼补丁
+  const byHand = (path: string, unifiedDiff: string) => {
+    const lines = unifiedDiff.split('\n');
+    const at = lines.findIndex((l) => l.startsWith('@@'));
+    return [`diff --git a/${path} b/${path}`, `--- a/${path}`, `+++ b/${path}`, ...lines.slice(at).filter((l, i, all) => !(i === all.length - 1 && l === ''))].join('\n') + '\n';
+  };
+
+  it('R75 a Latin-1 line in a text file: git calls the file text and the hunk applies cleanly — with the byte replaced by U+FFFD. The panel offers no hunk action for such a diff (Changes and Staged), says why, and file-level Stage / Unstage / Discard keep the bytes exactly', async () => {
+    const before = bytes('one\n', 'two\n', 'three\n');
+    const after = bytes('one\n', 'two\n', 'three\n', 'caf', LATIN1_E, ' added\n');
+    writeFileSync(join(repo, 'l.txt'), before);
+    // HEAD 里就有 Latin-1 行的文件:删掉那一行(Discard hunk 会把它"还原"回来)
+    writeFileSync(join(repo, 'd.txt'), bytes('keep\n', 'na', LATIN1_E, 've\n'));
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'latin1');
+    writeFileSync(join(repo, 'l.txt'), after);
+    writeFileSync(join(repo, 'd.txt'), bytes('keep\n'));
+    expect(git(repo, 'status', '--porcelain')).toBe(' M d.txt\n M l.txt\n');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const row = async (path: string) => (await scanStatus(app, repo)).find((c) => c.path === path)!;
+    expect((await row('l.txt')).kind).toBe('text');
+
+    // 面板:没有 hunk 按钮,拼不出补丁,并说明原因
+    for (const path of ['l.txt', 'd.txt']) {
+      const view = await rendered(app, await row(path), 'changed');
+      if (!view.diff.ok) throw new Error(`${path}: diff failed`);
+      expect(view.diff.unifiedDiff, path).toContain('�');
+      expect(view.buttons, path).toEqual([]);
+      const at = view.diff.unifiedDiff.split('\n').findIndex((l) => l.startsWith('@@'));
+      expect(extractHunkPatchFromUnifiedDiff(path, view.diff.unifiedDiff, at), path).toBeNull();
+      expect(view.html, path).toContain(NON_UTF8_HUNK_NOTE);
+    }
+    // 普通文件不受影响
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    const plain = await rendered(app, await row('f.txt'), 'changed');
+    expect(plain.buttons).toEqual(['Stage', 'Discard']);
+    expect(plain.html).not.toContain(NON_UTF8_HUNK_NOTE);
+    git(repo, 'checkout', '--', 'f.txt');
+
+    // 为什么:照旧拼出的补丁,git 说应用成功,而写进去的是 U+FFFD(EF BF BD),不是原来的字节
+    const lDiff = (await rendered(app, await row('l.txt'), 'changed')).diff;
+    const dDiff = (await rendered(app, await row('d.txt'), 'changed')).diff;
+    if (!lDiff.ok || !dDiff.ok) throw new Error('diff failed');
+    expect(await stageHunk(app, repo, byHand('l.txt', lDiff.unifiedDiff))).toEqual({ ok: true });
+    expect(hex(indexBlob('l.txt'))).toBe(hex(bytes(before, 'caf� added\n')));
+    expect(hex(indexBlob('l.txt'))).not.toBe(hex(after));
+    git(repo, 'reset', '-q', '--', 'l.txt');
+    expect(await discardHunk(app, repo, byHand('d.txt', dDiff.unifiedDiff))).toEqual({ ok: true });
+    expect(hex(readFileSync(join(repo, 'd.txt')))).toBe(hex(bytes('keep\n', 'na�ve\n')));
+    writeFileSync(join(repo, 'd.txt'), bytes('keep\n'));
+
+    // 文件级操作:字节精确
+    expect(await stageFile(app, repo, 'l.txt')).toEqual({ ok: true });
+    expect(hex(indexBlob('l.txt'))).toBe(hex(after));
+    // Staged 区同样没有 Unstage hunk
+    const staged = await rendered(app, await row('l.txt'), 'staged');
+    expect(staged.buttons).toEqual([]);
+    expect(staged.html).toContain(NON_UTF8_HUNK_NOTE);
+    _resetRestoreCache();
+    expect(await unstageFile(app, repo, 'l.txt')).toEqual({ ok: true });
+    expect(hex(indexBlob('l.txt'))).toBe(hex(before));
+    expect(hex(readFileSync(join(repo, 'l.txt')))).toBe(hex(after));
+    expect(await discardFile(app, repo, 'd.txt')).toEqual({ ok: true });
+    expect(hex(readFileSync(join(repo, 'd.txt')))).toBe(hex(bytes('keep\n', 'na', LATIN1_E, 've\n')));
+  });
+
+  it('R76 a file name that is not valid UTF-8 (possible in an index; on Linux also on disk) reaches the plugin as U+FFFD, and handing that back to git names a different path — possibly another real file. Such rows are shown but cannot be selected or operated on', async () => {
+    const oid = git(repo, 'rev-parse', 'HEAD:f.txt').trim();
+    const rawName = Buffer.concat([Buffer.from('caf'), Buffer.from([0xe9])]);
+    // index 里两个条目:名字是 Latin-1 字节的 `caf\xE9`,以及名字确实含 U+FFFD 字符的文件
+    // 名字经 stdin 逐字节传入(argv 在 Node 里只能是字符串)
+    execFileSync('git', ['update-index', '--index-info'], { cwd: repo, env: ENV, input: Buffer.concat([Buffer.from(`100644 ${oid}\t`), rawName, Buffer.from('\n')]) });
+    writeFileSync(join(repo, 'caf�'), 'the other file\n');
+    git(repo, 'add', '--', 'caf�');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const rows = (await scanStatus(app, repo)).filter((c) => c.path === 'caf�');
+    // 两条记录解码后的路径相同:无法区分
+    expect(rows.map((c) => `${c.statusX}${c.statusY}`).sort()).toEqual(['A ', 'AD']);
+    expect(rows.every((c) => c.inoperable === true)).toBe(true);
+    for (const change of rows) {
+      for (const section of ['staged', 'changed'] as const) {
+        expect(canUnstageFile(change, section)).toBe(false);
+        expect(canStageFile(change, section)).toBe(false);
+        expect(canDiscardFile(change, section)).toBe(false);
+      }
+    }
+    // 操作入口同样拒绝(不起进程):否则作用在那个名字确实是 U+FFFD 的文件上
+    const before = git(repo, 'status', '--porcelain=v2');
+    _resetRestoreCache();
+    expect((await unstageFile(app, repo, 'caf�')).ok).toBe(false);
+    expect((await stageFile(app, repo, 'caf�')).ok).toBe(false);
+    expect((await discardFile(app, repo, 'caf�')).ok).toBe(false);
+    expect((await fetchDiff(app, repo, rows[0]!, 'staged')).ok).toBe(false);
+    expect(git(repo, 'status', '--porcelain=v2')).toBe(before);
+    expect(readFileSync(join(repo, 'caf�'), 'utf8')).toBe('the other file\n');
   });
 });

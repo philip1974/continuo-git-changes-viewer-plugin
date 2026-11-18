@@ -19,9 +19,13 @@ function isDotGitSegment(segment: string): boolean {
  * 规范的仓库内相对路径:非空、非绝对(POSIX `/`、Windows `\`、盘符)、不含空段 / `.` / `..` 段
  * (允许结尾一个 `/`:status 把未跟踪目录写成 `dir/`)、任何一段都不是 `.git`。
  * `\` 也当分隔符检查(Windows 上它就是),代价是 POSIX 上名字形如 `..\x` 的文件不被接受。
+ * 含 U+FFFD 的名字也不接受:宿主把 git 的输出按 UTF-8 解码,不是合法 UTF-8 的文件名字节(index 里可以有;
+ * Linux 上磁盘上也可以有,如 Latin-1 名字)变成 U+FFFD,原来的字节已经丢了——把这个字符串当参数传回 git,
+ * 指的是另一个路径(名字里确实是 U+FFFD 字符的那个文件,如果存在的话;实测 real-git R76)。无法区分"原本就是
+ * U+FFFD",两者一律不接受(保守)。
  */
 export function isSafeRepoRelativePath(path: string): boolean {
-  if (path === '' || path.includes('\0')) return false;
+  if (path === '' || path.includes('\0') || path.includes('\uFFFD')) return false;
   if (/^[\\/]/.test(path) || /^[a-zA-Z]:/.test(path)) return false;
   const segments = path.split(/[\\/]/);
   if (segments[segments.length - 1] === '') segments.pop();

@@ -2,7 +2,7 @@
 import React, { useSyncExternalStore } from 'react';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CommitEditor } from '../../panel/CommitEditor';
+import { AMEND_NON_UTF8_MESSAGE, CommitEditor } from '../../panel/CommitEditor';
 import type { CommitResult, GitCommitOptions } from '../../git/git-commit';
 import type { CoPluginApp } from '../../sdk/types';
 import { createGitStore } from '../../state/git-store';
@@ -260,5 +260,20 @@ describe('CommitEditor amend UI', () => {
         message: 'Failed to read HEAD commit message',
       });
     });
+  });
+  it('T34 a HEAD message that arrives with U+FFFD in it (bytes that were not valid UTF-8) is still pre-filled, with a warning that amending saves it as shown; an ordinary message raises none', async () => {
+    const lossy = appWithShell();
+    const first = renderEditor({ app: lossy.app, readHeadMessage: vi.fn(async () => 'caf\uFFFD subject'), message: '' });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(first.store.getState().commitMessage).toBe('caf\uFFFD subject'));
+    expect(lossy.notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: AMEND_NON_UTF8_MESSAGE });
+    expect(first.store.getState().amend).toBe(true);
+    cleanup();
+
+    const plain = appWithShell();
+    const second = renderEditor({ app: plain.app, readHeadMessage: vi.fn(async () => 'café subject'), message: '' });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(second.store.getState().commitMessage).toBe('café subject'));
+    expect(plain.notifications.show).not.toHaveBeenCalled();
   });
 });

@@ -105,6 +105,14 @@ detect whether HEAD is already on a remote branch.
 - Files whose names are not portable (`c:notes.txt`, a name containing `..\`)
   are listed but cannot be viewed, staged, unstaged or discarded here. If one
   is already staged the row says so, because a commit will include it.
+- Text that is not valid UTF-8 (Latin-1, GBK, …) is displayed with the
+  replacement character `�`. Files whose diff contains it have no hunk
+  buttons — a hunk patch could not write the original bytes back — and the
+  diff says so; use the file-level actions, which are byte-exact. A file that
+  really contains the character U+FFFD is treated the same way. File names
+  that are not valid UTF-8, or contain U+FFFD, are listed but cannot be
+  operated on. Amending a commit whose message is not valid UTF-8 saves the
+  message as displayed (a warning says so).
 - The workspace root must be the git toplevel. Opening a subdirectory of a repo
   is reported as unsupported in this version.
 - Very large diffs degrade to a file-level placeholder with the exact git

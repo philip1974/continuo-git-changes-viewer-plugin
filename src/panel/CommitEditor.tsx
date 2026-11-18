@@ -60,6 +60,9 @@ interface CommitEditorProps {
 export const REPO_CHANGED_MESSAGE =
   'The repository changed since this view was last refreshed. Nothing was committed — the view is now up to date; review it and commit again.';
 
+export const AMEND_NON_UTF8_MESSAGE =
+  'The last commit message contains bytes that are not valid UTF-8. They are shown as \uFFFD, and amending will save the message as shown here.';
+
 function showWarning(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
   if (typeof app.notifications?.show === 'function') {
     app.notifications.show({ kind: 'warning', message });
@@ -166,6 +169,9 @@ export function CommitEditor({
     }
 
     store.getState().setCommitMessage(headMessage);
+    // 提交信息同样经宿主按 UTF-8 解码:不是合法 UTF-8 的字节(没有 encoding 头的 Latin-1 / GBK 提交信息)
+    // 已经变成 U+FFFD,Amend 会把预填的文本原样写回去。不拦(用户看得到、可以改),但要说明。
+    if (headMessage.includes('\uFFFD')) showWarning(app, store, AMEND_NON_UTF8_MESSAGE);
   };
 
   const onCommit = async (hooksConfirmed = false) => {

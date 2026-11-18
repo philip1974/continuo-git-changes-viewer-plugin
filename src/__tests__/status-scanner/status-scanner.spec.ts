@@ -161,4 +161,12 @@ describe('porcelain status parsing', () => {
     expect(error).toBeInstanceOf(UnsafeIndexError);
     expect((error as UnsafeIndexError).paths).toEqual(['../outside']);
   });
+  it('T10 a path (or rename source) that arrives with U+FFFD in it — file-name bytes that were not valid UTF-8 — is an inoperable row: shown, never selected, never handed back to git', () => {
+    expect(parsePorcelainStatus('A  caf\uFFFD\0 M caf\uFFFD\0R  new.txt\0old\uFFFD.txt\0 M café.txt\0')).toEqual<FileChange[]>([
+      { path: 'caf\uFFFD', status: 'A', statusX: 'A', statusY: ' ', kind: 'text', inoperable: true },
+      { path: 'caf\uFFFD', status: 'M', statusX: ' ', statusY: 'M', kind: 'text', inoperable: true },
+      { path: 'new.txt', oldPath: 'old\uFFFD.txt', status: 'R', statusX: 'R', statusY: ' ', kind: 'text', inoperable: true },
+      { path: 'café.txt', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' },
+    ]);
+  });
 });

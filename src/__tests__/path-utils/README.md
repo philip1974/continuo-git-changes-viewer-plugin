@@ -30,3 +30,11 @@ dropped — forged, see below — or kept as a read-only "inoperable" row),
   (`c:notes.txt`, `..\x`) are legitimate file names elsewhere: they do not
   condemn the repository and are listed as inoperable rows (`status-scanner`
   T8, `inoperable-entries`).
+
+- T8: a name containing U+FFFD is not accepted either. File-name bytes that
+  are not valid UTF-8 (possible in an index; on Linux also on disk) reach the
+  plugin as U+FFFD, and passing that string back to git names a different
+  path — a file whose name really contains U+FFFD, if there is one
+  (`repo-safety-real-git` R76). It is not evidence of a forged index, only an
+  inoperable row (`status-scanner` T10). A name that really contains U+FFFD is
+  refused as well (conservative).

@@ -5,7 +5,7 @@ import { canStageHunk } from '../git/can-stage-hunk';
 import { canUnstageHunk } from '../git/can-unstage-hunk';
 import { MAX_FILE_BYTES, type DiffMode, type DiffResult } from '../git/diff-fetcher';
 import { discardHunk } from '../git/discard-hunk';
-import { extractHunkPatchFromUnifiedDiff } from '../git/hunk-patch';
+import { extractHunkPatchFromUnifiedDiff, hasUndecodableText, NON_UTF8_HUNK_NOTE } from '../git/hunk-patch';
 import { joinRepoPath } from '../git/path-utils';
 import { stageHunk } from '../git/stage-hunk';
 import { unstageHunk } from '../git/unstage-hunk';
@@ -453,6 +453,11 @@ export function DiffView({
 
   return (
     <main className="cgv-diff">
+      {hasUndecodableText(diff.unifiedDiff) ? (
+        <div className="cgv-truncated-note" role="note">
+          {NON_UTF8_HUNK_NOTE}
+        </div>
+      ) : null}
       <UnifiedDiffView
         diff={diff.unifiedDiff}
         onJumpLine={onJumpLine}

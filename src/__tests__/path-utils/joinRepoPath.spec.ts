@@ -119,3 +119,21 @@ describe('every file-level entry point applies the same check', () => {
     expect(isPathSafeForPatch('src/a b.ts')).toBe(true);
   });
 });
+
+// 宿主按 UTF-8 解码:不是合法 UTF-8 的文件名字节变成 U+FFFD,传回 git 指的是另一个路径
+describe('a name containing U+FFFD is not passed back to git', () => {
+  it('T8 isSafeRepoRelativePath / joinRepoPath / isPathSafeForPatch refuse it, and stage / unstage / discard refuse without spawning git', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, signal: null, timedOut: false, truncated: false });
+    const app = { shell: { exec } } as unknown as CoPluginApp;
+    for (const path of ['caf�', 'dir�/a.txt', 'dir/�']) {
+      expect(isSafeRepoRelativePath(path), path).toBe(false);
+      expect(joinRepoPath('/repo', path), path).toBeNull();
+      expect(isPathSafeForPatch(path), path).toBe(false);
+      for (const op of [stageFile, unstageFile, discardFile]) expect((await op(app, '/repo', path)).ok, path).toBe(false);
+    }
+    expect(exec).not.toHaveBeenCalled();
+    // 不是伪造 index 的证据(git 会正常记录这样的名字):只是不可操作
+    expect(isForgedIndexPath('caf�')).toBe(false);
+    expect(isSafeRepoRelativePath('café/한글.txt')).toBe(true);
+  });
+});

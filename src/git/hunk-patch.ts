@@ -34,9 +34,11 @@ export function buildHunkPatch(input: HunkInput): string {
  * 保留:单段的普通修改、`old mode 100644` / `new mode 100755` + 内容(hunk 只动内容,mode 留给文件级操作)、
  * 目标改变的符号链接(`index … 120000`)——三者按 hunk 应用实测正确。
  * 只看行首:内容行总带 `+` / `-` / 空格前缀(diff.suppressBlankEmpty 已固定为 false),不会与这些头混淆。
+ * - 文本里有 U+FFFD:见 hasUndecodableText。
  * 渲染 hunk 按钮(can*Hunk)与构造补丁(extractHunkPatchFromUnifiedDiff)两处都用它。
  */
 export function isHunkPatchableDiff(unifiedDiff: string): boolean {
+  if (hasUndecodableText(unifiedDiff)) return false;
   let sections = 0;
   for (const line of unifiedDiff.split('\n')) {
     if (line.startsWith('diff --git ')) {
@@ -54,6 +56,22 @@ export function isHunkPatchableDiff(unifiedDiff: string): boolean {
   }
   return true;
 }
+
+/**
+ * diff 文本里有 U+FFFD(替换字符)。宿主把 git 的输出按 UTF-8 解码,不是合法 UTF-8 的字节(Latin-1 / GBK 等编码
+ * 的文本——git 照样把这些文件判为 text)都变成 U+FFFD;hunk 补丁是从这段文本拼出来、再按 UTF-8 写回 git 的,
+ * 原来的字节回不去:实测 Stage hunk 之后 index 里是 `EF BF BD` 而工作树是 `E9`,Discard / Unstage hunk 同样把
+ * U+FFFD 写进工作树 / index,git 都报成功。解码之后无法区分"原本就是 U+FFFD 这个字符"(合法 UTF-8 `EF BF BD`)
+ * 与"被替换的非法字节",所以两者一律不能按 hunk 操作——对前者是保守的误伤。文件级操作不经过这段文本,不受影响。
+ */
+export function hasUndecodableText(text: string): boolean {
+  return text.includes('\uFFFD');
+}
+
+/** diff 视图在 hasUndecodableText 时显示的说明(此时没有 hunk 按钮)。 */
+export const NON_UTF8_HUNK_NOTE =
+  'This file contains bytes that are not valid UTF-8 (shown as \uFFFD) or the replacement character itself. ' +
+  'Hunk actions are not available because they would not write those bytes back unchanged. Use the file-level actions instead.';
 
 export function extractHunkPatchFromUnifiedDiff(
   filePath: string,

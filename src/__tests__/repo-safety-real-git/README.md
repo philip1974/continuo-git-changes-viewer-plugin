@@ -408,3 +408,16 @@ driven by the test; run with git 2.50.1 and 2.56.1):
   the panel now shows v2; the second click commits exactly that
   (`commit-editor-component` T29–T30).
 - P3: with nothing changed in between, the first click commits what is shown.
+
+Bytes that are not valid UTF-8 (`hunk-patch-builder` T8, `path-utils` T8,
+`status-scanner` T10; run with git 2.50.1 and 2.56.1):
+
+- R75: a text file with a Latin-1 line. A patch put together the old way is
+  applied by git with exit 0 and leaves `EF BF BD` in the index (Stage hunk) or
+  in the working tree (Discard hunk) where the byte was `E9`. The panel shows
+  no hunk button for such a diff in Changes or Staged, builds no patch, and
+  says why; file-level Stage / Unstage / Discard keep the bytes exactly.
+- R76: an index entry whose name is the Latin-1 bytes `caf\xE9` next to a
+  file really named `caf` + U+FFFD: both arrive as the same string. Both rows
+  are inoperable, and stage / unstage / discard / diff refuse the name without
+  running git — the other file is untouched.
