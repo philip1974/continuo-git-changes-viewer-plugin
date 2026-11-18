@@ -20,7 +20,8 @@ import { isNotFoundError } from './fs-errors';
 // 1. 配置:`git config --list --show-scope --includes -z` 只读配置文件,不执行任何程序
 //    (实测:恶意 filter/textconv/diff.external/fsmonitor/gpg.program 均不触发)。只看仓库作用域
 //    (local / worktree,含 include / includeIf 引入的文件);全局 / 系统 config 是用户自己的,可信。
-//    命中执行类键(UNSAFE_KEY_PATTERNS)或重定向类键(core.worktree、非 false 的 core.bare)即受限。
+//    命中执行类键(UNSAFE_KEY_PATTERNS)或重定向类键(core.worktree、非 false 的 core.bare、
+//    core.attributesFile、core.excludesFile)即受限。
 // 2. 布局(纵深,不依赖键列表):一次 `git rev-parse`(见 LAYOUT_PROBE_ARGS)向 git 自己询问
 //    "cwd 是否就是工作树顶层"以及 git 目录 / common 目录的绝对路径,要求:
 //    - `--is-inside-work-tree` 为 true 且 `--show-prefix` 为空 ⇒ git 认定的工作树顶层就是 cwd(workspace 根)。
@@ -57,8 +58,8 @@ import { isNotFoundError } from './fs-errors';
 //   配置式 hooks(hook.*,git >= 2.54)不走 hooks 目录,上面的中和对它无效 → 列为受限键(见列表末尾)。
 //
 // 评估后不列入的"指向外部文件"的键(实测不泄露内容、不越界读写,见 R30):
-// - core.excludesFile / core.attributesFile / diff.orderFile / mailmap.file:只按模式 / 映射解析,
-//   内容不出现在 stdout / stderr(attributes 要执行程序仍需 filter.* / diff.* 键,已检测)。
+// - diff.orderFile / mailmap.file:只按模式 / 映射解析,内容不出现在 stdout / stderr。
+//   (core.attributesFile / core.excludesFile 不在此列——见 isRedirectConfigEntry,R30b。)
 // - commit.template:插件用 `commit -F -`,不读模板。
 // - core.symlinks / core.fileMode:工作树里的符号链接只显示链接目标路径,不跟随。
 // - core.sparseCheckout / index.sparse / core.splitIndex / status.showUntrackedFiles:只影响工作树内的呈现。
@@ -126,10 +127,20 @@ export function parseScopedConfigList(stdout: string): ConfigEntry[] {
   return entries;
 }
 
-/** 重定向类键:让 git 把工作树解析到别处(core.worktree)或声明没有工作树(core.bare)。 */
+/**
+ * 重定向类键:让 git 把工作树解析到别处(core.worktree)、声明没有工作树(core.bare),或让 git 读取
+ * 仓库指定的任意文件(core.attributesFile / core.excludesFile)。
+ *
+ * 后两个:attributes 文件里不合法的属性名会被 git 原样打到 stderr(`<词> is not a valid attribute name:
+ * <文件>:<行>`,status / diff / add 都会,实测 git 2.50 / 2.56),插件在命令失败时把 stderr 放进 toast——
+ * 仓库把它指向 `~/.netrc` 之类就把其中的词带上屏幕。excludes 文件实测不回显,但同属"按仓库的指示读
+ * 工作区外的文件",一并处理。不用 `-c core.attributesFile=` 固定:那会连用户自己的全局 attributes
+ * (含默认的 $XDG_CONFIG_HOME/git/attributes)一起关掉,可能改变 add 时的换行 / 文本规范化结果;而这两个
+ * 键正常都设在 global,出现在仓库作用域很少见,受限的误伤面更小。任何取值都受限(不判断是否指向仓库内)。
+ */
 export function isRedirectConfigEntry(entry: ConfigEntry): boolean {
   if (!UNTRUSTED_SCOPES.has(entry.scope)) return false;
-  if (/^core\.worktree$/i.test(entry.key)) return true;
+  if (/^core\.(worktree|attributesfile|excludesfile)$/i.test(entry.key)) return true;
   if (/^core\.bare$/i.test(entry.key)) {
     return entry.value === null || !GIT_FALSE.test(entry.value.trim());
   }

@@ -812,9 +812,9 @@ describe('repo safety against redirection outside the workspace (real git)', () 
     expect(await detectRepo(app)).toMatchObject({ ok: false, reason: 'not-git-root' });
   });
 
-  it('R30 keys evaluated as non-redirecting stay trusted and leak nothing: core.excludesFile / core.attributesFile / mailmap.file / diff.orderFile / commit.template pointing at an outside file', async () => {
+  it('R30 keys evaluated as non-redirecting stay trusted and leak nothing: mailmap.file / diff.orderFile / commit.template pointing at an outside file', async () => {
     const outside = join(secretDir, 'f.txt');
-    for (const key of ['core.excludesFile', 'core.attributesFile', 'mailmap.file', 'diff.orderFile', 'commit.template']) {
+    for (const key of ['mailmap.file', 'diff.orderFile', 'commit.template']) {
       git(repo, 'config', key, outside);
     }
     appendFileSync(join(repo, 'f.txt'), 'two\n');
@@ -826,6 +826,33 @@ describe('repo safety against redirection outside the workspace (real git)', () 
     expect(await gitCommit(app, repo, 'typed message')).toMatchObject({ ok: true });
     expect(await readHeadMessage(app, repo)).toBe('typed message');
     expect(git(repo, 'show', '--stat', 'HEAD')).not.toContain(SECRET);
+  });
+
+  it('R30b core.attributesFile naming an outside file: git prints words of that file on stderr ("<word> is not a valid attribute name"), which a failing command would put in a toast; with core.excludesFile it is restricted', async () => {
+    const outside = join(secretDir, 'netrc');
+    writeFileSync(outside, `machine example.com login me password p@ss/${SECRET}\n`);
+    git(repo, 'config', 'core.attributesFile', outside);
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+
+    // 证明泄露:不经守卫,插件自己的 git add 的 stderr 带出外部文件里的词
+    const add = await gitExec(realApp(), repo, ['add', '--', 'f.txt']);
+    expect(add.stderr).toContain(`p@ss/${SECRET} is not a valid attribute name`);
+
+    git(repo, 'config', '--unset-all', 'core.attributesFile');
+
+    for (const key of ['core.attributesFile', 'core.excludesFile']) {
+      git(repo, 'config', key, outside);
+      const stderr: string[] = [];
+      const app = tamperedApp({ stderr });
+      const { guard } = installRepoSafetyGuard(app);
+      const verdict = await guard.check(repo, { fresh: true });
+      expect(verdict).toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: [key.toLowerCase()] });
+      expect(verdict.kind === 'restricted' && verdict.message).toContain('point git away from this folder');
+      const staged = await stageFile(app, repo, 'f.txt');
+      expect(staged.ok).toBe(false);
+      expect(`${staged.error}${await everythingShown(app)}${stderr.join('')}`).not.toContain(SECRET);
+      git(repo, 'config', '--unset-all', key);
+    }
   });
 
   it('R31 probeRepoSafety reports reason unsafe-layout for a git dir outside the workspace', async () => {

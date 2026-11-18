@@ -22,7 +22,7 @@ keys git gives no switch for.
 
 | Handling | Keys | Count |
 | --- | --- | ---: |
-| **Restricted** — repository is not operated on | `filter.<drv>.clean/smudge/process`, `diff.<drv>.textconv/command`, `diff.external`, `merge.<drv>.driver`, `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `core.askPass`, `core.gitProxy`, `core.alternateRefsCommand`, `uploadpack.packObjectsHook`, `remote.<n>.uploadpack/receivepack`, `protocol.<n>.allow`, `trailer.<k>.cmd/command`, `gc.recentObjectsHook`, `hook.*` (config-defined hooks, git ≥ 2.54), `core.worktree`, `core.bare` (unless false); by value: `core.fsmonitor` (non-boolean), `diff.submodule` (other than short/log); plus git-lfs `lfs.extension.*` / `lfs.customtransfer.*` | 21 |
+| **Restricted** — repository is not operated on | `filter.<drv>.clean/smudge/process`, `diff.<drv>.textconv/command`, `diff.external`, `merge.<drv>.driver`, `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `core.askPass`, `core.gitProxy`, `core.alternateRefsCommand`, `uploadpack.packObjectsHook`, `remote.<n>.uploadpack/receivepack`, `protocol.<n>.allow`, `trailer.<k>.cmd/command`, `gc.recentObjectsHook`, `hook.*` (config-defined hooks, git ≥ 2.54), `core.worktree`, `core.bare` (unless false), `core.attributesFile`, `core.excludesFile`; by value: `core.fsmonitor` (non-boolean), `diff.submodule` (other than short/log); plus git-lfs `lfs.extension.*` / `lfs.customtransfer.*` | 21 |
 | **Pinned with `-c`** (every command) | `core.fsmonitor=false`, `log.showSignature=false`, `submodule.recurse=false`, `diff.submodule=short`, `status.submoduleSummary=false`, `maintenance.auto=false`, `gc.auto=0`, `core.protectHFS=true`, `core.protectNTFS=true`, `i18n.commitEncoding=UTF-8`; `fsmonitor.*` (daemon never started) | 12 |
 | **Pinned with `-c`** (every command but `commit`, whose `-c` values reach hooks) | `protocol.allow=never` (also on a commit whose hooks were not confirmed), `core.hooksPath=/dev/null`, `hook.<event>.enabled=false` for every githooks(5) event (git ≥ 2.55), `status.renames=true`, `diff.renames=true`, `color.ui=false`, `color.diff=false`, `diff.noprefix=false`, `diff.mnemonicPrefix=false`, `diff.srcPrefix=a/`, `diff.dstPrefix=b/`, `diff.context=3`, `diff.interHunkContext=0`, `diff.suppressBlankEmpty=false`, `diff.relative=false`, `i18n.logOutputEncoding=UTF-8`, `apply.ignoreWhitespace=no` | 16 |
 | **Never triggered** — auto-maintenance is pinned off | remaining `gc.*`, `maintenance.*` | 31 |
@@ -35,11 +35,18 @@ keys git gives no switch for.
 
 Notes on the last two rows (keys whose names look dangerous):
 
-- `core.excludesFile`, `core.attributesFile`, `diff.orderFile`, `mailmap.file`,
-  `gpg.ssh.allowedSignersFile` name files outside the workspace, but git only
-  parses them as patterns / mappings and never echoes their content
-  (`repo-safety-real-git` R30). Attributes can only select drivers, and every
-  driver key that executes is restricted.
+- `diff.orderFile`, `mailmap.file`, `gpg.ssh.allowedSignersFile` name files
+  outside the workspace, but git only parses them as patterns / mappings and
+  does not echo their content (`repo-safety-real-git` R30).
+- `core.attributesFile` is different and therefore restricted: for a line whose
+  attribute name is malformed git prints `<word> is not a valid attribute
+  name: <file>:<line>` on stderr (status, diff, add), i.e. words of the named
+  file, and the plugin shows stderr when a command fails (R30b).
+  `core.excludesFile` showed no echo but is restricted with it (same "read the
+  file the repository names" shape; both normally live in global config). Not
+  pinned empty instead: that would also disable the user's global attributes
+  (text / eol normalisation on `add`). Attributes can only select drivers, and
+  every driver key that executes is restricted.
 - `commit.gpgSign` (with `gpg.format`, `user.signingKey`): the commit runs the
   user's own `gpg` / `ssh-keygen` from `PATH`. The program path keys are
   restricted, and the key id is passed as the argument of `-u` / `-f`, so it

@@ -92,9 +92,13 @@ proves the leak or the outside write with the guard absent):
   bare repository, subfolder of a repository.
 - R29: a folder that is not a git repository is not restricted; detection
   still reports not-git-root.
-- R30: keys judged non-redirecting (core.excludesFile, core.attributesFile,
-  mailmap.file, diff.orderFile, commit.template naming an outside file) stay
-  trusted and nothing of that file is shown or committed.
+- R30: keys judged non-redirecting (mailmap.file, diff.orderFile,
+  commit.template naming an outside file) stay trusted and nothing of that file
+  is shown or committed.
+- R30b: `core.attributesFile` naming an outside file → git's stderr carries
+  words of it (`<word> is not a valid attribute name: <file>:<line>`), shown
+  with the guard absent; `core.attributesFile` / `core.excludesFile` in the
+  repository config → restricted, nothing of the file reaches the plugin.
 - R31: `probeRepoSafety` reports reason `unsafe-layout`.
 
 Nested repositories (a gitlink in the outer index is enough, no `.gitmodules`;

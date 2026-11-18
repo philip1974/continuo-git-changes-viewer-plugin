@@ -159,8 +159,6 @@ describe('isUnsafeConfigEntry', () => {
     'diff.x.binary',
     'remote.origin.url',
     'user.name',
-    'core.excludesfile',
-    'core.attributesfile',
     'core.symlinks',
     'core.sparsecheckout',
     'commit.template',
@@ -191,6 +189,21 @@ describe('isRedirectConfigEntry', () => {
     }
     expect(isUnsafeConfigEntry({ scope: 'local', key: 'core.bare', value: null })).toBe(true);
     expect(isUnsafeConfigEntry({ scope: 'system', key: 'core.bare', value: 'true' })).toBe(false);
+  });
+
+  it('T18b core.attributesFile / core.excludesFile in local / worktree scope are flagged whatever their value (git reads the named file, and echoes words of a malformed attributes file on stderr); global ones are the user\'s own', () => {
+    for (const key of ['core.attributesfile', 'core.excludesfile', 'Core.AttributesFile', 'CORE.EXCLUDESFILE']) {
+      for (const scope of ['local', 'worktree']) {
+        for (const value of ['/Users/me/.netrc', '~/.ssh/id_rsa', '.gitattributes-extra', '']) {
+          expect(isRedirectConfigEntry({ scope, key, value })).toBe(true);
+          expect(isUnsafeConfigEntry({ scope, key, value })).toBe(true);
+        }
+        expect(isUnsafeConfigEntry({ scope, key, value: null })).toBe(true);
+      }
+      for (const scope of ['global', 'system', 'command']) {
+        expect(isUnsafeConfigEntry({ scope, key, value: '~/.config/git/attributes' })).toBe(false);
+      }
+    }
   });
 
   it('T20 executable keys are not redirect keys', () => {

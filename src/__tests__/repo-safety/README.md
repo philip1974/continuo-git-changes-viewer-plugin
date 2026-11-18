@@ -29,8 +29,14 @@ restricted verdict at one step skips the later ones.
      it on the event without consulting the hooks directory, so the
      `core.hooksPath=/dev/null` override does not stop it (verified with git
      2.56.1: it fires on `add` and on a `status` that refreshes the index).
-   - Redirect keys → restricted: `core.worktree` (any value) and `core.bare`
-     unless false.
+   - Redirect keys → restricted: `core.worktree` (any value), `core.bare`
+     unless false, and `core.attributesFile` / `core.excludesFile` (any value):
+     git reads whatever file the repository names, and prints words of a
+     malformed attributes file on stderr (`<word> is not a valid attribute
+     name: <file>:<line>`), which the plugin shows in a toast when a command
+     fails. They are restricted rather than pinned empty with `-c`, because a
+     pin would also switch off the user's own global attributes / excludes
+     (their normal home; in repository scope the keys are rare).
 2. **Layout** (defense in depth, independent of the key list) — one
    `git rev-parse --path-format=absolute --is-inside-work-tree --show-prefix
    --absolute-git-dir --git-common-dir --show-toplevel`:
@@ -65,8 +71,8 @@ restricted verdict at one step skips the later ones.
   + `GIT_ALLOW_PROTOCOL=`),
   core.hooksPath (hooks are disabled for everything but commit, which asks for
   confirmation), and keys that merely name an outside file that git parses as
-  patterns without echoing it (core.excludesFile, core.attributesFile,
-  diff.orderFile, mailmap.file) or that the plugin never uses
+  patterns without echoing it (diff.orderFile, mailmap.file) or that the
+  plugin never uses
   (commit.template).
 - The verdict is cached per repo root keyed by `.git/config` mtime+size
   (`app.fs.stat`, no process). No cache when stat is unavailable or the config
@@ -77,6 +83,6 @@ The full key-by-key audit (every documented git config key against the
 plugin's command set, and how each group is handled) is in
 [`doc/git-config-classification.md`](../../../doc/git-config-classification.md).
 
-T1 output parsing. T2–T5 executable key classification (T4b diff.submodule). T18–T20 redirect keys.
+T1 output parsing. T2–T5 executable key classification (T4b diff.submodule). T18–T20 redirect keys (T18b attributesFile / excludesFile).
 T6–T9 config probe and fail-closed. L1–L7 layout probe. S1–S7 symlink scan.
 T10–T15b cache. T16–T17 guard wiring into `gitExec`.
