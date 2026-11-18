@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildGitArgs, gitExec, registerGitGuard } from '../../git/exec';
+import { buildGitArgs, buildGitEnv, gitExec, registerGitGuard } from '../../git/exec';
 import type { CoPluginApp } from '../../sdk/types';
 
 function makeApp() {
@@ -35,6 +35,7 @@ const ENV = {
   GIT_TERMINAL_PROMPT: '0',
   GIT_EDITOR: ':',
   GIT_NO_LAZY_FETCH: '1',
+  GIT_ALLOW_PROTOCOL: '',
 };
 
 describe('gitExec hardened shell wrapper', () => {
@@ -138,5 +139,12 @@ describe('gitExec hardened shell wrapper', () => {
 
     expect(guard).toHaveBeenCalledWith('/repo');
     expect(exec).toHaveBeenCalledWith('git', [...GLOBALS, ...NO_NETWORK, 'rev-parse', 'HEAD'], expect.anything());
+  });
+
+  it('T9 non-commit calls set GIT_ALLOW_PROTOCOL to an empty list (beats repo protocol.<name>.allow); caller env cannot re-enable it; commit leaves it unset', () => {
+    for (const sub of [['status'], ['show', 'HEAD:a'], ['diff'], ['add', '--', 'a'], ['rev-parse', 'HEAD']]) {
+      expect(buildGitEnv(sub, { GIT_ALLOW_PROTOCOL: 'file:ssh:ext' })).toMatchObject({ GIT_ALLOW_PROTOCOL: '' });
+    }
+    expect(buildGitEnv(['commit', '-F', '-'])).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
   });
 });

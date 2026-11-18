@@ -29,3 +29,8 @@ plugin's git helpers.
   the message) → unknown; with a scope covering the target → present; git
   really follows the link and runs its pre-commit.
 - R13: host-like scoped fs: samples only / missing hooks dir → none.
+- R14: partial clone whose repo config sets `protocol.file.allow=always` and a
+  marker `remote.origin.uploadpack`; with `GIT_NO_LAZY_FETCH` removed (git <
+  2.45) the plugin's `show` is still refused (`transport 'file' not allowed`);
+  removing `GIT_ALLOW_PROTOCOL` too lets the fetch run the uploadpack (proves
+  `-c protocol.allow=never` alone is bypassed).

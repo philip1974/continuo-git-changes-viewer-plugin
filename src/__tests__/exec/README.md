@@ -16,10 +16,13 @@ invocation against executable settings in an untrusted repository config:
   `status` → `--ignore-submodules=dirty` (no recursion into nested repos whose
   config is not inspected).
 - Env: `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=:`, and
-  `GIT_NO_LAZY_FETCH=1` (except `commit`).
+  (except `commit`) `GIT_NO_LAZY_FETCH=1` plus `GIT_ALLOW_PROTOCOL=` (empty
+  list): a repository `protocol.<name>.allow=always` outranks
+  `-c protocol.allow=never`, but no config can override the env variable.
 - An app shell may carry a guard (see `repo-safety`); a refusal or a guard error
   returns a failed result (exit 128) and git is not spawned (fail-closed).
 
 T1 status argv + env. T2 caller env preserved, hardening values win. T3 diff/show/log
 flags. T4 commit keeps hooks working (no network block, no hooksPath override). T5 guard refusal skips spawn.
 T6 throwing guard fails closed. T7 passing guard runs the hardened command. T8 every non-commit subcommand disables hooks.
+T9 `GIT_ALLOW_PROTOCOL` is empty for non-commit calls (caller env cannot re-enable it) and unset for commit.

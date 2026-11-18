@@ -457,4 +457,51 @@ describe('repo safety against a real git with a hostile .git/config', () => {
     rmSync(join(repo, '.git', 'hooks'), { recursive: true });
     expect(await detectRepoHooks(hostScopedApp(repo), repo)).toEqual({ kind: 'none' });
   });
+
+  it('R14 partial clone whose repo config sets protocol.file.allow=always + remote uploadpack: GIT_ALLOW_PROTOCOL="" still blocks the lazy fetch (even without GIT_NO_LAZY_FETCH)', async () => {
+    const server = join(base, 'server');
+    mkdirSync(server);
+    git(server, 'init', '-q', '-b', 'main');
+    writeFileSync(join(server, 'f.txt'), 'hi\n');
+    git(server, 'add', '.');
+    git(server, 'commit', '-qm', 's');
+    git(server, 'config', 'uploadpack.allowFilter', 'true');
+    const client = join(base, 'client');
+    execFileSync('git', ['clone', '-q', '--filter=blob:none', '--no-checkout', `file://${server}`, client], { env: ENV });
+    const up = join(binDir, 'uploadpack');
+    writeFileSync(up, `#!/bin/sh\ntouch "${join(markDir, 'uploadpack')}"\nexec git-upload-pack "$@"\n`);
+    chmodSync(up, 0o755);
+    git(client, 'config', 'remote.origin.uploadpack', up);
+    // 仓库级 protocol.<name>.allow 优先于 `-c protocol.allow=never`
+    git(client, 'config', 'protocol.file.allow', 'always');
+
+    // 去掉插件 env 中的指定变量后执行:去掉 GIT_NO_LAZY_FETCH 模拟 git < 2.45(不认该变量)
+    const run = async (drop: string[]) => {
+      const app = realApp();
+      const exec = app.shell.exec.bind(app.shell);
+      const stripped = {
+        ...app,
+        shell: {
+          exec: (cmd: string, args: readonly string[], opts: PluginShellExecOptions = {}) => {
+            const env = { ...(opts.env ?? {}) };
+            for (const k of drop) delete env[k];
+            return exec(cmd, args, { ...opts, env });
+          },
+        },
+      } as unknown as CoPluginApp;
+      clearMarks();
+      return gitExec(stripped, client, ['show', 'HEAD:f.txt']);
+    };
+
+    // GIT_ALLOW_PROTOCOL="" 挡住惰性拉取(未拉取,blob 仍缺失,下面的对照场景不受影响)
+    const blocked = await run(['GIT_NO_LAZY_FETCH']);
+    expect(blocked.exitCode).not.toBe(0);
+    expect(blocked.stderr).toMatch(/transport 'file' not allowed/);
+    expect(marks()).toEqual([]);
+
+    // 证明 fixture:只剩 `-c protocol.allow=never` 时挡不住(拉取成功并执行了仓库指定的 uploadpack)
+    const leaked = await run(['GIT_NO_LAZY_FETCH', 'GIT_ALLOW_PROTOCOL']);
+    expect(leaked.exitCode).toBe(0);
+    expect(marks()).toEqual(['uploadpack']);
+  });
 });

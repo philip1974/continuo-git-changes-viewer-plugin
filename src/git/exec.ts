@@ -66,13 +66,21 @@ export const SUBCOMMAND_HARDENING: Readonly<Record<string, readonly string[]>> =
 
 // GIT_TERMINAL_PROMPT=0:不在终端提示凭据;GIT_EDITOR=':':git 把 ':' 视为"不启动编辑器",
 // 避免执行 core.editor;GIT_NO_LAZY_FETCH=1(git ≥2.45,同上 commit 例外):禁止惰性拉取。
+// GIT_ALLOW_PROTOCOL=''(同上 commit 例外):允许的传输协议为空列表。`-c protocol.allow=never` 不够——
+// 仓库 config 里的 `protocol.<name>.allow=always` 优先于它;而该环境变量设置后 git 完全不看
+// protocol.*.allow 配置,任何 config 都覆盖不了(实测 git 2.50:partial clone + 仓库设
+// protocol.file.allow=always + remote.origin.uploadpack,去掉 GIT_NO_LAZY_FETCH 时仅靠 -c 会拉取并执行
+// uploadpack,加上本变量则 `transport 'file' not allowed`)。
 export const GIT_HARDENING_ENV: Readonly<Record<string, string>> = {
   GIT_OPTIONAL_LOCKS: '0',
   GIT_TERMINAL_PROMPT: '0',
   GIT_EDITOR: ':',
 };
 
-const NO_NETWORK_ENV: Readonly<Record<string, string>> = { GIT_NO_LAZY_FETCH: '1' };
+const NO_NETWORK_ENV: Readonly<Record<string, string>> = {
+  GIT_NO_LAZY_FETCH: '1',
+  GIT_ALLOW_PROTOCOL: '',
+};
 
 function runsHooks(args: readonly string[]): boolean {
   return args[0] !== undefined && HOOK_RUNNING_SUBCOMMANDS.has(args[0]);

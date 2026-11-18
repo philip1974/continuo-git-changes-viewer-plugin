@@ -16,7 +16,7 @@ import { gitExecUnguarded, registerGitGuard } from './exec';
 // - core.editor / sequence.editor:env GIT_EDITOR=':'。
 // - diff.external:另加 `--no-ext-diff`(本列表仍检测,双保险)。
 // - core.sshCommand / credential.* / core.askPass 以外的传输类:只在联网时执行,而读命令已
-//   `-c protocol.allow=never` + GIT_NO_LAZY_FETCH=1 断网;per-repo sshCommand / credential.helper
+//   `-c protocol.allow=never` + GIT_NO_LAZY_FETCH=1 + GIT_ALLOW_PROTOCOL= 断网;per-repo sshCommand / credential.helper
 //   是常见的合法配置,检测会误伤。
 // - core.hooksPath / .git/hooks:不在此受限检测。hooks 并非只在 commit 时运行——写 index 的
 //   add / apply --cached / restore / reset 会触发 post-index-change,checkout / restore 触发
