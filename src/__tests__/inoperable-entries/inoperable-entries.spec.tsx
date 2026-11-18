@@ -160,6 +160,30 @@ describe('inoperable entries: file list rows', () => {
       errors.mockRestore();
     }
   });
+
+  // I11 的消歧(不可操作行的 key = 路径 + `#序号`)与可操作行的 key(= 路径)可以撞上:暂存 `x\..`(不可操作)与
+  // `x\..#0`(可操作)→ 两行同 key,refresh 之后 DOM 与列表不一致(复核者实测:Staged 区出现幽灵行)。
+  it('I12 an inoperable row and an ordinary row whose name is the inoperable name plus `#0` never share a key: as rows come and go around them the rendered rows always equal the list, with no duplicate-key warning', () => {
+    const ro: FileChange = { path: 'x\\..', status: 'A', statusX: 'A', statusY: ' ', kind: 'text', inoperable: true };
+    const ok: FileChange = { path: 'x\\..#0', status: 'A', statusX: 'A', statusY: ' ', kind: 'text' };
+    const a: FileChange = { path: 'a', status: 'A', statusX: 'A', statusY: ' ', kind: 'text' };
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { container, rerender } = renderList([ro, ok]);
+      const shown = () =>
+        [...container.querySelectorAll('li.cgv-file-li')].map(
+          (li) => `${li.querySelector('.cgv-path')!.textContent}${li.querySelector('.cgv-unstage-action') ? '[op]' : '[ro]'}`,
+        );
+      expect(shown()).toEqual(['x\\..[ro]', 'x\\..#0[op]']);
+      for (const list of [[a, ro, ok], [ro, ok], [ok], [ro, ok]]) {
+        rerender(<FileList store={createGitStore()} changes={list} onUnstageFile={() => undefined} />);
+        expect(shown()).toEqual(list.map((c) => `${c.path}${c.inoperable ? '[ro]' : '[op]'}`));
+      }
+      expect(errors.mock.calls.filter((c) => String(c[0]).includes('same key'))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
 });
 
 describe('inoperable entries: whole panel', () => {

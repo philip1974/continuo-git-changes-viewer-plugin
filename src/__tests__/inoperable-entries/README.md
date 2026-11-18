@@ -42,6 +42,10 @@ T8–T9), and the panel shows them read-only:
   (`caf\xE9.txt` and `caf\xE8.txt` both become `caf�.txt`) are two rows
   in every section, with no duplicate React key (the row index is part of the
   key of an inoperable row only; ordinary rows keep a stable key).
+- I12: the two kinds of rows have separate key spaces (`<section>:ro:<index>`
+  and `<section>:ok:<XY>:<path>`). Before, an inoperable row's key was its path
+  plus `#<index>` and an ordinary row's was its path: `x\..` (inoperable) and
+  `x\..#0` (ordinary) shared a key and a refresh left a ghost row in Staged.
 
 Real-git coverage: `repo-safety-real-git` R60 (the rows shown as staged are
 exactly the paths in the resulting commit).

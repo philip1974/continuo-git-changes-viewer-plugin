@@ -88,9 +88,11 @@ function Section({
       <ul>
         {rows.map((change, index) => (
           <li
-            // 不可操作行的名字可能是解码之后才相同(两个不同的非 UTF-8 字节序列都变成 U+FFFD):加上行序号消歧。
-            // 这些行没有状态、不可操作,按位置复用无妨;可操作行的路径在一个区里唯一,key 保持稳定。
-            key={`${title}:${change.statusX}${change.statusY}:${change.path}${change.inoperable ? `#${index}` : ''}`}
+            // 两类行的 key 空间互不重叠(`ro:` / `ok:` 前缀)。不可操作行的名字可能是解码之后才相同(两个不同的
+            // 非 UTF-8 字节序列都变成 U+FFFD):按行序号区分——这些行没有状态、不可操作,按位置复用无妨。可操作行的
+            // 路径在一个区里唯一,key 保持稳定(选择、滚动位置不受影响)。此前不可操作行是"路径 + `#序号`"、可操作行
+            // 是"路径":`x\..`(不可操作)与 `x\..#0`(可操作)撞 key,refresh 之后 Staged 区出现幽灵行。
+            key={change.inoperable ? `${title}:ro:${index}` : `${title}:ok:${change.statusX}${change.statusY}:${change.path}`}
             className="cgv-file-li"
           >
             {change.inoperable ? (
