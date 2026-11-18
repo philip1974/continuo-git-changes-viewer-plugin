@@ -229,6 +229,10 @@
 
 - [`preview-drawer-fsm.spec.tsx`](./preview-drawer-fsm/preview-drawer-fsm.spec.tsx)
 
+## [Render Limits](./render-limits/README.md)
+
+- [`render-limits.spec.tsx`](./render-limits/render-limits.spec.tsx)
+
 ## [Repo Detection](./repo-detect/README.md)
 
 - [`repo-detect.spec.ts`](./repo-detect/repo-detect.spec.ts)

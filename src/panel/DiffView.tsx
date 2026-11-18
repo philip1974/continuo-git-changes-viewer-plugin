@@ -57,6 +57,10 @@ function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string }
   );
 }
 
+// 每行一个元素、没有虚拟化:超长 diff(几十万行)会卡死面板。只渲染前 MAX_DIFF_LINES 行并说明;
+// 数据不裁剪,hunk 操作仍从完整 diff 提取补丁。
+export const MAX_DIFF_LINES = 5000;
+
 // v0.1.4 hotfix: unified diff inline renderer 替 side-by-side MergeView。
 // 像 `git diff` 终端那样：+ 行绿底 / - 行红底 / @@ hunk 头蓝 / context 行普通。
 // Side-by-side MergeView 留 v0.2 议题（用 @codemirror/merge 时 layout / hidden a-side 问题）。
@@ -75,7 +79,8 @@ function UnifiedDiffView({
     return <div className="cgv-diff-empty">(no textual diff — file may be binary or identical)</div>;
   }
 
-  const lines = diff.split('\n');
+  const allLines = diff.split('\n');
+  const lines = allLines.length > MAX_DIFF_LINES ? allLines.slice(0, MAX_DIFF_LINES) : allLines;
   const actions = hunkActions ?? [];
   // 解析当前文件新版行号（用于 jump-back banner）：从 @@ -a,b +c,d @@ 的 c 起算
   let currentNewLine = 0;
@@ -146,7 +151,16 @@ function UnifiedDiffView({
     );
   });
 
-  return <div className="cgv-unified-diff">{rows}</div>;
+  return (
+    <div className="cgv-unified-diff">
+      {rows}
+      {allLines.length > lines.length ? (
+        <div className="cgv-truncated-note" role="note">
+          {`Diff too large — showing the first ${lines.length.toLocaleString('en-US')} of ${allLines.length.toLocaleString('en-US')} lines. Use git diff in a terminal to see the rest.`}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function DiffView({

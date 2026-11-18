@@ -20,6 +20,10 @@ interface FileListProps {
   readonly onDiscardFile?: (change: FileChange, section: SectionKind) => void;
 }
 
+// 每个文件一行、没有虚拟化:status 条目极多(几万个未跟踪文件)时只渲染每段的前 MAX_SECTION_ROWS 行并说明;
+// 数据不裁剪(计数、已暂存数量、提交都按完整列表)。
+export const MAX_SECTION_ROWS = 2000;
+
 const statusIcon: Record<FileChange['status'], string> = {
   M: '~',
   A: '+',
@@ -52,6 +56,7 @@ function Section({
   readonly onDiscardFile?: (change: FileChange, section: SectionKind) => void;
 }) {
   if (items.length === 0) return null;
+  const rows = items.length > MAX_SECTION_ROWS ? items.slice(0, MAX_SECTION_ROWS) : items;
 
   return (
     <details className="cgv-section" open>
@@ -60,7 +65,7 @@ function Section({
         <span className="cgv-count">{items.length}</span>
       </summary>
       <ul>
-        {items.map((change) => (
+        {rows.map((change) => (
           <li
             key={`${title}:${change.statusX}${change.statusY}:${change.path}`}
             className="cgv-file-li"
@@ -112,6 +117,11 @@ function Section({
           </li>
         ))}
       </ul>
+      {items.length > rows.length ? (
+        <div className="cgv-truncated-note" role="note">
+          {`Showing the first ${rows.length.toLocaleString('en-US')} of ${items.length.toLocaleString('en-US')} files. Use git status in a terminal to see the rest.`}
+        </div>
+      ) : null}
     </details>
   );
 }

@@ -478,6 +478,13 @@
   opacity: 0.55;
 }
 
+.cgv-truncated-note {
+  padding: 8px 10px;
+  color: var(--text-fg);
+  font-size: 12px;
+  opacity: 0.7;
+}
+
 .cgv-line-add[onclick],
 .cgv-line-ctx[onclick] {
   cursor: pointer;

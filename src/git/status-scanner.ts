@@ -97,5 +97,9 @@ export async function scanStatus(
   const status = await gitExec(app, repoRoot, ['status', '--porcelain=v1', '-z']);
   if (status.exitCode !== 0) return [];
   const numstat = await loadNumstat(app, repoRoot);
-  return parsePorcelainStatus(status.stdout, numstat);
+  // 输出被宿主的输出上限截断时,最后一条记录可能只有半截(`-z` 下每条以 NUL 结尾):只解析完整记录。
+  const stdout = status.truncated
+    ? status.stdout.slice(0, status.stdout.lastIndexOf('\0') + 1)
+    : status.stdout;
+  return parsePorcelainStatus(stdout, numstat);
 }
