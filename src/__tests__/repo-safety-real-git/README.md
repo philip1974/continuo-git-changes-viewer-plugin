@@ -454,6 +454,19 @@ A file-level action acts on the clicked entry, not on a directory at its path
   a real repository in a subdirectory (`x/inner` would become a gitlink). A
   nested repository without a commit is rejected by git itself. An empty
   directory, or one with only ignored files, stages `D  x` and nothing else.
+- R85: Unstage, an entry above. A folder replaced by a file and staged
+  (`AM x`, `D  x/a`, `D  x/y/b`): `restore --staged -- x/a` and
+  `reset HEAD -- x/y/b` both drop the entry `x` (its staged version is lost).
+  `unstageFile` refuses on both rows and names `x`. The rows below `x` have no
+  hunk actions (staged deletions); Discard on them is rejected by git itself.
+- R86: Unstage, a folder in HEAD. `restore --staged -- x` on `A  x` also
+  unstages `D  x/a` and `D  x/y/b`; `unstageFile` refuses. Ordinary rows, and
+  a new file below a path that is a file in HEAD, unstage as before.
+- R86b: before the first commit the HEAD check does not get in the way (git's
+  own answer comes through).
+- R87: Stage, an entry above. With `status.showUntrackedFiles=all` git lists
+  ` D x` and `?? x/new`; `git add -- x/new` also stages `D  x`. `stageFile`
+  refuses at any depth; once `x` is out of the index the row stages normally.
 - R79: Unstage. With `D  x` and `AM x/work.txt`, both `restore --staged -- x`
   and `reset HEAD -- x` unstage the child too; `unstageFile` refuses on the
   `x` row, and works on the child row, on ordinary rows, and on `x` once

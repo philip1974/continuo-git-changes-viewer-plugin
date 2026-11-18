@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DIRECTORY_STAGE_ERROR, stageFile } from '../../git/stage-file';
+import { ancestorStageError, DIRECTORY_STAGE_ERROR, stageFile, UNVERIFIED_STAGE_ERROR } from '../../git/stage-file';
 import { UNVERIFIED_PATH_ERROR } from '../../git/worktree-entry';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { buildGitArgs } from '../../git/exec';
@@ -180,6 +180,38 @@ describe('stageFile shell wrapper', () => {
       expect(await stageFile(untracked.app, '/repo', 'dir/', { untracked: true })).toEqual({ ok: true });
       expect(untracked.lstat).not.toHaveBeenCalled();
       expect(untracked.exec).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // `git add -- x/new` 在 `x` 还是 index 里的文件条目时,同时记下 x 的删除(real-git R87)
+  describe('an index entry above the path is not removed along with it', () => {
+    const OID = '587be6b4c3f93f93c489c0111bba5596147a26cb';
+    function setup(index: Record<string, Partial<PluginShellExecResult>>) {
+      const exec = vi.fn(async (_cmd: string, args: readonly string[]) => result(args.includes('ls-files') ? index[args[args.length - 1]!] ?? {} : {}));
+      const adds = () => exec.mock.calls.filter(([, args]) => args.includes('add'));
+      return { app: { shell: { exec }, fs: FILE_FS } as unknown as CoPluginApp, exec, adds };
+    }
+
+    it('T10 an ancestor of the path is an index entry → refused, naming it, for untracked and tracked rows alike; a folder ancestor (its first record is something below it) does not block; a query that cannot be answered refuses', async () => {
+      for (const untracked of [true, false]) {
+        const { app, adds } = setup({ x: { stdout: `100644 ${OID} 0\tx\0` } });
+        expect(await stageFile(app, '/repo', 'x/deep/new', { untracked })).toEqual({ ok: false, error: ancestorStageError('x') });
+        expect(adds()).toEqual([]);
+      }
+      expect(ancestorStageError('x')).toBe(
+        '"x" is a file in the index, and this entry sits in a folder of the same name. Staging this row would also stage the removal of "x". Nothing was staged — use git in a terminal.',
+      );
+
+      const folder = setup({ x: { stdout: `100644 ${OID} 0\tx/a\0`, truncated: true } });
+      expect(await stageFile(folder.app, '/repo', 'x/new', { untracked: true })).toEqual({ ok: true });
+      expect(folder.adds()).toHaveLength(1);
+
+      const failing = setup({ x: { exitCode: 128 } });
+      expect(await stageFile(failing.app, '/repo', 'x/new', { untracked: true })).toEqual({ ok: false, error: UNVERIFIED_STAGE_ERROR });
+      expect(failing.adds()).toEqual([]);
+      expect(UNVERIFIED_STAGE_ERROR).toBe(
+        'Could not check the index for an entry above this path, so nothing was staged. Refresh and try again, or use git in a terminal.',
+      );
     });
   });
 });

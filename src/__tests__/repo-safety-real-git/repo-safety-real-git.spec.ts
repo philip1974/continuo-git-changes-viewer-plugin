@@ -19,16 +19,19 @@ import { stageHunk } from '../../git/stage-hunk';
 import { extractHunkPatchFromUnifiedDiff, NON_UTF8_HUNK_NOTE } from '../../git/hunk-patch';
 import { canDiscardFile } from '../../git/can-discard-file';
 import { canStageFile } from '../../git/can-stage-file';
+import { canStageHunk } from '../../git/can-stage-hunk';
+import { canUnstageHunk } from '../../git/can-unstage-hunk';
+import { canDiscardHunk } from '../../git/can-discard-hunk';
 import { canUnstageFile } from '../../git/can-unstage-file';
 import { PINNED_OUTPUT_CONFIG } from '../../git/exec';
-import { _resetRestoreCache, DIRECTORY_UNSTAGE_ERROR, unstageFile } from '../../git/unstage-file';
+import { _resetRestoreCache, ancestorUnstageError, DIRECTORY_UNSTAGE_ERROR, HEAD_DIRECTORY_UNSTAGE_ERROR, unstageFile, UNVERIFIED_INDEX_ERROR } from '../../git/unstage-file';
 import { unstageHunk } from '../../git/unstage-hunk';
 import { gitCommit, readLastCommitSubject } from '../../git/git-commit';
 import { hasHeadCommit, readHeadMessage, readHeadSha } from '../../git/head-meta';
 import { installRepoSafetyGuard, isKnownSafeConfigKey, isRepoControlledScope, isUnsafeConfigEntry, parseScopedConfigListStrict, PROBE_ARGS, probeRepoSafety } from '../../git/repo-safety';
 import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
-import { DIRECTORY_STAGE_ERROR, stageFile } from '../../git/stage-file';
+import { ancestorStageError, DIRECTORY_STAGE_ERROR, stageFile } from '../../git/stage-file';
 import { DiffView } from '../../panel/DiffView';
 import { createGitStore } from '../../state/git-store';
 import { parsePorcelainStatus, scanStatus, StatusUnavailableError, UnsafeIndexError } from '../../git/status-scanner';
@@ -421,7 +424,8 @@ describe('repo safety against a real git with a hostile .git/config', () => {
     expect(fired['stageHunk (git apply --cached)']).toContain('post-index-change');
     expect(fired['unstageHunk (git apply --cached --reverse)']).toContain('post-index-change');
     expect(fired['discardFile (git checkout --)']).toContain('post-checkout');
-  });
+    // 十几个 git 进程(文件级操作各带几条只读探测);整套并行、机器负载高时默认的 5 s 不够
+  }, 20_000);
 
   it('R8 planted .git/hooks in a trusted-config repo: plugin stage / unstage / discard / refresh run no hook', async () => {
     plantHooks();
@@ -436,7 +440,7 @@ describe('repo safety against a real git with a hostile .git/config', () => {
     clearMarks();
     await runEverything(app);
     expect(marks()).toEqual([]);
-  });
+  }, 20_000);
 
   it('R9 detectRepoHooks: samples only → none; planted hook → present; commit still runs hooks', async () => {
     const app = realApp();
@@ -1968,7 +1972,7 @@ describe('the fixed arguments are harmless on a git that predates some of them (
 
     // 每个子命令都真的跑过,而且带着固定参数
     expect([...new Set(calls.map((c) => c.sub))].sort()).toEqual(
-      ['add', 'apply', 'cat-file', 'checkout', 'commit', 'config', 'diff', 'help', 'log', 'ls-files', 'reset', 'restore', 'rev-parse', 'status'],
+      ['add', 'apply', 'cat-file', 'checkout', 'commit', 'config', 'diff', 'help', 'log', 'ls-files', 'ls-tree', 'reset', 'restore', 'rev-parse', 'status'],
     );
     const hookSwitches = (c: Call) => c.args.filter((a) => /^hook\.[a-z0-9-]+\.enabled=false$/.test(a)).length;
     expect(KNOWN_HOOK_EVENTS).toHaveLength(28);
@@ -3453,6 +3457,146 @@ describe('a file-level action acts on the entry that was clicked, not on a direc
     expect(await stageFile(app, repo, 'x')).toEqual({ ok: true });
     expect(git(repo, 'status', '--porcelain')).toBe('D  x\n');
     expect(below()).toBe('');
+  });
+
+  // 反方向:路径的某一级祖先是 index 里的一个文件条目(目录换成了同名文件并已暂存)。index 里不能同时有 `x` 与
+  // `x/…`:把 `x/a` 写回 index 的命令会先把 `x` 这个条目拿掉。
+  const dirBecomesStagedFile = () => {
+    mkdirSync(join(repo, 'x', 'y'), { recursive: true });
+    writeFileSync(join(repo, 'x', 'a'), 'a\n');
+    writeFileSync(join(repo, 'x', 'y', 'b'), 'b\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'x dir');
+    rmSync(join(repo, 'x'), { recursive: true });
+    writeFileSync(join(repo, 'x'), 'staged version\n');
+    git(repo, 'add', '-A');
+    writeFileSync(join(repo, 'x'), 'later edit\n');
+  };
+
+  it('R85 Unstage on `D  x/a` while the file `x` is staged (`AM x`): `git restore --staged -- x/a` (and `git reset HEAD -- x/a`) puts x/a back into the index and drops the entry `x` with it — the staged version of x is gone. unstageFile refuses on every row below x, at any depth; nothing in that state has a hunk action', async () => {
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    dirBecomesStagedFile();
+    const STATUS = 'AM x\nD  x/a\nD  x/y/b\n';
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+    expect(canUnstageFile(await rowOf(app, 'x/a'), 'staged')).toBe(true);
+
+    // 为什么:git 自己的行为(两种写法都一样)
+    for (const args of [['restore', '--staged', '--', 'x/a'], ['reset', '-q', 'HEAD', '--', 'x/y/b']]) {
+      expect((await gitExec(app, repo, args)).exitCode).toBe(0);
+      expect(git(repo, 'ls-files', '-s', '--', 'x')).not.toMatch(/\tx\n/);
+      expect(git(repo, 'status', '--porcelain')).toContain('?? x\n');
+      git(repo, 'reset', '-q');
+      writeFileSync(join(repo, 'x'), 'staged version\n');
+      git(repo, 'add', '-A');
+      writeFileSync(join(repo, 'x'), 'later edit\n');
+    }
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+
+    for (const path of ['x/a', 'x/y/b']) {
+      _resetRestoreCache();
+      expect(await unstageFile(app, repo, path), path).toEqual({ ok: false, error: ancestorUnstageError('x') });
+    }
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+    expect(git(repo, 'show', ':0:x')).toBe('staged version\n');
+
+    // hunk 级操作:x 之下的行(已暂存的删除)本来就没有——不是内容修改。`AM x` 那一行的 hunk 只改 x 自己的条目。
+    for (const row of (await scanStatus(app, repo)).filter((change) => change.path.startsWith('x/'))) {
+      for (const mode of ['staged', 'changed'] as const) {
+        const diff = await fetchDiff(app, repo, row, mode);
+        expect(canUnstageHunk(row, diff, 'staged'), row.path).toBe(false);
+        expect(canStageHunk(row, diff, 'changed'), row.path).toBe(false);
+        expect(canDiscardHunk(row, diff, 'changed'), row.path).toBe(false);
+      }
+    }
+    // Discard 不受影响:x/a 不在 index 里,git 自己拒绝,什么都没动
+    expect((await discardFile(app, repo, 'x/a')).ok).toBe(false);
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+  });
+
+  it('R86 Unstage on `A  x` while the last commit has files below x/ (`D  x/a`, `D  x/y/b` staged): `git restore --staged -- x` restores those entries from HEAD as well — two rows the user did not click are unstaged. unstageFile refuses; a staged file at a path that is a file or nothing in HEAD, and a new file below a path that is a file in HEAD, unstage as before', async () => {
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    dirBecomesStagedFile();
+    writeFileSync(join(repo, 'x'), 'staged version\n');
+    writeFileSync(join(repo, 'n.txt'), 'new\n');
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', '-A');
+    const STATUS = 'M  f.txt\nA  n.txt\nA  x\nD  x/a\nD  x/y/b\n';
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+
+    // 为什么:git 自己的行为
+    expect((await gitExec(app, repo, ['restore', '--staged', '--', 'x'])).exitCode).toBe(0);
+    expect(git(repo, 'status', '--porcelain')).toBe('M  f.txt\nA  n.txt\n D x/a\n D x/y/b\n?? x\n');
+    git(repo, 'add', '-A');
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+
+    _resetRestoreCache();
+    expect(await unstageFile(app, repo, 'x')).toEqual({ ok: false, error: HEAD_DIRECTORY_UNSTAGE_ERROR });
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+
+    expect(await unstageFile(app, repo, 'n.txt')).toEqual({ ok: true });
+    expect(await unstageFile(app, repo, 'f.txt')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain')).toBe(' M f.txt\nA  x\nD  x/a\nD  x/y/b\n?? n.txt\n');
+
+    // 反过来:HEAD 里 f.txt 是文件,现在是目录并整体暂存(`D  f.txt` + `A  f.txt/new`)——撤销 f.txt/new 只动它自己
+    git(repo, 'reset', '-q', '--hard');
+    rmSync(join(repo, 'f.txt'));
+    mkdirSync(join(repo, 'f.txt'));
+    writeFileSync(join(repo, 'f.txt', 'new'), 'n\n');
+    git(repo, 'add', '-A');
+    expect(git(repo, 'status', '--porcelain')).toBe('D  f.txt\nA  f.txt/new\nA  n.txt\n');
+    expect(await unstageFile(app, repo, 'f.txt/new')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain')).toBe('D  f.txt\nA  n.txt\n?? f.txt/\n');
+  });
+
+  it('R86b before the first commit there is nothing in HEAD to restore: Unstage works as before', async () => {
+    const fresh = mkdtempSync(join(realpathSync(tmpdir()), 'cgv-unborn-'));
+    try {
+      git(fresh, 'init', '-q', '-b', 'main');
+      mkdirSync(join(fresh, 'd'));
+      writeFileSync(join(fresh, 'd', 'f'), '1\n');
+      git(fresh, 'add', '-A');
+      const app = realApp();
+      installRepoSafetyGuard(app);
+      _resetRestoreCache();
+      const before = (await gitExec(app, fresh, ['restore', '--staged', '--', 'd/f'])).exitCode;
+      const res = await unstageFile(app, fresh, 'd/f');
+      // git 自己在没有 HEAD 时拒绝 restore --staged;unstageFile 给出的就是它的结果,不是"查不了"
+      expect(before).not.toBe(0);
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain('HEAD');
+      expect(res.error).not.toBe(UNVERIFIED_INDEX_ERROR);
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
+  });
+
+  it('R87 Stage on an untracked `?? x/new` while `x` is still a file in the index (shown when the user has status.showUntrackedFiles=all: ` D x` + `?? x/new`): `git add -- x/new` also stages the removal of x. stageFile refuses; once x is no longer an index entry the same row stages normally', async () => {
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    writeFileSync(join(repo, 'x'), 'tracked file\n');
+    git(repo, 'add', 'x');
+    git(repo, 'commit', '-qm', 'x');
+    rmSync(join(repo, 'x'));
+    mkdirSync(join(repo, 'x', 'deep'), { recursive: true });
+    writeFileSync(join(repo, 'x', 'new'), 'new\n');
+    writeFileSync(join(repo, 'x', 'deep', 'er'), 'deeper\n');
+    expect(git(repo, '-c', 'status.showUntrackedFiles=all', 'status', '--porcelain')).toBe(' D x\n?? x/deep/er\n?? x/new\n');
+
+    // 为什么:git 自己的行为
+    git(repo, 'add', '--', 'x/new');
+    expect(git(repo, 'status', '--porcelain')).toBe('D  x\nA  x/new\n?? x/deep/\n');
+    git(repo, 'reset', '-q');
+
+    for (const path of ['x/new', 'x/deep/er']) {
+      expect(await stageFile(app, repo, path, { untracked: true }), path).toEqual({ ok: false, error: ancestorStageError('x') });
+    }
+    expect(git(repo, 'status', '--porcelain')).toBe(' D x\n');
+
+    git(repo, 'rm', '-q', '--cached', 'x');
+    expect(await stageFile(app, repo, 'x/new', { untracked: true })).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain')).toBe('D  x\nA  x/new\n?? x/deep/\n');
   });
 });
 

@@ -38,7 +38,7 @@ function renderWithChanges(
         return result({ exitCode: 0, stdout: 'HEAD\n' });
       }
       // 文件级操作之前对 index 的只读查询(子模块条目 / 路径之下的条目):一律空;其余交给用例的 exec
-      if (args.includes('ls-files')) return result({ exitCode: 0 });
+      if (args.includes('ls-files') || args.includes('ls-tree')) return result({ exitCode: 0 });
       return exec(cmd, args, opts);
     },
   );

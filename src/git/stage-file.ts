@@ -1,6 +1,6 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
-import { GITLINK_MODE, readIndexEntries, wouldAddEntriesInside } from './index-entry';
+import { findIndexEntryAtAncestor, GITLINK_MODE, readIndexEntries, wouldAddEntriesInside } from './index-entry';
 import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
 import { probeWorktreeEntry, UNVERIFIED_PATH_ERROR } from './worktree-entry';
 
@@ -31,6 +31,16 @@ export const DIRECTORY_STAGE_ERROR =
   'A directory now sits where this file was. Staging this row would also add every untracked file inside that directory. ' +
   'Nothing was staged — stage the files you want from the Untracked section, or use git in a terminal.';
 
+// 反方向(见 index-entry 的 findIndexEntryAtAncestor):`x` 还是 index 里的文件条目,而这一行是 `x/new`
+// (用户设了 status.showUntrackedFiles=all 时 ` D x` 与 `?? x/new` 同时列出;或列表已过时)。`git add -- x/new`
+// 会同时记下 `x` 的删除(实测:`D  x` + `A  x/new`)。未跟踪的行同样要查。
+export const ancestorStageError = (ancestor: string): string =>
+  `"${ancestor}" is a file in the index, and this entry sits in a folder of the same name. ` +
+  `Staging this row would also stage the removal of "${ancestor}". Nothing was staged — use git in a terminal.`;
+
+export const UNVERIFIED_STAGE_ERROR =
+  'Could not check the index for an entry above this path, so nothing was staged. Refresh and try again, or use git in a terminal.';
+
 const PROBE_TIMEOUT_MS = 5_000;
 
 /** 该路径上现在是目录:`git add -- <path>` 是否只作用于这一个条目。查不了 → false(拒绝)。 */
@@ -60,6 +70,9 @@ export async function stageFile(
       return { ok: false, error: DIRECTORY_STAGE_ERROR };
     }
   }
+  const ancestor = await findIndexEntryAtAncestor(app, repoRoot, path, PROBE_TIMEOUT_MS);
+  if (ancestor === null) return { ok: false, error: UNVERIFIED_STAGE_ERROR };
+  if (ancestor !== false) return { ok: false, error: ancestorStageError(ancestor) };
   const result = await gitExec(app, repoRoot, ['add', '--', path], {
     timeoutMs: 10_000,
     ...(opts.untracked ? { untrackedPathArgs: true } : {}),

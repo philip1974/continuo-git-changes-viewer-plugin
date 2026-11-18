@@ -61,7 +61,11 @@ now sits where a tracked file was (or a file where one of its parent folders
 was), Discard would delete that directory or file with everything in it, and
 Stage would add every untracked file inside — files the list does not show
 while the old entry exists. Unstage would likewise unstage entries staged
-below a directory of the same name. In these cases the action is refused with
+below a directory of the same name. The same holds upwards: when a file is
+staged where a folder used to be, unstaging a row below it would drop that
+staged file from the index, unstaging the file's own row would also unstage
+the deletions below it, and staging a new file under a path that is still a
+file in the index would stage that file's removal. In these cases the action is refused with
 an explanation and nothing is changed; resolve it in a terminal. A submodule or
 nested repository directory is still staged as the single entry it is — whether
 a directory is a repository is git's call (it is asked what `git add` would add

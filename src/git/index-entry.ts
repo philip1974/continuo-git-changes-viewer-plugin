@@ -74,3 +74,66 @@ export async function wouldAddEntriesInside(
   return r.exitCode === 0 && !r.timedOut && !r.truncated ? false : null;
 }
 
+// 只要第一条记录:见 findIndexEntryAtAncestor
+const FIRST_RECORD_BYTES = 64 * 1024;
+
+/**
+ * 路径的某一级**祖先**在 index 里是不是一个条目(文件 / 链接 / 子模块;任何 stage)。是 → 返回那一级的路径
+ * (最浅的一级);都不是 → false;查不了 → null。
+ *
+ * 为什么需要:index 里不能同时有 `x` 与 `x/…`。把 `x/a` 写进 index 的命令(`restore --staged -- x/a`、
+ * `reset HEAD -- x/a` 从 HEAD 取回它;`add -- x/a` 新加它)会先把 `x` 这个条目拿掉——用户点的是 `x/a` 那一行,
+ * `x` 那一行暂存的内容随之消失(实测 git 2.50 / 2.56)。
+ *
+ * 每一级祖先一条 `ls-files -s -z -- <祖先>`:祖先通常是目录,git 会列出其下的全部条目(可以很多)。index 按路径
+ * 的字节序排列,`x` 自己的记录排在一切 `x/…` 之前、且 pathspec `x` 不匹配 `x.txt` / `x-y`——所以**第一条**记录
+ * 的路径是不是恰好等于祖先就是答案,其余输出不需要:输出上限设得很小,被截断不算失败。
+ */
+export async function findIndexEntryAtAncestor(
+  app: Pick<CoPluginApp, 'shell'>,
+  repoRoot: string,
+  path: string,
+  timeoutMs: number,
+): Promise<string | false | null> {
+  const segments = path.split('/').filter((segment) => segment !== '');
+  const ancestors = segments.slice(0, -1).map((_, i) => segments.slice(0, i + 1).join('/'));
+  const found = await Promise.all(
+    ancestors.map(async (ancestor): Promise<boolean | null> => {
+      const r = await gitExec(app, repoRoot, ['ls-files', '-s', '-z', '--', ancestor], {
+        timeoutMs,
+        maxOutputBytes: FIRST_RECORD_BYTES,
+      });
+      if (r.exitCode !== 0 || r.timedOut) return null;
+      const end = r.stdout.indexOf('\0');
+      // 没有一条完整的记录:没有输出 = 没有条目;否则是半截(路径比上限还长)= 不知道
+      if (end < 0) return r.stdout === '' && !r.truncated ? false : null;
+      const m = /^\d{6} [0-9a-f]+ [0-3]\t([\s\S]*)$/.exec(r.stdout.slice(0, end));
+      return m ? m[1] === ancestor : null;
+    }),
+  );
+  const hit = found.indexOf(true);
+  if (hit >= 0) return ancestors[hit]!;
+  return found.includes(null) ? null : false;
+}
+
+/**
+ * HEAD 里这个路径是不是一个目录(tree)。是 → true;不是(文件 / 不存在)或还没有任何提交 → false;查不了 → null。
+ * `restore --staged -- x` / `reset HEAD -- x` 把 HEAD 里 `x/…` 的条目一并取回 index(见 unstage-file)。
+ */
+export async function isDirectoryInHead(
+  app: Pick<CoPluginApp, 'shell'>,
+  repoRoot: string,
+  path: string,
+  timeoutMs: number,
+): Promise<boolean | null> {
+  const r = await gitExec(app, repoRoot, ['ls-tree', '-z', 'HEAD', '--', path], { timeoutMs });
+  if (r.exitCode === 0 && !r.timedOut && !r.truncated) {
+    // 每条记录:`<mode> <type> <oid>\t<path>`;不带 -r 时目录只列出它自己这一条
+    return r.stdout.split('\0').some((record) => /^040000 tree [0-9a-f]+\t/.test(record));
+  }
+  if (r.timedOut) return null;
+  // 失败:还没有提交(HEAD 解析不了)时 HEAD 里什么都没有。`--quiet --verify` 对"不是有效对象"以 1 退出、不输出;
+  // 别的失败(被守卫拒绝是 128、超时)都不是 1。
+  const head = await gitExec(app, repoRoot, ['rev-parse', '--quiet', '--verify', 'HEAD^{commit}'], { timeoutMs });
+  return head.exitCode === 1 && !head.timedOut ? false : null;
+}

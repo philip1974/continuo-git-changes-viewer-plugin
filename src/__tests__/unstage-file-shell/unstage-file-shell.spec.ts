@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { _resetRestoreCache, DIRECTORY_UNSTAGE_ERROR, unstageFile, UNVERIFIED_INDEX_ERROR } from '../../git/unstage-file';
+import {
+  _resetRestoreCache,
+  ancestorUnstageError,
+  DIRECTORY_UNSTAGE_ERROR,
+  HEAD_DIRECTORY_UNSTAGE_ERROR,
+  unstageFile,
+  UNVERIFIED_INDEX_ERROR,
+} from '../../git/unstage-file';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { buildGitArgs } from '../../git/exec';
 
@@ -17,11 +24,12 @@ function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult 
 
 beforeEach(() => _resetRestoreCache());
 
-// unstageFile 先问 index:这个路径之下有没有别的条目(`ls-files`,见 T9–T10)。这里一律回答"没有",
+// unstageFile 先问 index:这个路径之下有没有别的条目、祖先是不是条目(`ls-files`,见 T9–T12),再问 HEAD 里它是不是
+// 目录(`ls-tree`,T13)。这里一律回答"没有",
 // 其余调用原样交给各用例脚本化的 exec——用例对 exec 的断言(第几次调用是什么)不受影响。
 function appFor(exec: ReturnType<typeof vi.fn>): CoPluginApp {
   const routed = (cmd: string, args: readonly string[], opts?: unknown) =>
-    args.includes('ls-files') ? Promise.resolve(result({})) : exec(cmd, args, opts);
+    args.includes('ls-files') || args.includes('ls-tree') ? Promise.resolve(result({})) : exec(cmd, args, opts);
   return { shell: { exec: routed } } as unknown as CoPluginApp;
 }
 
@@ -201,6 +209,103 @@ describe('unstageFile shell wrapper', () => {
       for (const lsFiles of [{ exitCode: 128, stderr: 'fatal' }, { exitCode: null, timedOut: true }, { stdout: `100644 ${OID} 0\tx/wo`, truncated: true }]) {
         const { app, writes } = setup(lsFiles);
         expect(await unstageFile(app, '/repo', 'x')).toEqual({ ok: false, error: UNVERIFIED_INDEX_ERROR });
+        expect(writes()).toEqual([]);
+      }
+    });
+  });
+
+  // index 里不能同时有 `x` 与 `x/…`:把 x/a 取回 index 会把已暂存的文件条目 `x` 拿掉(real-git R85);
+  // HEAD 里 x 是目录时,撤销 `A  x` 会把 `x/…` 全部取回(real-git R86)
+  describe('an entry above the path, or files below it in HEAD, are not changed along with it', () => {
+    const OID = '587be6b4c3f93f93c489c0111bba5596147a26cb';
+    type Partial_ = Partial<PluginShellExecResult>;
+    // index:`ls-files -s -z -- <pathspec>` 按 pathspec 给结果(没列出的 → 空);tree:`ls-tree -z HEAD -- <path>`;
+    // head:`rev-parse --quiet --verify HEAD^{commit}`
+    function setup(opts: { index?: Record<string, Partial_>; tree?: Partial_; head?: Partial_ } = {}) {
+      const exec = vi.fn(async (_cmd: string, args: readonly string[]) => {
+        if (args.includes('ls-files')) return result(opts.index?.[args[args.length - 1]!] ?? {});
+        if (args.includes('ls-tree')) return result(opts.tree ?? {});
+        if (args.includes('rev-parse')) return result(opts.head ?? { stdout: `${OID}\n` });
+        return result({});
+      });
+      const writes = () => exec.mock.calls.filter(([, args]) => args.includes('--staged') || args.includes('reset'));
+      return { app: { shell: { exec } } as unknown as CoPluginApp, exec, writes };
+    }
+    const entry = (path: string, stage = 0) => `100644 ${OID} ${stage}\t${path}\0`;
+
+    it('T11 an ancestor of the path is itself an index entry (`x` staged as a file, the row is `D  x/y/b`) → refused, naming that entry; nothing is written', async () => {
+      const { app, writes } = setup({ index: { x: { stdout: entry('x') } } });
+      expect(await unstageFile(app, '/repo', 'x/y/b')).toEqual({ ok: false, error: ancestorUnstageError('x') });
+      expect(writes()).toEqual([]);
+      expect(ancestorUnstageError('x')).toBe(
+        '"x" is staged as a file, and this entry belongs to a folder of the same name in the last commit. Unstaging this row would drop "x" from the index as well. Nothing was changed — use git in a terminal.',
+      );
+      // 任何一级、任何 stage
+      const deep = setup({ index: { 'x/y': { stdout: entry('x/y', 2) } } });
+      expect(await unstageFile(deep.app, '/repo', 'x/y/b')).toEqual({ ok: false, error: ancestorUnstageError('x/y') });
+    });
+
+    it('T12 each ancestor is asked on its own and only the first record is needed: an ancestor that is a folder lists what is below it (however much — the output is capped small and a cut is not a failure) and does not block; a query that fails or times out, or a first record that is cut or unreadable, refuses (fail-closed); a path at the top level has no ancestor and asks nothing', async () => {
+      const folder = setup({ index: { x: { stdout: entry('x/a') + entry('x/y/b').slice(0, 20), truncated: true }, 'x/y': { stdout: entry('x/y/b') } } });
+      expect(await unstageFile(folder.app, '/repo', 'x/y/b')).toEqual({ ok: true });
+      expect(folder.writes()).toHaveLength(1);
+      for (const ancestor of ['x', 'x/y']) {
+        expect(folder.exec).toHaveBeenCalledWith(
+          'git',
+          buildGitArgs(['ls-files', '-s', '-z', '--', ancestor]),
+          expect.objectContaining({ cwd: '/repo', maxOutputBytes: 64 * 1024, env: expect.objectContaining({ GIT_LITERAL_PATHSPECS: '1' }) }),
+        );
+      }
+
+      for (const failed of [{ exitCode: 128, stderr: 'fatal' }, { exitCode: null, timedOut: true }, { stdout: `100644 ${OID} 0\tx`, truncated: true }, { stdout: 'garbage\0' }]) {
+        _resetRestoreCache();
+        const { app, writes } = setup({ index: { x: failed } });
+        expect(await unstageFile(app, '/repo', 'x/a'), JSON.stringify(failed)).toEqual({ ok: false, error: UNVERIFIED_INDEX_ERROR });
+        expect(writes()).toEqual([]);
+      }
+      // 一级查不了、另一级确实是条目:说得出原因就说原因
+      const mixed = setup({ index: { x: { exitCode: 128 }, 'x/y': { stdout: entry('x/y') } } });
+      expect(await unstageFile(mixed.app, '/repo', 'x/y/b')).toEqual({ ok: false, error: ancestorUnstageError('x/y') });
+
+      _resetRestoreCache();
+      const top = setup();
+      expect(await unstageFile(top.app, '/repo', 'a.ts')).toEqual({ ok: true });
+      expect(top.exec.mock.calls.filter(([, args]) => args.includes('ls-files'))).toHaveLength(1);
+    });
+
+    it('T13 the path is a folder in HEAD (the row is `A  x`: a file staged where a folder was) → refused: unstaging would bring every `x/…` entry back from HEAD; a file, a submodule or nothing in HEAD does not block; no commit yet → nothing to bring back; a query that cannot be answered refuses', async () => {
+      const dir = setup({ tree: { stdout: `040000 tree ${OID}\tx\0` } });
+      expect(await unstageFile(dir.app, '/repo', 'x')).toEqual({ ok: false, error: HEAD_DIRECTORY_UNSTAGE_ERROR });
+      expect(dir.writes()).toEqual([]);
+      expect(dir.exec).toHaveBeenCalledWith('git', buildGitArgs(['ls-tree', '-z', 'HEAD', '--', 'x']), expect.objectContaining({ cwd: '/repo' }));
+      expect(HEAD_DIRECTORY_UNSTAGE_ERROR).toBe(
+        'In the last commit this path is a folder. Unstaging this row would also unstage the deletions staged for the files in it. Nothing was changed — use git in a terminal.',
+      );
+
+      for (const stdout of [`100644 blob ${OID}\tx\0`, `160000 commit ${OID}\tx\0`, '']) {
+        _resetRestoreCache();
+        const ok = setup({ tree: { stdout } });
+        expect(await unstageFile(ok.app, '/repo', 'x'), JSON.stringify(stdout)).toEqual({ ok: true });
+        expect(ok.writes()).toHaveLength(1);
+      }
+
+      // ls-tree 失败:只有"还没有提交"(rev-parse --quiet --verify 以 1 退出)才照常
+      _resetRestoreCache();
+      const unborn = setup({ tree: { exitCode: 128, stderr: 'fatal: Not a valid object name HEAD' }, head: { exitCode: 1 } });
+      expect(await unstageFile(unborn.app, '/repo', 'x')).toEqual({ ok: true });
+      expect(unborn.exec).toHaveBeenCalledWith('git', buildGitArgs(['rev-parse', '--quiet', '--verify', 'HEAD^{commit}']), expect.objectContaining({ cwd: '/repo' }));
+
+      const unknown: Array<{ tree: Partial_; head?: Partial_ }> = [
+        { tree: { exitCode: 128 }, head: { exitCode: 0, stdout: `${OID}\n` } },
+        { tree: { exitCode: 128 }, head: { exitCode: 128 } },
+        { tree: { exitCode: 128 }, head: { exitCode: 1, timedOut: true } },
+        { tree: { exitCode: null, timedOut: true }, head: { exitCode: 1 } },
+        { tree: { stdout: `100644 blob ${OID}\tx`, truncated: true }, head: { exitCode: 0 } },
+      ];
+      for (const opts of unknown) {
+        _resetRestoreCache();
+        const { app, writes } = setup(opts);
+        expect(await unstageFile(app, '/repo', 'x'), JSON.stringify(opts)).toEqual({ ok: false, error: UNVERIFIED_INDEX_ERROR });
         expect(writes()).toEqual([]);
       }
     });

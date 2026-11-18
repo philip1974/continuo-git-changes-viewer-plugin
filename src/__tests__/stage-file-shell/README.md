@@ -39,3 +39,15 @@ at.
   are staged as before; an untracked row triggers no lstat.
 
 Real git: `repo-safety-real-git` R78, R84.
+
+An index entry above the path. While `x` is still a file in the index,
+`git add -- x/new` records the removal of `x` along with the new file. Such a
+row is listed when the user has `status.showUntrackedFiles=all` (` D x` plus
+`?? x/new`), or when the list is out of date. `stageFile` asks the index for
+each ancestor (see `unstage-file-shell` T11–T12) and refuses, for untracked
+and tracked rows alike.
+
+- T10: ancestor entry → refused, naming it; a folder ancestor does not block;
+  an unanswerable query refuses.
+
+Real git: `repo-safety-real-git` R87.

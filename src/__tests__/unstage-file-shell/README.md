@@ -39,3 +39,28 @@ query fails (fail-closed).
   letters do not block; a failed / timed-out / truncated query refuses.
 
 Real git: `repo-safety-real-git` R79.
+
+The other directions of the same prefix problem. The index cannot hold `x`
+and `x/…` at once.
+
+- An ancestor of the path is an index entry: with a folder replaced by a file
+  and staged (`AM x`, `D  x/a`), unstaging the `x/a` row puts `x/a` back and
+  drops the entry `x` — the staged version of `x` is gone. Each ancestor is
+  asked on its own (`ls-files -s -z -- <ancestor>`); the index is sorted, so
+  the ancestor's own record, if any, is the first one, and only that record is
+  read (small output cap; a cut after it is not a failure).
+- The path is a folder in HEAD: unstaging `A  x` restores every `x/…` entry
+  from HEAD, i.e. unstages the `D  x/a` rows too (`ls-tree -z HEAD -- <path>`).
+  With no commit yet there is nothing in HEAD and the check passes.
+
+Neither case can be untangled row by row (each blocks the other), so the
+messages point to a terminal.
+
+- T11: an ancestor entry at any depth and any stage → refused, naming it.
+- T12: a folder ancestor does not block, however long its listing; failed /
+  timed-out queries and a cut or unreadable first record refuse; a top-level
+  path asks nothing.
+- T13: a tree in HEAD → refused; blob / gitlink / nothing → unstaged; unborn
+  HEAD → unstaged; anything unanswerable refuses.
+
+Real git: `repo-safety-real-git` R85, R86, R86b.
