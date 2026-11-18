@@ -43,8 +43,10 @@ describe('canDiscardHunk', () => {
     expect(canDiscardHunk(change({ statusX: 'M', statusY: ' ' }), okDiff, 'changed')).toBe(false);
   });
 
-  it('T8 disables AM, RM, and CM hybrid rows for v0.3.2 M-only scope', () => {
-    expect(canDiscardHunk(change({ status: 'A', statusX: 'A', statusY: 'M' }), okDiff, 'changed')).toBe(false);
+  it('T8 enables the unstaged modification of a staged new file (`AM`, shown as an index → working-tree diff since the per-section views); RM and CM hybrid rows stay disabled', () => {
+    expect(canDiscardHunk(change({ status: 'A', statusX: 'A', statusY: 'M' }), okDiff, 'changed')).toBe(true);
+    expect(canDiscardHunk(change({ status: 'A', statusX: 'A', statusY: 'M' }), okDiff, 'staged')).toBe(false);
+    expect(canDiscardHunk(change({ status: 'A', statusX: 'A', statusY: 'D' }), okDiff, 'changed')).toBe(false);
     expect(canDiscardHunk(change({ status: 'R', statusX: 'R', statusY: 'M' }), okDiff, 'changed')).toBe(false);
     expect(canDiscardHunk(change({ status: 'R', statusX: 'C', statusY: 'M' }), okDiff, 'changed')).toBe(false);
   });

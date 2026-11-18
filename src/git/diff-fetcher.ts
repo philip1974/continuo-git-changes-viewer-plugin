@@ -23,6 +23,11 @@ export type DiffResult =
       modifiedTruncated?: true;
       /** modifiedTruncated 的原因是读取超时(FILE_READ_TIMEOUT_MS),不是大小。 */
       modifiedTimedOut?: true;
+      /**
+       * 新版一侧是**新增的符号链接**(diff 头 `new file mode 120000`):modified 是 git 存的链接目标路径,
+       * 不是文件内容。面板据此标注 "Symbolic link → <target>"。
+       */
+      modifiedIsSymlink?: true;
     }
   | {
       ok: false;
@@ -254,9 +259,9 @@ export async function fetchDiff(
   // 并发跑 3 个 shell 命令
   const [originalRaw, wt, diffR] = await Promise.all([
     gitShowHead(app, repoRoot, headPath),
-    // 新版一侧没有文件:staged 看 index 一侧(X),changed 看工作树一侧(合并后的 status;`AD` 的 status 是 A,
-    // 工作树读取得到 ENOENT → 空)
-    (mode === 'staged' ? change.statusX === 'D' : change.status === 'D')
+    // 新版一侧没有文件:staged 看 index 一侧(X),changed 看工作树一侧(Y)。不能看合并后的 status:
+    // `AD` 合并成 A、`RD` 合并成 R,工作树一侧其实是删除。
+    (mode === 'staged' ? change.statusX === 'D' : change.statusY === 'D')
       ? Promise.resolve<FileRead>({ content: '' })
       : mode === 'staged'
         ? readIndexBlob(app, repoRoot, change)
@@ -290,5 +295,18 @@ export async function fetchDiff(
     unifiedDiff: diffR.stdout,
     isUntracked: false,
     ...readFlags(wt),
+    ...(addsSymlink(diffR.stdout) ? { modifiedIsSymlink: true as const } : {}),
   };
+}
+
+const SYMLINK_MODE = '120000';
+
+// diff 头(第一个 hunk 之前的扩展头)里有 `new file mode 120000`:这一侧新增的是符号链接。
+// 只看 `@@` / `---` 之前的行——文件内容里出现同样的文字不算;文件名进不了这些行(含换行的名字被 git 加引号)。
+function addsSymlink(unifiedDiff: string): boolean {
+  for (const line of unifiedDiff.split('\n')) {
+    if (line.startsWith('@@') || line.startsWith('--- ')) return false;
+    if (line === `new file mode ${SYMLINK_MODE}`) return true;
+  }
+  return false;
 }

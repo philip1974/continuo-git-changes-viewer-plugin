@@ -35,11 +35,21 @@ function NewFileView({
   content,
   truncated,
   timedOut,
+  symlink,
 }: {
   readonly content: string;
   readonly truncated?: boolean;
   readonly timedOut?: boolean;
+  readonly symlink?: boolean;
 }) {
+  // 新增的符号链接:git 存的"内容"是链接目标路径。标明它是链接,不当成文件内容显示。
+  if (symlink) {
+    return (
+      <div className="cgv-symlink-note" role="note">
+        {`Symbolic link → ${content}`}
+      </div>
+    );
+  }
   return (
     <>
       <pre className="cgv-new-file">{content || '(empty file)'}</pre>
@@ -396,14 +406,23 @@ export function DiffView({
     showError(message);
   };
 
-  // Untracked / Added (HEAD 无版本) → NewFileView 显示 modified 全文(Staged 区是 index 版本,见 diff-fetcher)
-  if (diff.isUntracked || (diff.original === '' && change.status === 'A')) {
+  // 全文视图(NewFileView)按**区**判断,不看合并后的 status(`AM` / `AD` 同时出现在两个区):
+  // - Staged 区:index 一侧是新增(X === 'A')→ index 版本全文(见 diff-fetcher);
+  // - Changes 区:只有未跟踪文件 → 工作树全文。`AM` 的 M、`AD` 的 D 走下面的 unified diff
+  //   (`git diff -- <path>`:index → 工作树的增量,带 hunk 操作)。
+  const wholeFile = mode === 'staged' ? change.statusX === 'A' : diff.isUntracked;
+  if (wholeFile) {
     if (diff.withheld) {
       return <main className="cgv-diff-empty">{WITHHELD_NOTICE[diff.withheld]}</main>;
     }
     return (
       <main className="cgv-diff">
-        <NewFileView content={diff.modified} truncated={diff.modifiedTruncated} timedOut={diff.modifiedTimedOut} />
+        <NewFileView
+          content={diff.modified}
+          truncated={diff.modifiedTruncated}
+          timedOut={diff.modifiedTimedOut}
+          symlink={diff.modifiedIsSymlink}
+        />
       </main>
     );
   }

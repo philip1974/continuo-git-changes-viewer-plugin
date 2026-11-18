@@ -54,4 +54,13 @@ describe('canStageHunk', () => {
     expect(canStageHunk(change({ path: 'tab\tfile.ts' }), okDiff, 'changed')).toBe(false);
     expect(canStageHunk(change({ path: 'slash\\file.ts' }), okDiff, 'changed')).toBe(false);
   });
+
+  it('T13 enables the unstaged modification of a staged new file (`AM`): its Changes diff is an ordinary index → working-tree hunk; `AD`, `AA` and `RM` stay disabled', () => {
+    expect(canStageHunk(change({ status: 'A', statusX: 'A', statusY: 'M' }), okDiff, 'changed')).toBe(true);
+    expect(canStageHunk(change({ status: 'A', statusX: 'A', statusY: 'M' }), okDiff, 'staged')).toBe(false);
+    expect(canStageHunk(change({ status: 'A', statusX: 'A', statusY: 'M', kind: 'binary' }), okDiff, 'changed')).toBe(false);
+    expect(canStageHunk(change({ status: 'A', statusX: 'A', statusY: 'D' }), okDiff, 'changed')).toBe(false);
+    expect(canStageHunk(change({ status: 'A', statusX: 'A', statusY: 'A' }), okDiff, 'changed')).toBe(false);
+    expect(canStageHunk(change({ status: 'R', statusX: 'R', statusY: 'M' }), okDiff, 'changed')).toBe(false);
+  });
 });

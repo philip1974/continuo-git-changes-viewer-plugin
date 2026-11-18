@@ -90,6 +90,10 @@
 
 - [`cgv-panel-height.spec.ts`](./diffview-scroll-fix/cgv-panel-height.spec.ts)
 
+## [Which view a row gets, per section](./diffview-section-views/README.md)
+
+- [`diffview-section-views.spec.tsx`](./diffview-section-views/diffview-section-views.spec.tsx)
+
 ## [discard-file-shell](./discard-file-shell/README.md)
 
 - [`discard-file-shell.spec.ts`](./discard-file-shell/discard-file-shell.spec.ts)

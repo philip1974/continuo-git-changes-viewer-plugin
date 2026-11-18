@@ -6,6 +6,8 @@ import { createServer, type Server } from 'node:http';
 import { chmodSync, existsSync, readFileSync, renameSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchDiff, FILE_READ_TIMEOUT_MS, MAX_FILE_BYTES } from '../../git/diff-fetcher';
 import { discardFile } from '../../git/discard-file';
@@ -23,6 +25,8 @@ import { installRepoSafetyGuard, isKnownSafeConfigKey, isRepoControlledScope, is
 import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
 import { stageFile } from '../../git/stage-file';
+import { DiffView } from '../../panel/DiffView';
+import { createGitStore } from '../../state/git-store';
 import { parsePorcelainStatus, scanStatus, StatusUnavailableError, UnsafeIndexError } from '../../git/status-scanner';
 import type { CoPluginApp, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 import { keyPatterns, overlappingKeys, REVIEWED_OVERLAP } from '../repo-safety/key-overlap';
@@ -2703,5 +2707,87 @@ describe('a staged version that cannot be read is not blamed on a submodule or a
     expect(refused).toMatchObject({ ok: false, reason: 'git-error' });
     expect(JSON.stringify(refused)).toMatch(/disabled for this repository/);
     expect(marks()).toEqual([]);
+  });
+});
+
+describe('each section shows its own side of a file that is in both (real git)', () => {
+  // 面板对一行的呈现:按 (change, 区) 取 diff,再渲染 DiffView(静态标记,足以区分全文视图 / unified diff / hunk 按钮)
+  const rendered = async (app: CoPluginApp, change: Awaited<ReturnType<typeof scanStatus>>[number], mode: 'staged' | 'changed') => {
+    const diff = await fetchDiff(app, repo, change, mode);
+    const html = renderToStaticMarkup(createElement(DiffView, { store: createGitStore(), change, diff, mode }));
+    const text = (cls: string) =>
+      [...html.matchAll(new RegExp(`<div class="cgv-line ${cls}"[^>]*><span class="cgv-line-num">[^<]*</span><span class="cgv-line-text">([^<]*)</span>`, 'g'))].map((m) => m[1]);
+    return {
+      diff,
+      html,
+      whole: /<pre class="cgv-new-file">([\s\S]*?)<\/pre>/.exec(html)?.[1] ?? null,
+      added: text('cgv-line-add'),
+      removed: text('cgv-line-del'),
+      buttons: [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]),
+    };
+  };
+
+  it('R70 AM / AD / MM / staged new symbolic link / untracked: Staged shows the index version (whole file for a new entry), Changes shows the index → working-tree increment with working hunk actions, a deletion is a deletion, and a link is labelled as one', async () => {
+    const secret = join(base, 'secret.txt');
+    writeFileSync(secret, 'OUTSIDE-SECRET\n');
+    writeFileSync(join(repo, 'am.txt'), 'staged 1\nstaged 2\n');
+    writeFileSync(join(repo, 'ad.txt'), 'staged then deleted\n');
+    writeFileSync(join(repo, 'f.txt'), 'one\nstaged edit\n');
+    symlinkSync(secret, join(repo, 'ln'));
+    git(repo, 'add', '-A');
+    writeFileSync(join(repo, 'am.txt'), 'staged 1\nstaged 2\nlater\n');
+    rmSync(join(repo, 'ad.txt'));
+    writeFileSync(join(repo, 'f.txt'), 'one\nstaged edit\nunstaged edit\n');
+    writeFileSync(join(repo, 'new.txt'), 'untracked\n');
+    expect(git(repo, 'status', '--porcelain')).toBe('AD ad.txt\nAM am.txt\nMM f.txt\nA  ln\n?? new.txt\n');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const changes = await scanStatus(app, repo);
+    const row = (path: string) => changes.find((c) => c.path === path)!;
+
+    // AM
+    const amStaged = await rendered(app, row('am.txt'), 'staged');
+    expect(amStaged).toMatchObject({ whole: 'staged 1\nstaged 2\n', added: [], buttons: [] });
+    const amChanged = await rendered(app, row('am.txt'), 'changed');
+    expect(amChanged).toMatchObject({ whole: null, added: ['+later'], removed: [], buttons: ['Stage', 'Discard'] });
+    expect(amChanged.diff.ok && amChanged.diff.unifiedDiff).toBe(git(repo, 'diff', '--', 'am.txt'));
+
+    // AD:Changes 区是工作树删除,不是 "(empty file)"
+    const adStaged = await rendered(app, row('ad.txt'), 'staged');
+    expect(adStaged.whole).toBe('staged then deleted\n');
+    const adChanged = await rendered(app, row('ad.txt'), 'changed');
+    expect(adChanged).toMatchObject({ whole: null, added: [], removed: ['-staged then deleted'], buttons: [] });
+    expect(adChanged.html).not.toContain('(empty file)');
+    expect(adChanged.html).toContain('deleted file mode 100644');
+
+    // MM:两个区各是各的增量
+    expect(await rendered(app, row('f.txt'), 'staged')).toMatchObject({ whole: null, added: ['+staged edit'], buttons: ['Unstage'] });
+    expect(await rendered(app, row('f.txt'), 'changed')).toMatchObject({ whole: null, added: ['+unstaged edit'], buttons: ['Stage', 'Discard'] });
+
+    // 暂存的新符号链接:标明是链接;目标路径不当成文件内容,外部文件内容不出现
+    const ln = await rendered(app, row('ln'), 'staged');
+    expect(ln.diff).toMatchObject({ ok: true, modified: secret, modifiedIsSymlink: true });
+    expect(ln.whole).toBeNull();
+    expect(ln.html).toContain(`<div class="cgv-symlink-note" role="note">Symbolic link → ${secret}</div>`);
+    expect(ln.html).not.toContain('OUTSIDE-SECRET');
+    // 普通新文件不带这个标记
+    expect(amStaged.diff).not.toHaveProperty('modifiedIsSymlink');
+
+    // 未跟踪:工作树全文
+    expect(await rendered(app, row('new.txt'), 'changed')).toMatchObject({ whole: 'untracked\n', buttons: [] });
+
+    // AM 的 hunk 操作对真实 git 成立:暂存这个 hunk → index 得到增量;取消后丢弃 → 工作树回到 index 版本
+    const d = amChanged.diff;
+    if (!d.ok) throw new Error('am.txt diff failed');
+    const patch = extractHunkPatchFromUnifiedDiff('am.txt', d.unifiedDiff, d.unifiedDiff.split('\n').findIndex((l) => l.startsWith('@@')));
+    expect(await stageHunk(app, repo, patch!)).toMatchObject({ ok: true });
+    expect(git(repo, 'show', ':am.txt')).toBe('staged 1\nstaged 2\nlater\n');
+    expect(git(repo, 'status', '--porcelain', '--', 'am.txt')).toBe('A  am.txt\n');
+    expect(await unstageHunk(app, repo, patch!)).toMatchObject({ ok: true });
+    expect(git(repo, 'status', '--porcelain', '--', 'am.txt')).toBe('AM am.txt\n');
+    expect(await discardHunk(app, repo, patch!)).toMatchObject({ ok: true });
+    expect(readFileSync(join(repo, 'am.txt'), 'utf8')).toBe('staged 1\nstaged 2\n');
+    expect(git(repo, 'status', '--porcelain', '--', 'am.txt')).toBe('A  am.txt\n');
   });
 });

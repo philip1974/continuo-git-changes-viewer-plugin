@@ -344,3 +344,13 @@ Unreadable staged version (`diff-fetcher` T10):
   real gitlink (`ls-files -s` mode 160000) and an unmerged `UU` path stay
   `no-staged-blob`; in a restricted repository the guard's refusal is what is
   reported.
+
+Per-section views (`diffview-section-views`, `diff-fetcher` T11–T12):
+
+- R70: `AM`, `AD`, `MM`, a staged new symbolic link and an untracked file,
+  fetched and rendered per section: Staged shows the whole index version for
+  new entries and the staged increment for `MM`; Changes shows the index →
+  working-tree increment (`AM`, with Stage / Discard hunk buttons that work
+  against real git), the deletion for `AD` (no "(empty file)"), and the whole
+  file only for the untracked one; the link is labelled "Symbolic link →
+  <target>" and the outside file's content never appears.

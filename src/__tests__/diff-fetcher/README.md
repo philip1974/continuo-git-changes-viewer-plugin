@@ -66,6 +66,14 @@ showed "(empty file)".) The stage number is explicit because git reads
   and that a commit would still include it (`render-limits` L9b). Commit stays
   available either way.
 
+- T11: in changed mode "nothing on the new side" is decided from the
+  working-tree column (`Y === 'D'`), so `AD` / `RD` (merged status `A` / `R`)
+  read nothing from the working tree.
+- T12: a new symbolic link is recognised from the extended diff header (`new
+  file mode 120000`, only before the first hunk) and flagged
+  `modifiedIsSymlink`; the panel labels it instead of showing the target path
+  as content (`diffview-section-views` V4).
+
 Real-git coverage: `repo-safety-real-git` R50–R51c (names, non-blobs,
 symbolic links), R57–R58 (large files), R61–R62 (staged content), R64 (read
 timeout) and R69 (unreadable staged version).

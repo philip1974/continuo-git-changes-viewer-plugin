@@ -15,6 +15,7 @@ export function canDiscardHunk(
   if (!diff.ok) return false;
   if (diff.isUntracked) return false;
   if (change.statusY !== 'M') return false;
-  if (change.statusX !== ' ' && change.statusX !== 'M') return false;
+  // X === 'A':`AM`,Changes 区显示的是 index → 工作树的增量(与 `MM` 相同);R / C 仍不支持
+  if (change.statusX !== ' ' && change.statusX !== 'M' && change.statusX !== 'A') return false;
   return isPathSafeForPatch(change.path);
 }

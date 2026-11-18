@@ -206,6 +206,31 @@ describe('tracked diff fetcher', () => {
     expect(fine.exec.mock.calls.filter(([cmd, args]) => isLsFiles(cmd, args))).toEqual([]);
   });
 
+  it('T11 changed mode decides "nothing on the new side" from the working-tree column: `AD` (merged status A) and `RD` read nothing from the working tree', async () => {
+    for (const [x, status] of [['A', 'A'], ['R', 'R'], [' ', 'D'], ['M', 'D']] as const) {
+      const { app, exec } = appWith(() => ({ stdout: 'x' }));
+      const d = await fetchDiff(app, '/repo', { path: 'gone.txt', status, statusX: x, statusY: 'D', kind: 'text' }, 'changed');
+      expect({ x, modified: d.ok && d.modified }).toEqual({ x, modified: '' });
+      expect(exec.mock.calls.filter(([cmd]) => cmd === 'cat')).toEqual([]);
+    }
+  });
+
+  it('T12 a new symbolic link is recognised from the diff header (`new file mode 120000`) and flagged modifiedIsSymlink; a regular new file, a mode line inside a hunk, and a link that already existed are not', async () => {
+    const header = (mode: string) => `diff --git a/ln b/ln\nnew file mode ${mode}\nindex 0000000..1de5659\n--- /dev/null\n+++ b/ln\n@@ -0,0 +1 @@\n+target\n\\ No newline at end of file\n`;
+    const flagged = async (unifiedDiff: string) => {
+      const { app } = appWith((cmd, args) => (isIndexRead(cmd, args) ? { stdout: 'target' } : isHeadRead(cmd, args) ? { exitCode: 128 } : { stdout: unifiedDiff }));
+      const d = await fetchDiff(app, '/repo', { path: 'ln', status: 'A', statusX: 'A', statusY: ' ', kind: 'text' }, 'staged');
+      return d.ok ? d.modifiedIsSymlink ?? false : d;
+    };
+    expect(await flagged(header('120000'))).toBe(true);
+    expect(await flagged(header('100644'))).toBe(false);
+    expect(await flagged(header('100755'))).toBe(false);
+    // 文件内容里的同样文字(hunk 内的行以 + 开头;即便没有前缀,@@ 之后也不看)
+    expect(await flagged('diff --git a/ln b/ln\nnew file mode 100644\n--- /dev/null\n+++ b/ln\n@@ -0,0 +2 @@\n+x\nnew file mode 120000\n')).toBe(false);
+    expect(await flagged('diff --git a/ln b/ln\nindex 1..2 120000\n--- a/ln\n+++ b/ln\n@@ -1 +1 @@\n-a\n+b\n')).toBe(false);
+    expect(await flagged('')).toBe(false);
+  });
+
   it('T8 the three whole-file reads (HEAD blob, index blob, working-tree cat) carry a short explicit timeout; the unified diff keeps the host default', async () => {
     expect(FILE_READ_TIMEOUT_MS).toBe(5_000);
     const { app, exec } = appWith(() => ({ stdout: 'x\n' }));
