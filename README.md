@@ -82,7 +82,8 @@ detect whether HEAD is already on a remote branch.
 
 ## v0.4 Limits
 
-- Hunk stage, unstage, and discard are supported for modified text files only.
+- Hunk stage, unstage, and discard are supported for modified text files only
+  (including the unstaged edits of a staged new file, `AM`, in Changes).
   Added, deleted, renamed, copied, binary, and untracked files do not expose
   hunk write buttons in this version.
 - File-level actions in v0.4.0 are intentionally narrow: Untracked can be
@@ -98,7 +99,9 @@ detect whether HEAD is already on a remote branch.
 - The workspace root must be the git toplevel. Opening a subdirectory of a repo
   is reported as unsupported in this version.
 - Very large diffs degrade to a file-level placeholder with the exact git
-  command to run manually (the host caps command output at 10 MiB). A new or
+  command to run manually (the host caps command output at 10 MiB). The file
+  name in that command is quoted for POSIX-style shells (sh, bash, zsh, fish);
+  it is not written for PowerShell or cmd. A new or
   untracked file is shown in full up to 1 MiB; beyond that the panel shows the
   first 1 MB and says so.
 

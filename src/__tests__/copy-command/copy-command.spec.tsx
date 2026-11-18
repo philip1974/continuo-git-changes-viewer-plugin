@@ -55,6 +55,98 @@ describe('shellQuotePath', () => {
   });
 });
 
+// fish 的词法(只覆盖引号 / 转义 / 空白;fish 文档 "Quotes" 与 "Escaping characters"):单引号内 `\'` 与 `\\`
+// 是转义,其余反斜杠原样;引号外 `\x` 是字面 x。未加引号的 ; # & | 等说明引号被提前闭合——抛错。
+// 本机没有 fish 时用它断言;有 fish 时另用真实 fish 回读(见 Q9)。
+function parseFish(line: string): string[] {
+  const args: string[] = [];
+  let cur = '';
+  let has = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (c === "'") {
+      has = true;
+      for (i++; i < line.length && line[i] !== "'"; i++) {
+        if (line[i] === '\\' && (line[i + 1] === "'" || line[i + 1] === '\\')) i++;
+        cur += line[i];
+      }
+      if (i >= line.length) throw new Error('unterminated quote');
+    } else if (c === '\\') {
+      has = true;
+      cur += line[++i] ?? '';
+    } else if (c === ' ') {
+      if (has) args.push(cur);
+      cur = '';
+      has = false;
+    } else if (/[;#&|<>()$*?~"{}]/.test(c)) {
+      throw new Error(`unquoted metacharacter ${c}`);
+    } else {
+      has = true;
+      cur += c;
+    }
+  }
+  if (has) args.push(cur);
+  return args;
+}
+
+const BACKSLASH = [
+  "\\';touch PWNED;#", "a\\'; touch pwned #", "a\\\\'; touch pwned #", 'trail\\', "\\'", '\\', '\\\\', "'\\", "\\''", "a\\b'c\\'d", '\\ ', '~\\', '-\\n',
+  "x\\'$(touch PWNED)'", 'dir\\sub/名字 \\ 带.md', "''\\''",
+];
+const which = (name: string): string | null => {
+  try {
+    return execFileSync('/bin/sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim() || null;
+  } catch {
+    return null;
+  }
+};
+// 真实 shell 回读:quoted 作为 printf 的一个参数
+const readBack = (shell: string, flags: string[], quoted: string) =>
+  execFileSync(shell, [...flags, '-c', `printf '%s\\0' ${quoted}`], { encoding: 'utf8', cwd: '/', env: { PATH: '/usr/bin:/bin', HOME: '/nonexistent' } });
+
+describe('shellQuotePath is not specific to POSIX sh: fish treats \\\' and \\\\ inside single quotes as escapes', () => {
+  it('Q9 a path containing a backslash is written with every backslash and single quote outside the quotes (`\\\\`, `\\\'`), plain runs inside — one argument equal to the path under the fish quoting rules, where the POSIX-only form closes the quote early', () => {
+    expect(shellQuotePath("\\';touch PWNED;#")).toBe("\\\\\\'';touch PWNED;#'");
+    expect(shellQuotePath('a\\b')).toBe("'a'\\\\'b'");
+    expect(shellQuotePath('trail\\')).toBe("'trail'\\\\");
+    // fixture 证明:原来的写法(整体单引号,' 写成 '\'')在 fish 里把 `\'` 读成字面引号,引号提前闭合
+    const posixOnly = (path: string) => `'${path.replace(/'/g, `'\\''`)}'`;
+    expect(() => parseFish(`git diff -- ${posixOnly("\\';touch PWNED;#")}`)).toThrow(/unquoted metacharacter ;/);
+    for (const path of [...BACKSLASH, ...HOSTILE, ...ORDINARY]) {
+      const quoted = shellQuotePath(path)!;
+      expect({ path, args: parseFish(`git diff -- ${quoted}`) }).toEqual({ path, args: ['git', 'diff', '--', path] });
+      // 引号段之间总隔着一个转义字符:不出现"引号内的 ''"(zsh RC_QUOTES 下那是字面 ')
+      if (path.includes('\\')) expect(quoted).not.toMatch(/[^\\']''/);
+    }
+    const fish = which('fish');
+    if (fish) for (const path of [...BACKSLASH, ...HOSTILE]) expect({ path, out: readBack(fish, [], shellQuotePath(path)!) }).toEqual({ path, out: `${path}\0` });
+  });
+
+  it('Q10 the same text read back by real sh / bash / zsh (also with RC_QUOTES, and with history expansion on) / dash / ksh is that one path, and nothing else runs', () => {
+    const shells: Array<[string, string[]]> = [
+      ['/bin/sh', []], ['/bin/bash', []], ['/bin/bash', ['-H']], ['/bin/zsh', []], ['/bin/zsh', ['-o', 'rcquotes']], ['/bin/zsh', ['-o', 'banghist']],
+      ['/bin/dash', []], ['/bin/ksh', []],
+    ];
+    const present = shells.filter(([shell]) => which(shell) !== null);
+    // POSIX sh 与 zsh 是这条命令的主要去处:至少这两个必须真的跑到
+    expect(present.map(([shell]) => shell)).toEqual(expect.arrayContaining(['/bin/sh', '/bin/zsh']));
+    const paths = [...BACKSLASH, ...HOSTILE, ...ORDINARY];
+    for (const [shell, flags] of present) {
+      // 每个 shell 一次调用:每行一条 printf,各自回读一个参数(任何一条的引号没闭合都会让后面的全部错位)
+      const script = paths.map((path) => `printf '%s\\0' ${shellQuotePath(path)!}`).join('\n');
+      const out = execFileSync(shell, [...flags, '-c', script], { encoding: 'utf8', cwd: '/', env: { PATH: '/usr/bin:/bin', HOME: '/nonexistent' } });
+      expect({ shell, flags, args: out.split('\0').slice(0, -1) }).toEqual({ shell, flags, args: paths });
+    }
+  });
+
+  it('Q11 paths without a backslash keep the output they had', () => {
+    expect(shellQuotePath("it's")).toBe("'it'\\''s'");
+    expect(shellQuotePath("';touch pwned;'")).toBe("''\\'';touch pwned;'\\'''");
+    expect(shellQuotePath('a b')).toBe("'a b'");
+    expect(shellQuotePath('src/a.ts')).toBe('src/a.ts');
+  });
+});
+
 describe('the command offered by the "Diff too large" placeholder', () => {
   it('Q4 ordinary paths: the command text is unchanged', async () => {
     expect((await tooLarge('large.txt')).exactCommand).toBe('git diff -- large.txt');
@@ -92,6 +184,10 @@ describe('placeholder Copy button', () => {
     expect(container.querySelector('code')!.textContent).toBe("git diff -- 'a;touch pwned'");
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
     expect(writeText.mock.calls).toEqual([["git diff -- 'a;touch pwned'"]]);
+    // 命令按 POSIX shell 的引号规则书写(Windows 的 PowerShell / cmd 不适用),按钮上说明
+    expect((screen.getByRole('button', { name: 'Copy' }) as HTMLButtonElement).title).toBe(
+      'Copy this command. It is quoted for POSIX-style shells (sh, bash, zsh, fish), not for PowerShell or cmd.',
+    );
   });
 
   it('Q8 no command available: the button is disabled with an explanation, nothing is shown as a command and nothing is copied', () => {

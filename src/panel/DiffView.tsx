@@ -77,6 +77,10 @@ const WITHHELD_NOTICE = {
 
 // exactCommand 里的路径已按 shell 规则转义(diff-fetcher / shell-quote);为 null 表示路径含控制字符、
 // 没有可安全粘贴的命令:不显示命令,Copy 禁用并说明原因。
+// 命令里的路径按 POSIX 风格 shell 的引号规则书写(见 shell-quote);PowerShell / cmd 的规则不同。
+const COPY_COMMAND_TITLE =
+  'Copy this command. It is quoted for POSIX-style shells (sh, bash, zsh, fish), not for PowerShell or cmd.';
+
 function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string | null }) {
   return (
     <div className="cgv-placeholder">
@@ -88,7 +92,7 @@ function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string |
         title={
           exactCommand === null
             ? 'No command to copy: this file name contains control characters and cannot be pasted into a terminal safely'
-            : undefined
+            : COPY_COMMAND_TITLE
         }
         onClick={() => {
           if (exactCommand !== null) void navigator.clipboard?.writeText(exactCommand);
