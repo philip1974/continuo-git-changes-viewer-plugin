@@ -12,6 +12,7 @@ import { unstageHunk } from '../git/unstage-hunk';
 import type { CoPluginApp } from '../sdk/types';
 import type { FileChange } from '../git/status-scanner';
 import type { GitViewerState } from '../state/git-store';
+import { COMMIT_IN_PROGRESS_MESSAGE, COMMIT_IN_PROGRESS_TITLE } from './FileList';
 import {
   type DrawerAction,
   PreviewDrawer,
@@ -29,6 +30,8 @@ interface DiffViewProps {
   readonly scopeReady?: Promise<'grant' | 'deny' | 'no-workspace' | 'error'>;
   readonly drawer?: PreviewDrawerState;
   readonly dispatchDrawer?: Dispatch<PreviewDrawerAction>;
+  /** 提交正在进行(git-store 的 commitInFlight):hunk 的写操作按钮禁用。 */
+  readonly writesBlocked?: boolean;
 }
 
 function NewFileView({
@@ -126,11 +129,13 @@ function UnifiedDiffView({
   onJumpLine,
   hunkActions,
   onHunkAction,
+  writesBlocked = false,
 }: {
   readonly diff: string;
   readonly onJumpLine?: (line: number) => void;
   readonly hunkActions?: readonly DrawerAction[];
   readonly onHunkAction?: (hunkLineIndex: number, action: DrawerAction) => void;
+  readonly writesBlocked?: boolean;
 }) {
   if (!diff.trim()) {
     return <div className="cgv-diff-empty">(no textual diff — file may be binary or identical)</div>;
@@ -192,8 +197,11 @@ function UnifiedDiffView({
                   type="button"
                   onClick={() => onHunkAction(i, action)}
                   aria-label={`${label} hunk at ${line}`}
+                  disabled={writesBlocked}
                   title={
-                    action === 'discard'
+                    writesBlocked
+                      ? COMMIT_IN_PROGRESS_TITLE
+                      : action === 'discard'
                       ? 'Discard is destructive. Use git stash first if uncertain.'
                       : `${label} this hunk`
                   }
@@ -229,6 +237,7 @@ export function DiffView({
   scopeReady,
   drawer: externalDrawer,
   dispatchDrawer: externalDispatchDrawer,
+  writesBlocked = false,
 }: DiffViewProps) {
   const mountedRef = useRef(true);
   const closeTimerRef = useRef<number | null>(null);
@@ -365,9 +374,10 @@ export function DiffView({
 
   const handleConfirm = async () => {
     if (drawer.kind !== 'previewing' && drawer.kind !== 'error') return;
-    const repoRoot = store.getState().repoRoot;
-    if (!app || !repoRoot) {
-      const message = !repoRoot ? 'Repo root unknown' : 'SDK shell unavailable';
+    const { repoRoot, commitInFlight } = store.getState();
+    if (!app || !repoRoot || commitInFlight) {
+      // 提交在进行:确认按钮本是禁用的(兜底,见 GitViewerPanel 的 runFileAction)
+      const message = !repoRoot ? 'Repo root unknown' : !app ? 'SDK shell unavailable' : COMMIT_IN_PROGRESS_MESSAGE;
       dispatchDrawer({ type: 'confirm' });
       if (!mountedRef.current) return;
       dispatchDrawer({ type: 'fail', error: message });
@@ -384,40 +394,52 @@ export function DiffView({
       return;
     }
 
-    const result =
-      drawer.action === 'stage'
-        ? await stageHunk(app, repoRoot, drawer.patch)
-        : drawer.action === 'unstage'
-          ? await unstageHunk(app, repoRoot, drawer.patch)
-          : await discardHunk(app, repoRoot, drawer.patch);
-    if (!mountedRef.current) return;
-
-    if (result.ok) {
-      dispatchDrawer({ type: 'succeed' });
-      // v0.3.2 hot-fix: when the action removes the last file from the
-      // current section, store.refresh sets selected=null → DiffView
-      // unmounts → PreviewDrawer (rendered inside DiffView) disappears
-      // before the user can see the 'success' state. Surface a toast so
-      // the destructive action always has visible confirmation.
-      // (Stage/unstage also benefit, less critical since they don't
-      // destroy work.)
-      if (drawer.action === 'discard' && typeof app?.notifications?.show === 'function') {
-        app.notifications.show({
-          kind: 'info',
-          message: `Hunk discarded from ${drawer.filePath}`,
-        });
-      }
-      await store.getState().refresh();
+    // 从确认到 git 命令与随后的 refresh 结束,Commit / Amend 不可用(git-store 的 writesInFlight)
+    const endWrite = store.getState().beginWrite();
+    try {
+      const result =
+        drawer.action === 'stage'
+          ? await stageHunk(app, repoRoot, drawer.patch)
+          : drawer.action === 'unstage'
+            ? await unstageHunk(app, repoRoot, drawer.patch)
+            : await discardHunk(app, repoRoot, drawer.patch);
       if (!mountedRef.current) return;
-      closeTimerRef.current = window.setTimeout(() => {
-        if (mountedRef.current) dispatchDrawer({ type: 'dismiss' });
-      }, 800);
-      return;
-    }
 
-    const message = result.error || 'Hunk no longer applies; refresh';
-    dispatchDrawer({ type: 'fail', error: message });
-    showError(message);
+      if (result.ok) {
+        dispatchDrawer({ type: 'succeed' });
+        // v0.3.2 hot-fix: when the action removes the last file from the
+        // current section, store.refresh sets selected=null → DiffView
+        // unmounts → PreviewDrawer (rendered inside DiffView) disappears
+        // before the user can see the 'success' state. Surface a toast so
+        // the destructive action always has visible confirmation.
+        // (Stage/unstage also benefit, less critical since they don't
+        // destroy work.)
+        if (drawer.action === 'discard' && typeof app?.notifications?.show === 'function') {
+          app.notifications.show({
+            kind: 'info',
+            message: `Hunk discarded from ${drawer.filePath}`,
+          });
+        }
+        await store.getState().refresh();
+        if (!mountedRef.current) return;
+        closeTimerRef.current = window.setTimeout(() => {
+          if (mountedRef.current) dispatchDrawer({ type: 'dismiss' });
+        }, 800);
+        return;
+      }
+
+      const message = result.error || 'Hunk no longer applies; refresh';
+      dispatchDrawer({ type: 'fail', error: message });
+      showError(message);
+    } catch (err) {
+      // 宿主拒绝执行等:照常报告,不留未处理的 rejection
+      if (!mountedRef.current) return;
+      const message = err instanceof Error ? err.message : String(err);
+      dispatchDrawer({ type: 'fail', error: message });
+      showError(message);
+    } finally {
+      endWrite();
+    }
   };
 
   // 全文视图(NewFileView)按**区**判断,不看合并后的 status(`AM` / `AD` 同时出现在两个区):
@@ -463,12 +485,14 @@ export function DiffView({
         onJumpLine={onJumpLine}
         hunkActions={hunkActions}
         onHunkAction={handleHunkAction}
+        writesBlocked={writesBlocked}
       />
       {!isDrawerLifted ? (
         <PreviewDrawer
           state={drawer}
           onConfirm={handleConfirm}
           onCancel={() => dispatchDrawer({ type: 'cancel' })}
+          confirmBlockedReason={writesBlocked ? COMMIT_IN_PROGRESS_TITLE : null}
         />
       ) : null}
     </main>

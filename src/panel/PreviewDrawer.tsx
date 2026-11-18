@@ -87,6 +87,8 @@ interface PreviewDrawerProps {
   readonly state: PreviewDrawerState;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
+  /** 非 null:此刻不能执行(提交正在进行),确认按钮禁用并以它为提示。 */
+  readonly confirmBlockedReason?: string | null;
 }
 
 function patchForState(state: PreviewDrawerState): string | null {
@@ -129,6 +131,7 @@ export function PreviewDrawer({
   state,
   onConfirm,
   onCancel,
+  confirmBlockedReason = null,
 }: PreviewDrawerProps) {
   const [confirmInput, setConfirmInput] = useState('');
 
@@ -201,7 +204,8 @@ export function PreviewDrawer({
             type="button"
             className="cgv-discard-btn"
             onClick={onConfirm}
-            disabled={!isDiscardConfirmed}
+            disabled={!isDiscardConfirmed || confirmBlockedReason !== null}
+            title={confirmBlockedReason ?? undefined}
             aria-label={isError ? `Retry discard ${noun}` : `Discard ${noun}`}
           >
             {isError ? `Retry ${verbText}` : verbText}
@@ -239,7 +243,8 @@ export function PreviewDrawer({
             <button
               type="button"
               onClick={onConfirm}
-              disabled={state.kind === 'applying'}
+              disabled={state.kind === 'applying' || confirmBlockedReason !== null}
+              title={confirmBlockedReason ?? undefined}
               aria-label={`${verbText} ${noun}`}
             >
               {state.kind === 'applying' ? `${verbText}...` : verbText}

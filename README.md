@@ -112,6 +112,14 @@ click, so that the new list was on screen (or about to be painted) without you
 having had time to read it. The click then commits what the panel shows at
 that moment.
 
+The panel's own Stage / Unstage / Discard (file and hunk) and Commit / Amend
+do not overlap. While a stage, unstage or discard is running — until its git
+command and the refresh after it are done — Commit and Amend are disabled; a
+click that slips in anyway, or a stage that ran while the hooks confirmation
+was open, commits nothing and asks you to review and commit again. While a
+commit or amend is running, the stage / unstage / discard buttons are
+disabled.
+
 ### Amend
 
 The commit editor can amend the last commit. Enable "Amend last commit" to load

@@ -18,7 +18,14 @@ interface FileListProps {
   readonly onStageFile?: (change: FileChange, section: SectionKind) => void;
   readonly onUnstageFile?: (change: FileChange, section: SectionKind) => void;
   readonly onDiscardFile?: (change: FileChange, section: SectionKind) => void;
+  /** 提交正在进行(git-store 的 commitInFlight):文件级写操作按钮禁用。 */
+  readonly writesBlocked?: boolean;
 }
+
+// 提交正在进行时改暂存区,会让提交的内容不确定(取决于 Stage 与 `git commit` 谁先读写 index)。
+export const COMMIT_IN_PROGRESS_TITLE = 'A commit is in progress — wait for it to finish';
+export const COMMIT_IN_PROGRESS_MESSAGE =
+  'A commit is in progress. Nothing was changed — wait for it to finish and try again.';
 
 // 每个文件一行、没有虚拟化:status 条目极多(几万个未跟踪文件)时只渲染每段的前 MAX_SECTION_ROWS 行并说明;
 // 数据不裁剪(计数、已暂存数量、提交都按完整列表)。
@@ -57,6 +64,7 @@ function Section({
   onStageFile,
   onUnstageFile,
   onDiscardFile,
+  writesBlocked,
 }: {
   readonly title: string;
   readonly items: readonly FileChange[];
@@ -66,6 +74,7 @@ function Section({
   readonly onStageFile?: (change: FileChange, section: SectionKind) => void;
   readonly onUnstageFile?: (change: FileChange, section: SectionKind) => void;
   readonly onDiscardFile?: (change: FileChange, section: SectionKind) => void;
+  readonly writesBlocked?: boolean;
 }) {
   if (items.length === 0) return null;
   const rows = items.length > MAX_SECTION_ROWS ? items.slice(0, MAX_SECTION_ROWS) : items;
@@ -114,8 +123,9 @@ function Section({
                   type="button"
                   className="cgv-row-action-btn cgv-stage-action"
                   // 未合并的行上 `git add` 的含义是"标记为已解决"
-                  title={isUnmerged(change) ? `Mark ${change.path} as resolved (git add)` : `Stage file ${change.path}`}
+                  title={writesBlocked ? COMMIT_IN_PROGRESS_TITLE : isUnmerged(change) ? `Mark ${change.path} as resolved (git add)` : `Stage file ${change.path}`}
                   aria-label={`Stage file ${change.path}`}
+                  disabled={writesBlocked}
                   onClick={() => onStageFile(change, section)}
                 >
                   ↑
@@ -125,8 +135,9 @@ function Section({
                 <button
                   type="button"
                   className="cgv-row-action-btn cgv-unstage-action"
-                  title={`Unstage file ${change.path}`}
+                  title={writesBlocked ? COMMIT_IN_PROGRESS_TITLE : `Unstage file ${change.path}`}
                   aria-label={`Unstage file ${change.path}`}
+                  disabled={writesBlocked}
                   onClick={() => onUnstageFile(change, section)}
                 >
                   ↓
@@ -136,8 +147,9 @@ function Section({
                 <button
                   type="button"
                   className="cgv-row-action-btn cgv-discard-btn"
-                  title={`Discard file ${change.path} (destructive)`}
+                  title={writesBlocked ? COMMIT_IN_PROGRESS_TITLE : `Discard file ${change.path} (destructive)`}
                   aria-label={`Discard file ${change.path}`}
+                  disabled={writesBlocked}
                   onClick={() => onDiscardFile(change, section)}
                 >
                   ×
@@ -162,6 +174,7 @@ export function FileList({
   onStageFile,
   onUnstageFile,
   onDiscardFile,
+  writesBlocked = false,
 }: FileListProps) {
   const staged = selectStaged({ changes });
   const changed = selectChanged({ changes });
@@ -177,6 +190,7 @@ export function FileList({
         onStageFile={onStageFile}
         onUnstageFile={onUnstageFile}
         onDiscardFile={onDiscardFile}
+        writesBlocked={writesBlocked}
       />
       <Section
         title="Changed"
@@ -187,6 +201,7 @@ export function FileList({
         onStageFile={onStageFile}
         onUnstageFile={onUnstageFile}
         onDiscardFile={onDiscardFile}
+        writesBlocked={writesBlocked}
       />
       <Section
         title="Untracked"
@@ -197,6 +212,7 @@ export function FileList({
         onStageFile={onStageFile}
         onUnstageFile={onUnstageFile}
         onDiscardFile={onDiscardFile}
+        writesBlocked={writesBlocked}
       />
     </aside>
   );

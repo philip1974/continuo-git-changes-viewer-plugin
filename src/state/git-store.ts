@@ -81,6 +81,18 @@ export interface GitViewerState {
    * 指纹相同不说明没换过(换成了同样的),指纹不同也可能只是比较的两边一起变了。
    */
   refreshVersion: number;
+  /**
+   * 面板自己发起、正在进行的写操作数(Stage / Unstage / Discard,文件级与 hunk 级——从点击到 git 命令以及随后的
+   * refresh 结束)。大于 0 时暂存区正在被改,Commit / Amend 不可用(见 CommitEditor)。
+   */
+  writesInFlight: number;
+  /** 每开始一次面板写操作就加一,只增不减(refresh / clear 不重置):提交前比较"点击之后有没有写操作开始过"。 */
+  writeVersion: number;
+  /** 面板的 Commit / Amend 正在进行(从点击到结束):此时文件写操作不可用——它会让提交的内容不确定。 */
+  commitInFlight: boolean;
+  /** 开始一次面板写操作;返回的函数结束它(只生效一次)。 */
+  beginWrite(): () => void;
+  setCommitInFlight(value: boolean): void;
   refresh(): Promise<void>;
   selectFile(path: string, mode: DiffMode): void;
   loadDiff(path: string, mode: DiffMode): Promise<void>;
@@ -190,6 +202,9 @@ const emptyState = {
   statusError: null,
   statusFingerprint: null,
   refreshVersion: 0,
+  writesInFlight: 0,
+  writeVersion: 0,
+  commitInFlight: false,
 } satisfies Pick<
   GitViewerState,
   | 'repoRoot'
@@ -207,6 +222,9 @@ const emptyState = {
   | 'statusError'
   | 'statusFingerprint'
   | 'refreshVersion'
+  | 'writesInFlight'
+  | 'writeVersion'
+  | 'commitInFlight'
 >;
 
 export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState> {
@@ -348,6 +366,18 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         statusFingerprint: null,
         refreshVersion: get().refreshVersion + 1,
       });
+    },
+    beginWrite() {
+      set({ writesInFlight: get().writesInFlight + 1, writeVersion: get().writeVersion + 1 });
+      let ended = false;
+      return () => {
+        if (ended) return;
+        ended = true;
+        set({ writesInFlight: Math.max(0, get().writesInFlight - 1) });
+      };
+    },
+    setCommitInFlight(value) {
+      set({ commitInFlight: value });
     },
     setBanner(banner) {
       set({ banner });

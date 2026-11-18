@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { fetchDiff } from '../../git/diff-fetcher';
 import { readStatusHash } from '../../git/status-hash';
 import { scanStatus } from '../../git/status-scanner';
-import { AMEND_HEAD_CHANGED_MESSAGE, AMEND_NON_UTF8_UNEDITED_MESSAGE, REPO_CHANGED_MESSAGE, VIEW_REFRESHED_MESSAGE, VIEW_REFRESHING_MESSAGE } from '../../panel/CommitEditor';
+import { AMEND_HEAD_CHANGED_MESSAGE, AMEND_NON_UTF8_UNEDITED_MESSAGE, FILE_OP_DURING_COMMIT_MESSAGE, REPO_CHANGED_MESSAGE, VIEW_REFRESHED_MESSAGE, VIEW_REFRESHING_MESSAGE } from '../../panel/CommitEditor';
 import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CoPluginApp, Disposable, PanelApi, PanelVisibilityEvent, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 import type { AutoRefreshTimerOpts } from '../../state/auto-refresh-timer';
@@ -486,6 +486,94 @@ describe('an unedited commit message with bytes that are not valid UTF-8 is not 
     await waitFor(() => expect(git(repo, 'status', '--porcelain')).toBe(''));
     expect(git(repo, 'log', '-1', '--format=%B').trim()).toBe('gbk 中文 (re-typed)');
     expect(git(repo, 'rev-list', '--count', 'HEAD').trim()).toBe('2');
+    await settled(store);
+  });
+});
+
+// 面板自己的 Stage / Unstage / Discard 与 Commit / Amend 互斥(file-op-commit-exclusion)。此前点 Stage 后紧接着点
+// Commit:`git add` 在提交前的确认之后落盘,提交里多出点击时只在 Changes 区的 x(复核者实测:提交了 `f,x`)。
+describe('the panel’s own file writes and Commit exclude each other (real panel, real git)', () => {
+  const commitButton = () => screen.getByRole('button', { name: 'Commit staged changes' }) as HTMLButtonElement;
+  const committed = () => git(repo, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n');
+  const setup = async () => {
+    writeFileSync(join(repo, 'x'), 'x0\n');
+    git(repo, 'add', 'x');
+    git(repo, 'commit', '-qm', 'x');
+    writeFileSync(join(repo, 'f'), 'v1 reviewed\n');
+    git(repo, 'add', 'f');
+    writeFileSync(join(repo, 'x'), 'x1 not staged\n');
+    const mounted = mount(0);
+    await waitFor(() => expect(mounted.store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
+    await waitFor(() => expect(mounted.store.getState().diffCache.size).toBe(1));
+    mounted.store.getState().setCommitMessage('msg');
+    await waitFor(() => expect(commitButton().disabled).toBe(false));
+    return mounted;
+  };
+
+  it('P10 Stage x is clicked and its `git add` is still running: Commit is disabled and a click on it commits nothing; once the add and the refresh have landed the view shows f and x staged, and Commit takes exactly those', async () => {
+    const { store } = await setup();
+    const gate = deferred();
+    let held = 0;
+    holdExec = (args) => (args.includes('add') && held++ === 0 ? gate.promise : undefined);
+    fireEvent.click(screen.getByRole('button', { name: 'Stage file x' }));
+    await waitFor(() => expect(held).toBe(1));
+    expect(commitButton().disabled).toBe(true);
+    fireEvent.click(commitButton());
+
+    gate.resolve();
+    await waitFor(() => expect(store.getState().writesInFlight).toBe(0));
+    expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('x');
+    await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
+    expect([...document.querySelectorAll('.cgv-section')].map((s) => s.textContent)).toEqual([expect.stringContaining('Staged')]);
+    expect(git(repo, 'diff', '--cached', '--name-only').trim().split('\n')).toEqual(['f', 'x']);
+
+    await waitFor(() => expect(commitButton().disabled).toBe(false));
+    fireEvent.click(commitButton());
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
+    expect(committed()).toEqual(['f', 'x']);
+    await settled(store);
+  });
+
+  it('P11 Commit is clicked and `git commit` is still running: Stage x, Discard x and the hunk buttons of x are disabled; the commit holds only f, and x is still unstaged afterwards', async () => {
+    const { store } = await setup();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Stage hunk at / }).length).toBe(1));
+    const gate = deferred();
+    let held = 0;
+    holdExec = (args) => (args.includes('commit') && held++ === 0 ? gate.promise : undefined);
+    fireEvent.click(commitButton());
+    await waitFor(() => expect(held).toBe(1));
+    const stage = screen.getByRole('button', { name: 'Stage file x' }) as HTMLButtonElement;
+    expect(stage.disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Discard file x' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /^Stage hunk at / }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(stage);
+
+    gate.resolve();
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
+    await settled(store);
+    expect(committed()).toEqual(['f']);
+    expect(git(repo, 'status', '--porcelain')).toBe(' M x\n');
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Stage file x' }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('P12 the repository has a pre-commit hook: Commit opens the hooks prompt; while it is open Stage x runs; "Commit and run hooks" then commits nothing and says a file operation ran after the click; the next click commits f and x', async () => {
+    writeFileSync(join(repo, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const { store } = await setup();
+    fireEvent.click(commitButton());
+    const confirm = await screen.findByRole('button', { name: 'Commit and run hooks' });
+    fireEvent.click(screen.getByRole('button', { name: 'Stage file x' }));
+    await waitFor(() => expect(git(repo, 'diff', '--cached', '--name-only').trim().split('\n')).toEqual(['f', 'x']));
+    await waitFor(() => expect(store.getState().writesInFlight).toBe(0));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'warn', message: FILE_OP_DURING_COMMIT_MESSAGE, dismissable: true }));
+    expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('x');
+
+    await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
+    await waitFor(() => expect(commitButton().disabled).toBe(false));
+    fireEvent.click(commitButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit and run hooks' }));
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
+    expect(committed()).toEqual(['f', 'x']);
     await settled(store);
   });
 });

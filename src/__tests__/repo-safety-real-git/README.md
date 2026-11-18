@@ -425,6 +425,13 @@ driven by the test; run with git 2.50.1 and 2.56.1):
 - P8: only the read at the click times out: nothing is committed and the panel
   says the state could not be confirmed, not that the repository changed; the
   next click commits (`commit-editor-component` T31).
+- P10–P12 (`file-op-commit-exclusion`): the panel's own writes and Commit do
+  not overlap. P10: Stage x with its `git add` held → Commit disabled, a click
+  commits nothing; afterwards the view shows f and x staged and the commit
+  takes exactly those. P11: `git commit` held → Stage / Discard x and the hunk
+  button are disabled; the commit holds only f. P12: a pre-commit hook opens
+  the prompt, Stage x runs meanwhile → "Commit and run hooks" commits nothing;
+  the next attempt commits f and x.
 
 Bytes that are not valid UTF-8 (`hunk-patch-builder` T8, `path-utils` T8,
 `status-scanner` T10; run with git 2.50.1 and 2.56.1):

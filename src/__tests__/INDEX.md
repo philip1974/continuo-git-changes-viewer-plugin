@@ -139,6 +139,10 @@
 
 - [`file-level-integration.spec.tsx`](./file-level-integration/file-level-integration.spec.tsx)
 
+## [file-op-commit-exclusion](./file-op-commit-exclusion/README.md)
+
+- [`file-op-commit-exclusion.spec.tsx`](./file-op-commit-exclusion/file-op-commit-exclusion.spec.tsx)
+
 ## [FileList three sections](./filelist-3-segment/README.md)
 
 - [`filelist-3-segment.spec.tsx`](./filelist-3-segment/filelist-3-segment.spec.tsx)

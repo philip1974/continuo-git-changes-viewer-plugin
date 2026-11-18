@@ -17,7 +17,7 @@ import type { CoPluginApp, PanelApi } from '../sdk/types';
 import type { AutoRefreshTimer, AutoRefreshTimerOpts } from '../state/auto-refresh-timer';
 import { RetryBackoff } from '../state/retry-backoff';
 import { cacheKey, findChange, selectStaged, type GitViewerState } from '../state/git-store';
-import { FileList } from './FileList';
+import { COMMIT_IN_PROGRESS_MESSAGE, COMMIT_IN_PROGRESS_TITLE, FileList } from './FileList';
 import { DiffView } from './DiffView';
 import { CommitEditor } from './CommitEditor';
 import {
@@ -263,30 +263,44 @@ export function GitViewerPanel({
     change: FileChange,
     action: Extract<DrawerAction, 'stage' | 'unstage'>,
   ) => {
-    const repoRoot = store.getState().repoRoot;
+    const { repoRoot, commitInFlight } = store.getState();
     if (!app || !repoRoot) {
       showError(!repoRoot ? 'Repo root unknown' : 'SDK shell unavailable');
       return;
     }
-
-    const result = action === 'stage'
-      ? await stageFile(app, repoRoot, change.path, { untracked: change.statusX === '?' })
-      : await unstageFile(app, repoRoot, change.path);
-    if (!mountedRef.current) return;
-
-    if (!result.ok) {
-      showError(result.error || 'File operation failed; refresh');
+    // 提交在进行:按钮本是禁用的(这是点击与重新渲染之间的兜底)。此时改暂存区会让提交的内容不确定。
+    if (commitInFlight) {
+      showError(COMMIT_IN_PROGRESS_MESSAGE);
       return;
     }
 
-    await store.getState().refresh();
-    if (!mountedRef.current) return;
-    // 未合并的行(UD / DD)上 Stage 就是 `git add`:冲突被标记为已解决——照实说
-    showInfo(
-      action === 'stage' && isUnmerged(change)
-        ? `Marked ${change.path} as resolved (staged)`
-        : `${action === 'stage' ? 'Staged' : 'Unstaged'} ${change.path}`,
-    );
+    // 从点击(同步,在任何 await 之前)到 git 命令与随后的 refresh 结束,Commit / Amend 不可用(见 CommitEditor)
+    const endWrite = store.getState().beginWrite();
+    try {
+      const result = action === 'stage'
+        ? await stageFile(app, repoRoot, change.path, { untracked: change.statusX === '?' })
+        : await unstageFile(app, repoRoot, change.path);
+      if (!mountedRef.current) return;
+
+      if (!result.ok) {
+        showError(result.error || 'File operation failed; refresh');
+        return;
+      }
+
+      await store.getState().refresh();
+      if (!mountedRef.current) return;
+      // 未合并的行(UD / DD)上 Stage 就是 `git add`:冲突被标记为已解决——照实说
+      showInfo(
+        action === 'stage' && isUnmerged(change)
+          ? `Marked ${change.path} as resolved (staged)`
+          : `${action === 'stage' ? 'Staged' : 'Unstaged'} ${change.path}`,
+      );
+    } catch (err) {
+      // 宿主拒绝执行(并发 exec 超限等)会以 rejection 到这里:照常报告,不留未处理的 rejection
+      if (mountedRef.current) showError(err instanceof Error ? err.message : String(err));
+    } finally {
+      endWrite();
+    }
   };
 
   const openDiscardFileDrawer = (change: FileChange, _section: SectionKind) => {
@@ -300,9 +314,10 @@ export function GitViewerPanel({
 
   const handleDrawerConfirm = async () => {
     if (drawer.kind !== 'previewing' && drawer.kind !== 'error') return;
-    const repoRoot = store.getState().repoRoot;
-    if (!app || !repoRoot) {
-      const message = !repoRoot ? 'Repo root unknown' : 'SDK shell unavailable';
+    const { repoRoot, commitInFlight } = store.getState();
+    if (!app || !repoRoot || commitInFlight) {
+      // 提交在进行:确认按钮本是禁用的(兜底,见 runFileAction)
+      const message = !repoRoot ? 'Repo root unknown' : !app ? 'SDK shell unavailable' : COMMIT_IN_PROGRESS_MESSAGE;
       dispatchDrawer({ type: 'confirm' });
       if (!mountedRef.current) return;
       dispatchDrawer({ type: 'fail', error: message });
@@ -311,40 +326,50 @@ export function GitViewerPanel({
     }
 
     dispatchDrawer({ type: 'confirm' });
-    const result =
-      drawer.action === 'stage'
-        ? drawer.patch
-          ? await stageHunk(app, repoRoot, drawer.patch)
-          : { ok: false, error: 'Patch unavailable' }
-        : drawer.action === 'unstage'
+    const endWrite = store.getState().beginWrite();
+    try {
+      const result =
+        drawer.action === 'stage'
           ? drawer.patch
-            ? await unstageHunk(app, repoRoot, drawer.patch)
+            ? await stageHunk(app, repoRoot, drawer.patch)
             : { ok: false, error: 'Patch unavailable' }
-          : drawer.action === 'discard'
+          : drawer.action === 'unstage'
             ? drawer.patch
-              ? await discardHunk(app, repoRoot, drawer.patch)
+              ? await unstageHunk(app, repoRoot, drawer.patch)
               : { ok: false, error: 'Patch unavailable' }
-            : await discardFile(app, repoRoot, drawer.filePath);
-    if (!mountedRef.current) return;
+            : drawer.action === 'discard'
+              ? drawer.patch
+                ? await discardHunk(app, repoRoot, drawer.patch)
+                : { ok: false, error: 'Patch unavailable' }
+              : await discardFile(app, repoRoot, drawer.filePath);
+      if (!mountedRef.current) return;
 
-    if (!result.ok) {
-      const message = result.error || 'File operation failed; refresh';
+      if (!result.ok) {
+        const message = result.error || 'File operation failed; refresh';
+        dispatchDrawer({ type: 'fail', error: message });
+        showError(message);
+        return;
+      }
+
+      dispatchDrawer({ type: 'succeed' });
+      if (drawer.action === 'discard') {
+        showInfo(`Hunk discarded from ${drawer.filePath}`);
+      } else if (drawer.action === 'discard-file') {
+        showInfo(`Discarded ${drawer.filePath}`);
+      }
+      await store.getState().refresh();
+      if (!mountedRef.current) return;
+      closeTimerRef.current = window.setTimeout(() => {
+        if (mountedRef.current) dispatchDrawer({ type: 'dismiss' });
+      }, 800);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      const message = err instanceof Error ? err.message : String(err);
       dispatchDrawer({ type: 'fail', error: message });
       showError(message);
-      return;
+    } finally {
+      endWrite();
     }
-
-    dispatchDrawer({ type: 'succeed' });
-    if (drawer.action === 'discard') {
-      showInfo(`Hunk discarded from ${drawer.filePath}`);
-    } else if (drawer.action === 'discard-file') {
-      showInfo(`Discarded ${drawer.filePath}`);
-    }
-    await store.getState().refresh();
-    if (!mountedRef.current) return;
-    closeTimerRef.current = window.setTimeout(() => {
-      if (mountedRef.current) dispatchDrawer({ type: 'dismiss' });
-    }, 800);
   };
 
   return (
@@ -376,6 +401,7 @@ export function GitViewerPanel({
         repoRoot={state.repoRoot}
         amend={state.amend}
         statusUnavailable={state.statusError !== null}
+        fileOpInFlight={state.writesInFlight > 0}
       />
       <div className="cgv-body">
         <FileList
@@ -384,6 +410,7 @@ export function GitViewerPanel({
           onStageFile={(change) => void runFileAction(change, 'stage')}
           onUnstageFile={(change) => void runFileAction(change, 'unstage')}
           onDiscardFile={openDiscardFileDrawer}
+          writesBlocked={state.commitInFlight}
         />
         <DiffView
           app={app}
@@ -394,12 +421,14 @@ export function GitViewerPanel({
           mode={selectedRef?.mode ?? 'changed'}
           drawer={drawer}
           dispatchDrawer={dispatchDrawer}
+          writesBlocked={state.commitInFlight}
         />
       </div>
       <PreviewDrawer
         state={drawer}
         onConfirm={handleDrawerConfirm}
         onCancel={() => dispatchDrawer({ type: 'cancel' })}
+        confirmBlockedReason={state.commitInFlight ? COMMIT_IN_PROGRESS_TITLE : null}
       />
       {state.restriction ? (
         <div className="cgv-banner cgv-banner--warn cgv-restricted" role="alert">

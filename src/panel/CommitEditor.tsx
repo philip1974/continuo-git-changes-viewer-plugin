@@ -47,6 +47,11 @@ interface CommitEditorProps {
    * 都禁用——Amend 不看暂存数(can-amend),否则会把面板没显示的暂存内容一并提交。
    */
   readonly statusUnavailable?: boolean;
+  /**
+   * 面板自己的文件写操作(Stage / Unstage / Discard)正在进行(git-store 的 writesInFlight > 0):暂存区正在被改,
+   * Commit / Amend 禁用。点击时以 store 为准再查一次(见 onCommit)。
+   */
+  readonly fileOpInFlight?: boolean;
   readonly commit?: CommitFn;
   readonly readSubject?: ReadSubjectFn;
   readonly readHeadMessage?: ReadSubjectFn;
@@ -90,6 +95,18 @@ export const VIEW_REFRESHING_MESSAGE =
 export const VIEW_REFRESHED_MESSAGE =
   'The view was refreshed after you clicked, so it is not what you reviewed. Nothing was committed — review it and commit again.';
 
+// 面板自己的 Stage / Unstage / Discard 还在进行:暂存区正在被改。按钮此时本是禁用的(见 fileOpInFlight);
+// 这是点击与重新渲染之间的兜底。
+export const FILE_OP_IN_FLIGHT_MESSAGE =
+  'A stage, unstage or discard is still running, so the staged changes are not settled yet. Nothing was committed — wait for it to finish, review the view and commit again.';
+
+// 点击之后(读当前指纹期间、或 hooks 确认框开着的时候)面板里又开始了一次 Stage / Unstage / Discard:
+// 指纹读到的可能是它落盘之前的 index,而 `git commit` 读到的是之后的。
+export const FILE_OP_DURING_COMMIT_MESSAGE =
+  'A stage, unstage or discard ran after you clicked, so the staged changes may not be what you reviewed. Nothing was committed — review the view and commit again.';
+
+export const COMMIT_WAITS_FOR_FILE_OP_TITLE = 'Wait for the stage / unstage / discard to finish';
+
 /**
  * 点击 Commit / Amend 那一刻屏幕上的内容的身份。必须在 onCommit 里**任何 await 之前**同步取:之后每一个
  * await 期间,在途的 refresh 都可能落盘、把 store 换成用户没看过的内容。
@@ -97,6 +114,8 @@ export const VIEW_REFRESHED_MESSAGE =
 interface ShownSnapshot {
   readonly fingerprint: string | null;
   readonly refreshVersion: number;
+  /** git-store 的 writeVersion:之后若有面板写操作开始过,它会变。 */
+  readonly writeVersion: number;
   /** 选中的是 Staged 区的行时:它的缓存键与屏幕上那份 diff 对象(没读到时 undefined)。 */
   readonly stagedDiffKey: string | null;
   readonly stagedDiff: DiffResult | undefined;
@@ -110,7 +129,17 @@ function stagedDiffOf(state: GitViewerState): Pick<ShownSnapshot, 'stagedDiffKey
 }
 
 function snapshotShown(state: GitViewerState): ShownSnapshot {
-  return { fingerprint: state.statusFingerprint, refreshVersion: state.refreshVersion, ...stagedDiffOf(state) };
+  return {
+    fingerprint: state.statusFingerprint,
+    refreshVersion: state.refreshVersion,
+    writeVersion: state.writeVersion,
+    ...stagedDiffOf(state),
+  };
+}
+
+/** 从取快照到现在,面板有没有开始过写操作(或仍有写操作在进行)。 */
+function fileWriteSince(shown: ShownSnapshot, now: GitViewerState): boolean {
+  return now.writesInFlight > 0 || now.writeVersion !== shown.writeVersion;
 }
 
 /** 从取快照到现在,屏幕上的内容有没有被换过(refresh 落盘;或同一个选中的 Staged 行的 diff 换了一份)。 */
@@ -156,6 +185,7 @@ export function CommitEditor({
   repoRoot,
   amend = false,
   statusUnavailable = false,
+  fileOpInFlight = false,
   commit = gitCommit as CommitFn,
   readSubject = readLastCommitSubject as ReadSubjectFn,
   readHeadMessage = defaultReadHeadMessage as ReadSubjectFn,
@@ -181,6 +211,7 @@ export function CommitEditor({
       : canCommit(commitMessage, stagedCount)) &&
     !committing &&
     !statusUnavailable &&
+    !fileOpInFlight &&
     repoRoot !== null &&
     app !== undefined;
 
@@ -260,8 +291,17 @@ export function CommitEditor({
       showWarning(app, store, atClick.isLoading ? VIEW_REFRESHING_MESSAGE : DIFF_REFRESHING_MESSAGE);
       return;
     }
+    // 面板自己的写操作在进行(按钮还没来得及禁用),或 hooks 确认框开着的时候开始过一次:暂存区不是用户看过的那份
+    if (fileWriteSince(shown, atClick)) {
+      setHooksPrompt(null);
+      showWarning(app, store, atClick.writesInFlight > 0 ? FILE_OP_IN_FLIGHT_MESSAGE : FILE_OP_DURING_COMMIT_MESSAGE);
+      return;
+    }
 
+    // 从这里起直到结束,面板的文件写操作不可用(见 GitViewerPanel / FileList / DiffView)——与上面的检查在同一个
+    // 同步段里:两次点击谁先到,另一方就看得到它。
     setCommitting(true);
+    store.getState().setCommitInFlight(true);
     try {
       if (!hooksConfirmed) {
         let hooks: RepoHooks;
@@ -331,6 +371,13 @@ export function CommitEditor({
         showWarning(app, store, AMEND_HEAD_CHANGED_MESSAGE);
         return;
       }
+      // 点击之后(读指纹、读 HEAD 期间)面板开始过写操作:指纹可能读在它落盘之前。提交期间写操作按钮是禁用的,
+      // 这是兜底;放在紧挨着 `git commit` 的位置,之后不再有 await。
+      if (fileWriteSince(shown, store.getState())) {
+        await store.getState().refresh();
+        showWarning(app, store, FILE_OP_DURING_COMMIT_MESSAGE);
+        return;
+      }
       const result = await commit(
         app,
         repoRoot,
@@ -379,6 +426,7 @@ export function CommitEditor({
       }
     } finally {
       setCommitting(false);
+      store.getState().setCommitInFlight(false);
     }
   };
 
@@ -452,9 +500,11 @@ export function CommitEditor({
           disabled={!enabled}
           aria-label={amend ? 'Amend last commit' : 'Commit staged changes'}
           title={
-            amend
-              ? 'Amend rewrites HEAD - avoid pushed commits'
-              : 'Commit staged changes'
+            fileOpInFlight
+              ? COMMIT_WAITS_FOR_FILE_OP_TITLE
+              : amend
+                ? 'Amend rewrites HEAD - avoid pushed commits'
+                : 'Commit staged changes'
           }
         >
           {committing ? (amend ? 'Amending...' : 'Committing...') : (amend ? 'Amend' : 'Commit')}
