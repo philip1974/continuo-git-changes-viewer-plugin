@@ -38,3 +38,46 @@ plugin's git helpers.
   trailing space / trailing tab / leading space (git keeps all but the newline)
   and contains planted hooks → `detectRepoHooks` reports present (plain and
   host-scoped fs); git really runs that directory's pre-commit.
+
+Redirection outside the workspace (no program is executed; each case first
+proves the leak or the outside write with the guard absent):
+
+- R16: `core.worktree` pointing at an outside directory → unguarded diff shows
+  the outside file and discard overwrites it; guarded → restricted, outside
+  file untouched.
+- R17: `core.worktree` in `config.worktree` (`extensions.worktreeConfig`) and
+  `core.bare=true` → restricted.
+- R18: working tree redirected with no local key at all (`GIT_WORK_TREE`, only
+  to isolate the layout check from the key list) → restricted.
+- R19: `.git` is a gitfile pointing at another private repository → unguarded
+  shows its file content and commit message; guarded → restricted (plain and
+  host-scoped fs).
+- R20: `.git/commondir` pointing outside; `.git` symlinked to another
+  repository → restricted.
+- R21: `.git/index` symlinked to another repository's index plus alternates →
+  unguarded leaks; unguarded stage rewrites the outside index; guarded →
+  restricted.
+- R22: deep ref symlink plus object fan-out symlinks, all top-level entries
+  regular → unguarded leaks; guarded → restricted.
+- R23: `objects/info/alternates` alone does not leak (object ids unknown) but
+  is restricted; with one deep ref symlink it leaks.
+- R24: `logs/HEAD` and deep `logs/refs/heads/main` symlinked to outside files →
+  unguarded commit appends a reflog line carrying the repository-controlled
+  `user.name`; guarded → restricted, files untouched.
+- R25: `.git/config` symlinked outside → restricted.
+- R25b: `.git/COMMIT_EDITMSG` symlinked outside → unguarded commit overwrites
+  the outside file with the message; guarded → restricted.
+- R26: file access unavailable or scope not granted → restricted.
+- R27: layouts that stay trusted — plain repository through a host-scoped fs
+  with a non-canonical temp path, symlinked `hooks`, empty alternates file,
+  `git init --separate-git-dir` inside the workspace, main repository that
+  owns a linked worktree.
+- R28: legitimate layouts that become restricted (documented trade-off) —
+  linked worktree and submodule whose git directory is outside the workspace,
+  bare repository, subfolder of a repository.
+- R29: a folder that is not a git repository is not restricted; detection
+  still reports not-git-root.
+- R30: keys judged non-redirecting (core.excludesFile, core.attributesFile,
+  mailmap.file, diff.orderFile, commit.template naming an outside file) stay
+  trusted and nothing of that file is shown or committed.
+- R31: `probeRepoSafety` reports reason `unsafe-layout`.

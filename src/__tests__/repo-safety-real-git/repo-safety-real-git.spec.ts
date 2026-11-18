@@ -1,7 +1,7 @@
 // 真实 git 集成:构造含恶意 .git/config 的临时仓库,每个可执行配置指向一个"写标记文件"的脚本,
 // 断言插件的 git 调用不再触发任何标记;同时验证普通仓库功能与用户 hooks 不受影响。
 import { spawn, execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, renameSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, renameSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -15,7 +15,8 @@ import { _resetRestoreCache, unstageFile } from '../../git/unstage-file';
 import { unstageHunk } from '../../git/unstage-hunk';
 import { gitCommit } from '../../git/git-commit';
 import { hasHeadCommit, readHeadMessage } from '../../git/head-meta';
-import { installRepoSafetyGuard } from '../../git/repo-safety';
+import { installRepoSafetyGuard, probeRepoSafety } from '../../git/repo-safety';
+import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
 import { stageFile } from '../../git/stage-file';
 import { scanStatus } from '../../git/status-scanner';
@@ -36,6 +37,8 @@ function realApp(): CoPluginApp {
       child.on('close', (code, signal) =>
         resolve({ stdout, stderr, exitCode: code, signal, timedOut: false, truncated: false }),
       );
+      // 子进程不读 stdin 就退出时写端会报 EPIPE(与被测行为无关),忽略
+      child.stdin.on('error', () => {});
       child.stdin.end(opts.input ?? '');
     });
   const stat = async (p: string) => {
@@ -176,6 +179,7 @@ afterEach(() => {
   rmSync(base, { recursive: true, force: true });
   delete process.env.GIT_CONFIG_GLOBAL;
   delete process.env.GIT_CONFIG_NOSYSTEM;
+  delete process.env.GIT_WORK_TREE;
 });
 
 // stat-dirty 但内容相同 → status 必须重新哈希(触发 clean filter);g.txt 有真实改动 → diff 会走 textconv/ext
@@ -527,5 +531,302 @@ describe('repo safety against a real git with a hostile .git/config', () => {
     clearMarks();
     expect(await gitCommit(realApp(), repo, 'via gitfile')).toMatchObject({ ok: true });
     expect(marks()).toContain('pre-commit');
+  });
+});
+
+// 重定向类向量:不执行任何程序,但让 git 把工作树 / git 目录 / 对象库解析到 workspace 之外,
+// 于是 status / diff 读出外部文件内容,stage / discard / commit 写到外部。
+describe('repo safety against redirection outside the workspace (real git)', () => {
+  let secretDir: string;
+  let priv: string;
+  let victim: string;
+  const SECRET = 'TOP-SECRET-FILE-CONTENT';
+  const PRIVATE = 'PRIVATE-REPO-CONTENT';
+  const PRIVATE_MSG = 'private commit msg';
+
+  beforeEach(() => {
+    secretDir = join(base, 'secret');
+    priv = join(base, 'priv');
+    victim = join(base, 'victim');
+    for (const d of [secretDir, priv, victim]) mkdirSync(d);
+    writeFileSync(join(secretDir, 'f.txt'), `${SECRET}\n`);
+    git(priv, 'init', '-q', '-b', 'main');
+    writeFileSync(join(priv, 'p.txt'), `${PRIVATE}\n`);
+    git(priv, 'add', '.');
+    git(priv, 'commit', '-qm', PRIVATE_MSG);
+  });
+
+  const privGit = (...p: string[]) => join(priv, '.git', ...p);
+  const repoGit = (...p: string[]) => join(repo, '.git', ...p);
+  const relink = (target: string, link: string) => {
+    rmSync(link, { recursive: true, force: true });
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(target, link);
+  };
+
+  // 未加防护(不装守卫)时插件读到的全部文本:状态路径 + 每个变更的 diff + HEAD 提交信息
+  async function everythingShown(app: CoPluginApp): Promise<string> {
+    const changes = await scanStatus(app, repo).catch(() => []);
+    const parts: string[] = changes.map((c) => c.path);
+    for (const c of changes) {
+      const d = await fetchDiff(app, repo, c).catch(() => null);
+      if (d && d.ok) parts.push(d.unifiedDiff ?? '', d.original ?? '', d.modified ?? '');
+    }
+    parts.push((await readHeadMessage(app, repo).catch(() => '')) ?? '');
+    return parts.join('\n');
+  }
+
+  async function expectRestricted(app: CoPluginApp, message: RegExp): Promise<void> {
+    const { guard } = installRepoSafetyGuard(app);
+    const verdict = await guard.check(repo, { fresh: true });
+    expect(verdict).toMatchObject({ kind: 'restricted' });
+    expect(verdict.kind === 'restricted' && verdict.message).toMatch(message);
+    // 受限后任何插件 git 调用都不起进程、不出内容
+    expect(await everythingShown(app)).toBe('');
+    expect((await gitExec(app, repo, ['diff'])).exitCode).not.toBe(0);
+    expect((await stageFile(app, repo, 'f.txt')).ok).toBe(false);
+    expect((await discardFile(app, repo, 'f.txt')).ok).toBe(false);
+    expect((await gitCommit(app, repo, 'msg')).ok).toBe(false);
+  }
+
+  it('R16 core.worktree pointing outside: unguarded diff shows the outside file and discard overwrites it; guarded → restricted', async () => {
+    git(repo, 'config', 'core.worktree', secretDir);
+
+    const shown = await everythingShown(realApp());
+    expect(shown).toContain(SECRET);
+    // 写方向:discard 把 HEAD 版本写进 workspace 外的文件
+    expect((await discardFile(realApp(), repo, 'f.txt')).ok).toBe(true);
+    expect(readFileSync(join(secretDir, 'f.txt'), 'utf8')).toBe('one\n');
+
+    writeFileSync(join(secretDir, 'f.txt'), `${SECRET}\n`);
+    await expectRestricted(realApp(), /core\.worktree/);
+    expect(readFileSync(join(secretDir, 'f.txt'), 'utf8')).toBe(`${SECRET}\n`);
+  });
+
+  it('R17 core.worktree in config.worktree (extensions.worktreeConfig) and core.bare=true are restricted', async () => {
+    git(repo, 'config', 'extensions.worktreeConfig', 'true');
+    writeFileSync(repoGit('config.worktree'), `[core]\n\tworktree = ${secretDir}\n`);
+    expect(await everythingShown(realApp())).toContain(SECRET);
+    await expectRestricted(realApp(), /core\.worktree/);
+
+    rmSync(repoGit('config.worktree'));
+    git(repo, 'config', 'core.bare', 'true');
+    await expectRestricted(realApp(), /core\.bare/);
+  });
+
+  it('R18 working tree redirected without any local key (defense in depth): layout check alone restricts', async () => {
+    // 用环境变量 GIT_WORK_TREE 重定向(攻击者做不到,键检测也看不到)——只为证明布局核对独立于键检测生效
+    process.env.GIT_WORK_TREE = secretDir;
+    expect(await everythingShown(realApp())).toContain(SECRET);
+    await expectRestricted(realApp(), /working tree/);
+  });
+
+  it('R19 .git is a gitfile pointing at another (private) repository: unguarded leaks its content; guarded → restricted', async () => {
+    rmSync(repoGit(), { recursive: true });
+    writeFileSync(repoGit(), `gitdir: ${privGit()}\n`);
+
+    const shown = await everythingShown(realApp());
+    expect(shown).toContain(PRIVATE);
+    expect(shown).toContain(PRIVATE_MSG);
+
+    await expectRestricted(realApp(), /git directory is outside/);
+    await expectRestricted(hostScopedApp(repo), /git directory is outside/);
+  });
+
+  it('R20 .git symlinked to another repository / commondir file pointing outside → restricted', async () => {
+    writeFileSync(repoGit('commondir'), `${privGit()}\n`);
+    expect(await everythingShown(realApp())).toContain(PRIVATE_MSG);
+    await expectRestricted(realApp(), /git directory is outside/);
+
+    rmSync(repoGit(), { recursive: true });
+    symlinkSync(privGit(), repoGit());
+    expect(await everythingShown(realApp())).toContain(PRIVATE);
+    await expectRestricted(realApp(), /git directory is outside/);
+  });
+
+  it('R21 .git/index symlinked to another repository index + alternates: unguarded leaks; stage overwrites the outside index; guarded → restricted', async () => {
+    relink(privGit('index'), repoGit('index'));
+    writeFileSync(repoGit('objects', 'info', 'alternates'), `${privGit('objects')}\n`);
+    expect(await everythingShown(realApp())).toContain(PRIVATE);
+
+    const before = readFileSync(privGit('index'));
+    await expectRestricted(realApp(), /symbolic link \(index\)/);
+    await expectRestricted(hostScopedApp(repo), /symbolic link \(index\)/);
+    expect(readFileSync(privGit('index')).equals(before)).toBe(true);
+
+    // 证明写方向:未加防护时 stage 经符号链接改写外部 index
+    writeFileSync(join(repo, 'new.txt'), 'n\n');
+    expect((await stageFile(realApp(), repo, 'new.txt')).ok).toBe(true);
+    expect(readFileSync(privGit('index')).equals(before)).toBe(false);
+  });
+
+  it('R22 deep ref symlink + object fan-out symlinks (no alternates, top-level entries all regular): unguarded leaks; guarded → restricted', async () => {
+    relink(privGit('refs', 'heads', 'main'), repoGit('refs', 'heads', 'main'));
+    for (const e of readdirSync(repoGit('objects'))) {
+      if (/^[0-9a-f]{2}$/.test(e)) rmSync(repoGit('objects', e), { recursive: true });
+    }
+    for (const e of readdirSync(privGit('objects'))) {
+      if (/^[0-9a-f]{2}$/.test(e)) symlinkSync(privGit('objects', e), repoGit('objects', e));
+    }
+    const shown = await everythingShown(realApp());
+    expect(shown).toContain(PRIVATE_MSG);
+    expect(shown).toContain(PRIVATE);
+
+    await expectRestricted(realApp(), /symbolic link \((objects|refs)\//);
+    await expectRestricted(hostScopedApp(repo), /symbolic link \((objects|refs)\//);
+  });
+
+  it('R23 deep ref symlink + objects/info/alternates: unguarded leaks; alternates alone is already restricted', async () => {
+    writeFileSync(repoGit('objects', 'info', 'alternates'), `${privGit('objects')}\n`);
+    // 只有 alternates:攻击者不知道私有对象的 OID,引用不到 → 不泄露
+    const alone = await everythingShown(realApp());
+    expect(alone).not.toContain(PRIVATE);
+    expect(alone).not.toContain(PRIVATE_MSG);
+    await expectRestricted(realApp(), /alternates/);
+
+    // 加一个深层 ref 符号链接即可拿到 OID
+    relink(privGit('refs', 'heads', 'main'), repoGit('refs', 'heads', 'main'));
+    expect(await everythingShown(realApp())).toContain(PRIVATE_MSG);
+    await expectRestricted(realApp(), /alternates|symbolic link/);
+  });
+
+  it('R24 reflog symlinked outside (logs/HEAD, deep logs/refs/heads/main): unguarded commit appends attacker-controlled identity to the outside files; guarded → restricted', async () => {
+    const rc = join(victim, 'zshrc');
+    const rc2 = join(victim, 'rc2');
+    writeFileSync(rc, '# rc\n');
+    writeFileSync(rc2, '# rc2\n');
+    git(repo, 'config', 'user.name', 'x $(touch /tmp/pwned) y');
+    git(repo, 'config', 'user.email', 'a@b');
+    relink(rc2, repoGit('logs', 'refs', 'heads', 'main'));
+
+    // 只有深层链接(顶层条目全是普通文件 / 目录)也要拦住
+    await expectRestricted(realApp(), /symbolic link \(logs\/refs\/heads\/main\)/);
+    relink(rc, repoGit('logs', 'HEAD'));
+    await expectRestricted(hostScopedApp(repo), /symbolic link \(logs\//);
+    expect(readFileSync(rc, 'utf8')).toBe('# rc\n');
+    expect(readFileSync(rc2, 'utf8')).toBe('# rc2\n');
+
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    expect(await gitCommit(realApp(), repo, 'msg')).toMatchObject({ ok: true });
+    expect(readFileSync(rc, 'utf8')).toContain('$(touch /tmp/pwned)');
+    expect(readFileSync(rc2, 'utf8')).toContain('$(touch /tmp/pwned)');
+  });
+
+  it('R25 .git/config symlinked outside → restricted even when the target config is harmless', async () => {
+    const ext = join(victim, 'gitconfig');
+    renameSync(repoGit('config'), ext);
+    symlinkSync(ext, repoGit('config'));
+    await expectRestricted(realApp(), /symbolic link \(config\)/);
+  });
+
+  it('R25b .git/COMMIT_EDITMSG symlinked outside: unguarded commit overwrites the outside file; guarded → restricted', async () => {
+    const precious = join(victim, 'precious');
+    writeFileSync(precious, 'precious\n');
+    relink(precious, repoGit('COMMIT_EDITMSG'));
+    await expectRestricted(hostScopedApp(repo), /symbolic link \(COMMIT_EDITMSG\)/);
+    expect(readFileSync(precious, 'utf8')).toBe('precious\n');
+
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    expect(await gitCommit(realApp(), repo, 'typed message')).toMatchObject({ ok: true });
+    expect(readFileSync(precious, 'utf8')).toContain('typed message');
+  });
+
+  it('R26 file access unavailable or denied → restricted (the git directory cannot be inspected)', async () => {
+    const noFs = { shell: realApp().shell } as unknown as CoPluginApp;
+    await expectRestricted(noFs, /could not be inspected/);
+    // 宿主 scope 不含本仓库(未授权)
+    await expectRestricted(hostScopedApp(victim), /could not be inspected/);
+  });
+
+  it('R27 legitimate layouts that stay trusted: plain repo (host-scoped, non-canonical tmp path), in-workspace separate git dir, hooks symlink, main repo owning a linked worktree, empty alternates', async () => {
+    const trusted = async (app: CoPluginApp, dir: string) => {
+      const { guard } = installRepoSafetyGuard(app);
+      expect(await guard.check(dir, { fresh: true })).toEqual({ kind: 'trusted' });
+    };
+    await trusted(realApp(), repo);
+    await trusted(hostScopedApp(repo), repo);
+
+    // hooks 目录是符号链接(常见做法,由 repo-hooks 在提交前处理);空的 alternates 文件
+    mkdirSync(join(repo, 'scripts'));
+    relink(join('..', 'scripts'), repoGit('hooks'));
+    writeFileSync(repoGit('objects', 'info', 'alternates'), '');
+    await trusted(hostScopedApp(repo), repo);
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    const app = hostScopedApp(repo);
+    installRepoSafetyGuard(app);
+    expect((await scanStatus(app, repo)).map((c) => c.path)).toEqual(['f.txt']);
+
+    // git init --separate-git-dir 到 workspace 内
+    const sep1 = join(base, 'sep');
+    mkdirSync(sep1);
+    git(sep1, 'init', '-q', '-b', 'main', '--separate-git-dir', join(sep1, 'gd'));
+    expect(lstatSync(join(sep1, '.git')).isFile()).toBe(true);
+    await trusted(hostScopedApp(sep1), sep1);
+
+    // 主仓库在 workspace 内的 linked worktree(workspace = 主仓库,其下再挂一个 worktree)不影响主仓库
+    mkdirSync(join(base, 'm'));
+    git(join(base, 'm'), 'init', '-q', '-b', 'main');
+    git(join(base, 'm'), 'commit', '-q', '--allow-empty', '-m', 'i');
+    git(join(base, 'm'), 'worktree', 'add', '-q', '-b', 'side', join(base, 'm', 'wt'));
+    await trusted(hostScopedApp(join(base, 'm')), join(base, 'm'));
+  });
+
+  it('R28 legitimate layouts that become restricted (documented trade-off): linked worktree / submodule whose git dir is outside the workspace, bare repo, subfolder of a repo', async () => {
+    const restricted = async (dir: string, message: RegExp) => {
+      const { guard } = installRepoSafetyGuard(hostScopedApp(dir));
+      const v = await guard.check(dir, { fresh: true });
+      expect({ dir, kind: v.kind }).toEqual({ dir, kind: 'restricted' });
+      expect(v.kind === 'restricted' && v.message).toMatch(message);
+    };
+    const wt = join(base, 'wt');
+    git(repo, 'worktree', 'add', '-q', '-b', 'side', wt);
+    await restricted(wt, /git directory is outside/);
+
+    const sup = join(base, 'super');
+    mkdirSync(sup);
+    git(sup, 'init', '-q', '-b', 'main');
+    git(sup, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', repo, 'sub');
+    await restricted(join(sup, 'sub'), /core\.worktree|git directory is outside/);
+
+    const bare = join(base, 'bare.git');
+    git(base, 'init', '-q', '--bare', bare);
+    await restricted(bare, /core\.bare|working tree/);
+
+    mkdirSync(join(repo, 'pkg'));
+    await restricted(join(repo, 'pkg'), /working tree/);
+  });
+
+  it('R29 a folder that is not a git repository is not restricted: detection reports not-git-root as before', async () => {
+    // tmpdir 之上没有仓库
+    const plain = join(base, 'plain');
+    mkdirSync(plain);
+    const app = { ...hostScopedApp(plain), workspace: { getRoot: async () => plain } } as unknown as CoPluginApp;
+    const { guard } = installRepoSafetyGuard(app);
+    expect(await guard.check(plain, { fresh: true })).toEqual({ kind: 'trusted' });
+    expect(await detectRepo(app)).toMatchObject({ ok: false, reason: 'not-git-root' });
+  });
+
+  it('R30 keys evaluated as non-redirecting stay trusted and leak nothing: core.excludesFile / core.attributesFile / mailmap.file / diff.orderFile / commit.template pointing at an outside file', async () => {
+    const outside = join(secretDir, 'f.txt');
+    for (const key of ['core.excludesFile', 'core.attributesFile', 'mailmap.file', 'diff.orderFile', 'commit.template']) {
+      git(repo, 'config', key, outside);
+    }
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect(await guard.check(repo, { fresh: true })).toEqual({ kind: 'trusted' });
+    expect(await everythingShown(app)).not.toContain(SECRET);
+    expect((await stageFile(app, repo, 'f.txt')).ok).toBe(true);
+    expect(await gitCommit(app, repo, 'typed message')).toMatchObject({ ok: true });
+    expect(await readHeadMessage(app, repo)).toBe('typed message');
+    expect(git(repo, 'show', '--stat', 'HEAD')).not.toContain(SECRET);
+  });
+
+  it('R31 probeRepoSafety reports reason unsafe-layout for a git dir outside the workspace', async () => {
+    rmSync(repoGit(), { recursive: true });
+    writeFileSync(repoGit(), `gitdir: ${privGit()}\n`);
+    expect(await probeRepoSafety(realApp(), repo)).toMatchObject({ kind: 'restricted', reason: 'unsafe-layout' });
   });
 });

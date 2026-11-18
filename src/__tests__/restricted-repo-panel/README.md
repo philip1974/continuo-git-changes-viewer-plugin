@@ -1,7 +1,9 @@
 # Restricted Repository (panel behavior)
 
-When the repository-scope git config contains settings that execute external
-programs (see `repo-safety`), the viewer does not run git for that repository.
+When the repository could make git run external programs or reach outside the
+workspace (see `repo-safety`: executable or redirecting config keys, a working
+tree that is not the workspace root, a git directory outside the workspace,
+symbolic links inside the git directory), the viewer does not run git for it.
 
 - B1: a refresh probes the config first; when restricted, `repoRoot` stays null
   (commit / stage / discard / auto-refresh have nothing to act on), no other git
@@ -12,3 +14,10 @@ programs (see `repo-safety`), the viewer does not run git for that repository.
 - B4: `onload` installs the guard on `app.shell`, so any helper that calls
   `gitExec` (auto-refresh status hash, commit editor HEAD reads, write ops) is
   refused on a restricted repository.
+- B5: the same holds for the redirection cases — `core.worktree` in local
+  config, git resolving the working tree elsewhere, a git directory outside
+  the workspace, a symbolic link inside the git directory; the alert names the
+  reason.
+- B6: a refresh waits for the fs scope request to settle before probing,
+  because the symlink check needs file access (without it the repository would
+  be reported as restricted).

@@ -102,6 +102,8 @@ export default class GitChangesViewerPlugin extends Plugin {
     const store = createGitStore({
       load: async () => {
         // 每次 refresh 都强制重新探测(不走缓存),再运行任何 git 命令。
+        // 探测要经 app.fs 检查 git 目录内的符号链接,先等 fs scope 请求结束(未授权时探测会判受限)。
+        await this.scopeReadyPromise;
         const root = await this.app.workspace.getRoot();
         if (root) {
           const verdict = await safety.guard.check(root, { fresh: true });
