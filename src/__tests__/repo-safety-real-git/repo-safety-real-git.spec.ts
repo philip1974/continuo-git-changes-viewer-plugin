@@ -1,9 +1,9 @@
 // 真实 git 集成:构造含恶意 .git/config 的临时仓库,每个可执行配置指向一个"写标记文件"的脚本,
 // 断言插件的 git 调用不再触发任何标记;同时验证普通仓库功能与用户 hooks 不受影响。
 import { spawn, execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, mkdirSync, utimesSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchDiff } from '../../git/diff-fetcher';
 import { discardFile } from '../../git/discard-file';
@@ -42,6 +42,10 @@ function realApp(): CoPluginApp {
     const s = statSync(p);
     return { size: s.size, mtimeMs: s.mtimeMs, isFile: s.isFile(), isDirectory: s.isDirectory(), isSymlink: false };
   };
+  const lstat = async (p: string) => {
+    const s = lstatSync(p);
+    return { size: s.size, mtimeMs: s.mtimeMs, isFile: s.isFile(), isDirectory: s.isDirectory(), isSymlink: s.isSymbolicLink() };
+  };
   const listDir = async (p: string) =>
     readdirSync(p, { withFileTypes: true }).map((e) => ({
       name: e.name,
@@ -49,7 +53,40 @@ function realApp(): CoPluginApp {
       isDirectory: e.isDirectory(),
       isSymlink: e.isSymbolicLink(),
     }));
-  return { shell: { exec }, fs: { stat, listDir } } as unknown as CoPluginApp;
+  return { shell: { exec }, fs: { stat, lstat, listDir } } as unknown as CoPluginApp;
+}
+
+// 模拟宿主 plugin-fs:scope 只含 scopeRoot;read 类(listDir/stat)先 realpath(跟随链接)再判 scope,
+// lstat 只 realpath 父目录、不跟随末级;错误经 ipcRenderer.invoke 传回时只剩 message(code 丢失)。
+function hostScopedApp(scopeRoot: string): CoPluginApp {
+  const app = realApp();
+  const root = realpathSync(scopeRoot);
+  const inScope = (p: string) => p === root || p.startsWith(root + sep);
+  const ipc = async <T>(channel: string, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (err) {
+      throw new Error(`Error invoking remote method '${channel}': ${String(err)}`);
+    }
+  };
+  const readCheck = (p: string) => {
+    const canonical = realpathSync(p);
+    if (!inScope(canonical)) throw new Error(`ScopeError: path is outside granted scopes`);
+    return canonical;
+  };
+  const lstatCheck = (p: string) => {
+    const full = join(realpathSync(dirname(p)), basename(p));
+    if (!inScope(full)) throw new Error(`ScopeError: path is outside granted scopes`);
+    return full;
+  };
+  return {
+    ...app,
+    fs: {
+      listDir: (p: string) => ipc('plugin-fs:list-dir', () => app.fs.listDir(readCheck(p))),
+      stat: (p: string) => ipc('plugin-fs:stat', () => app.fs.stat(readCheck(p))),
+      lstat: (p: string) => ipc('plugin-fs:lstat', () => app.fs.lstat(lstatCheck(p))),
+    },
+  } as unknown as CoPluginApp;
 }
 
 // 去掉插件注入的 `-c core.hooksPath=/dev/null`,模拟"未加防护"的插件:用于证明 fixture 的 hooks 确实会被触发
@@ -395,5 +432,29 @@ describe('repo safety against a real git with a hostile .git/config', () => {
     writeFileSync(globalCfg, `[core]\n\thooksPath = ${join(base, 'user-hooks')}\n`);
     process.env.GIT_CONFIG_GLOBAL = globalCfg;
     expect(await detectRepoHooks(realApp(), repo)).toEqual({ kind: 'none' });
+  });
+
+  it('R12 .git/hooks symlinked outside the workspace (hostile archive) → unknown under host scope; git does follow it', async () => {
+    // 压缩包同时含 repo/ 与 evilhooks/pre-commit,repo/.git/hooks -> ../../evilhooks;用户以 repo/ 为 workspace
+    plantHooks(join(base, 'evilhooks'));
+    rmSync(join(repo, '.git', 'hooks'), { recursive: true });
+    symlinkSync(join('..', '..', 'evilhooks'), join(repo, '.git', 'hooks'));
+
+    expect(await detectRepoHooks(hostScopedApp(repo), repo)).toMatchObject({ kind: 'unknown' });
+    // scope 覆盖链接目标时如实列出
+    expect(await detectRepoHooks(hostScopedApp(base), repo)).toMatchObject({ kind: 'present', hooksPath: null });
+
+    // 证明 fixture:git 跟随该链接执行 pre-commit
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    clearMarks();
+    expect(await gitCommit(realApp(), repo, 'via link')).toMatchObject({ ok: true });
+    expect(marks()).toContain('pre-commit');
+  });
+
+  it('R13 host-scoped fs: hooks dir missing → none; samples only → none', async () => {
+    expect(await detectRepoHooks(hostScopedApp(repo), repo)).toEqual({ kind: 'none' });
+    rmSync(join(repo, '.git', 'hooks'), { recursive: true });
+    expect(await detectRepoHooks(hostScopedApp(repo), repo)).toEqual({ kind: 'none' });
   });
 });

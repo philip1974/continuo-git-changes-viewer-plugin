@@ -27,8 +27,9 @@ function mockApp(opts: {
   config?: PluginShellExecResult;
   commonDir?: PluginShellExecResult;
   listDir?: (p: string) => Promise<readonly FileEntry[]>;
-  stat?: (p: string) => Promise<{ isDirectory: boolean }>;
+  lstat?: (p: string) => Promise<{ isDirectory: boolean; isSymlink: boolean }>;
   noFs?: boolean;
+  noLstat?: boolean;
 }) {
   const exec = vi.fn(async (_cmd: string, args: readonly string[]) => {
     if (args.includes('config')) return opts.config ?? ok(cfg(PLUGIN_OVERRIDE));
@@ -36,12 +37,22 @@ function mockApp(opts: {
     return ok('');
   });
   const listDir = vi.fn(opts.listDir ?? (async () => []));
-  const stat = vi.fn(
-    opts.stat ??
+  const lstat = vi.fn(
+    opts.lstat ??
       (async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true, isSymlink: false })),
   );
-  const app = { shell: { exec }, ...(opts.noFs ? {} : { fs: { listDir, stat } }) } as unknown as CoPluginApp;
-  return { app, exec, listDir, stat };
+  const fs = opts.noLstat ? { listDir } : { listDir, lstat };
+  const app = { shell: { exec }, ...(opts.noFs ? {} : { fs }) } as unknown as CoPluginApp;
+  return { app, exec, listDir, lstat };
+}
+
+// 宿主 plugin-fs 的错误经 ipcRenderer.invoke 传回:只保留 message,形如
+// "Error invoking remote method 'plugin-fs:lstat': Error: ENOENT: no such file or directory, lstat '<path>'"
+function hostError(inner: string): Error {
+  return new Error(`Error invoking remote method 'plugin-fs:lstat': ${inner}`);
+}
+function errno(code: string): Error {
+  return Object.assign(new Error(`${code}: failure, lstat '/repo/.git/hooks'`), { code });
 }
 
 describe('detectRepoHooks', () => {
@@ -94,36 +105,71 @@ describe('detectRepoHooks', () => {
     expect((await detectRepoHooks(mockApp({ noFs: true }).app, '/repo')).kind).toBe('unknown');
   });
 
-  it('H6 hooks directory missing while the git dir is readable → none', async () => {
-    const { app } = mockApp({
-      listDir: async () => {
-        throw new Error('ENOENT');
-      },
-      stat: async (p) => {
-        if (p.endsWith('/hooks')) throw new Error('ENOENT');
-        return { isDirectory: true };
-      },
-    });
-    expect(await detectRepoHooks(app, '/repo')).toEqual({ kind: 'none' });
+  it('H6 only an explicit ENOENT from lstat(<common-dir>/hooks) means none (raw errno or host IPC message)', async () => {
+    for (const err of [
+      errno('ENOENT'),
+      hostError("Error: ENOENT: no such file or directory, lstat '/repo/.git/hooks'"),
+      new Error("ENOENT: no such file or directory, lstat '/repo/.git/hooks'"),
+    ]) {
+      const { app, listDir, lstat } = mockApp({
+        lstat: async () => {
+          throw err;
+        },
+      });
+      expect(await detectRepoHooks(app, '/repo')).toEqual({ kind: 'none' });
+      expect(lstat).toHaveBeenCalledWith('/repo/.git/hooks');
+      expect(listDir).not.toHaveBeenCalled();
+    }
   });
 
-  it('H7 hooks directory unreadable (exists, or git dir itself unreadable) → unknown', async () => {
-    const exists = mockApp({
-      listDir: async () => {
-        throw new Error('EACCES');
-      },
-    });
-    expect((await detectRepoHooks(exists.app, '/repo')).kind).toBe('unknown');
+  it('H7 any other lstat failure (scope error, EACCES, ENOENT only inside the path text) or no lstat API → unknown', async () => {
+    for (const err of [
+      hostError("ScopeError: path '/evil/hooks' is outside granted scopes"),
+      hostError("Error: EACCES: permission denied, lstat '/repo/.git/hooks'"),
+      errno('EACCES'),
+      hostError("ScopeError: path '/tmp/x: ENOENT: no such file or directory/.git/hooks' is outside granted scopes"),
+      new Error('boom'),
+    ]) {
+      const { app } = mockApp({
+        lstat: async () => {
+          throw err;
+        },
+      });
+      expect(await detectRepoHooks(app, '/repo')).toMatchObject({ kind: 'unknown' });
+    }
+    expect((await detectRepoHooks(mockApp({ noLstat: true }).app, '/repo')).kind).toBe('unknown');
+  });
 
-    const noScope = mockApp({
+  it('H13 hooks directory exists but cannot be listed → unknown (never treated as missing)', async () => {
+    for (const err of [errno('ENOENT'), errno('EACCES'), hostError('ScopeError: outside granted scopes')]) {
+      const { app } = mockApp({
+        listDir: async () => {
+          throw err;
+        },
+      });
+      expect((await detectRepoHooks(app, '/repo')).kind).toBe('unknown');
+    }
+  });
+
+  it('H14 hooks is a symlink: listed through the (scope-checked) link when readable, unknown when it points outside the workspace', async () => {
+    const link = async () => ({ isDirectory: false, isSymlink: true });
+    // repo/.git/hooks -> ../../evilhooks:宿主对 listDir 先 realpath 再判 scope → ScopeError
+    const outside = mockApp({
+      lstat: link,
       listDir: async () => {
-        throw new Error('out of scope');
-      },
-      stat: async () => {
-        throw new Error('out of scope');
+        throw hostError("ScopeError: '/evilhooks' is outside granted scopes");
       },
     });
-    expect((await detectRepoHooks(noScope.app, '/repo')).kind).toBe('unknown');
+    expect(await detectRepoHooks(outside.app, '/repo')).toMatchObject({ kind: 'unknown' });
+
+    const inside = mockApp({ lstat: link, listDir: async () => [entry('pre-commit')] });
+    expect(await detectRepoHooks(inside.app, '/repo')).toEqual({ kind: 'present', hooks: ['pre-commit'], hooksPath: null });
+  });
+
+  it('H15 hooks path is neither a directory nor a symlink (e.g. a regular file) → unknown', async () => {
+    const { app, listDir } = mockApp({ lstat: async () => ({ isDirectory: false, isSymlink: false }) });
+    expect((await detectRepoHooks(app, '/repo')).kind).toBe('unknown');
+    expect(listDir).not.toHaveBeenCalled();
   });
 });
 

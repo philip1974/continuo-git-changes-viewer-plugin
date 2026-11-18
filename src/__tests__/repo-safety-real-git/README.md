@@ -24,3 +24,8 @@ plugin's git helpers.
 - R10: local `core.hooksPath` → present; a linked worktree sees the main
   repository's hooks via `--git-common-dir`.
 - R11: `core.hooksPath` from global config only → none.
+- R12: `.git/hooks` symlinked to a sibling `evilhooks/` outside the workspace,
+  with a host-like scoped fs (realpath before scope check, IPC errors carry only
+  the message) → unknown; with a scope covering the target → present; git
+  really follows the link and runs its pre-commit.
+- R13: host-like scoped fs: samples only / missing hooks dir → none.

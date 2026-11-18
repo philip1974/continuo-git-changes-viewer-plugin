@@ -56,7 +56,7 @@ describe('amend integration', () => {
       shell: { exec },
       fs: {
         listDir: async () => [],
-        stat: async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true, isSymlink: false }),
+        lstat: async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true, isSymlink: false }),
       },
       notifications: { show: vi.fn() },
     } as unknown as CoPluginApp;
