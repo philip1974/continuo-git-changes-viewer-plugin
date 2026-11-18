@@ -60,6 +60,9 @@ const WITHHELD_NOTICE = {
   unverified: 'Could not verify that this path is not a symbolic link — contents are not shown',
   'not-regular': 'Not a regular file (directory, pipe or device) — contents are not shown',
   'no-staged-blob': 'No staged file content to show (submodule entry or unresolved merge conflict)',
+  // 读取失败,不是仓库的状态:不归咎于子模块 / 冲突,并说明提交仍会包含它
+  'staged-unreadable':
+    'The staged content of this file could not be read — it is not shown here, but a commit would still include it. Refresh to try again.',
 } as const;
 
 // exactCommand 里的路径已按 shell 规则转义(diff-fetcher / shell-quote);为 null 表示路径含控制字符、

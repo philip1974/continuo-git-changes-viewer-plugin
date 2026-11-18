@@ -55,7 +55,17 @@ showed "(empty file)".) The stage number is explicit because git reads
 - T7: staged deletion → nothing read; `MD` → index version in staged mode,
   nothing in changed mode; no stage-0 blob (gitlink, unresolved conflict) →
   `withheld: 'no-staged-blob'` (the panel shows a notice, `render-limits` L9).
+- T10: why a failed index read failed. It is reported as `no-staged-blob`
+  ("submodule entry or unresolved merge conflict") only when that is the
+  case: the status code is an unmerged one (`DD AU UD UA DU AA UU`, no extra
+  command), or `git ls-files -s -z -- <path>` (run only after a failed read)
+  lists the path as a gitlink (mode 160000) or only at stages 1–3. Anything
+  else — guard refusal, killed process, a stage-0 blob that could not be read,
+  `ls-files` itself failing / timing out / truncated / not listing the path —
+  is `staged-unreadable`; the panel then says the content could not be read
+  and that a commit would still include it (`render-limits` L9b). Commit stays
+  available either way.
 
 Real-git coverage: `repo-safety-real-git` R50–R51c (names, non-blobs,
-symbolic links), R57–R58 (large files), R61–R62 (staged content) and R64 (read
-timeout).
+symbolic links), R57–R58 (large files), R61–R62 (staged content), R64 (read
+timeout) and R69 (unreadable staged version).

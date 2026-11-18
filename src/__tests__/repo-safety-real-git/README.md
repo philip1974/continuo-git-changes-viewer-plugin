@@ -337,3 +337,10 @@ macOS):
   two on a normalization-sensitive file system): each row's view, stage,
   unstage and discard touch only its own entry.
 
+Unreadable staged version (`diff-fetcher` T10):
+
+- R69: with only the index read made to fail, a regular staged file, a staged
+  symbolic link and a staged file in a directory are `staged-unreadable`; a
+  real gitlink (`ls-files -s` mode 160000) and an unmerged `UU` path stay
+  `no-staged-blob`; in a restricted repository the guard's refusal is what is
+  reported.

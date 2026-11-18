@@ -75,7 +75,7 @@ describe('diff rendering is capped', () => {
 
 describe('whole-file view of a new / untracked file is capped', () => {
   const untracked: FileChange = { path: 'huge.log', status: 'U', statusX: '?', statusY: '?', kind: 'text' };
-  const renderNew = (extra: { modifiedTruncated?: true; modifiedTimedOut?: true; modified?: string; withheld?: 'no-staged-blob' }) =>
+  const renderNew = (extra: { modifiedTruncated?: true; modifiedTimedOut?: true; modified?: string; withheld?: 'no-staged-blob' | 'staged-unreadable' }) =>
     render(
       <DiffView
         store={createGitStore()}
@@ -109,6 +109,15 @@ describe('whole-file view of a new / untracked file is capped', () => {
     const { container } = renderNew({ modified: '', withheld: 'no-staged-blob' });
     expect(container.querySelector('.cgv-new-file')).toBeNull();
     expect(container.textContent).toBe('No staged file content to show (submodule entry or unresolved merge conflict)');
+  });
+
+  it('L9b a staged entry whose content could not be read for any other reason says so — it is not blamed on a submodule or a conflict, and no "(empty file)" is shown', () => {
+    const { container } = renderNew({ modified: '', withheld: 'staged-unreadable' });
+    expect(container.querySelector('.cgv-new-file')).toBeNull();
+    expect(container.textContent).toBe(
+      'The staged content of this file could not be read — it is not shown here, but a commit would still include it. Refresh to try again.',
+    );
+    expect(container.textContent).not.toMatch(/submodule|conflict/);
   });
 });
 

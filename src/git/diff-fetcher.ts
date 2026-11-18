@@ -37,10 +37,12 @@ export type DiffResult =
  * - symlink:路径或其某级父目录是符号链接。
  * - unverified:无法确认不是符号链接(无 app.fs、scope 错误、路径越出仓库根等)。
  * - not-regular:路径存在但不是普通文件(目录、FIFO、设备、socket)。
- * - no-staged-blob:(仅 staged 模式)index 里这个路径没有 stage 0 的 blob——gitlink(子模块 / 嵌套仓库)、
- *   未解决的冲突(只有 stage 1–3),或读取失败。
+ * - no-staged-blob:(仅 staged 模式)index 里这个路径确实没有 stage 0 的 blob——gitlink(子模块 / 嵌套仓库),
+ *   或未解决的冲突(只有 stage 1–3)。
+ * - staged-unreadable:(仅 staged 模式)index 版本没读出来,且不属于上面两种——被守卫拒绝、进程被终止、
+ *   对象读不到等。内容没有显示,但提交照样会包含它。
  */
-export type WithheldReason = 'symlink' | 'unverified' | 'not-regular' | 'no-staged-blob';
+export type WithheldReason = 'symlink' | 'unverified' | 'not-regular' | 'no-staged-blob' | 'staged-unreadable';
 
 // 读"整个文件"(HEAD 版 blob、工作树全文)的输出上限。不设时用宿主 shell.exec 的默认值(10 MiB,超出部分
 // 丢弃并置 truncated)——新文件 / 未跟踪文件的全文直接渲染进一个 <pre>,10 MiB 既卡又没有任何"被截断"的
@@ -167,15 +169,46 @@ async function readWorktreeFile(
 // - `:0:<path>`,不是 `:<path>`:git 把 `:<0-3>:<rest>` 解析成"stage N 的 <rest>",名为 `0:x` 的文件写成
 //   `:0:x` 读到的是 `x`;显式带上 stage 后冒号之后整体是路径(real-git R62)。参数以 `:` 开头,不会被当成选项。
 // - 读的是对象库里的 blob,不经过工作树:不需要符号链接检查(暂存的符号链接得到的是 git 存的目标路径文本)。
-// - 没有 stage 0 的 blob(gitlink、未解决的冲突)→ cat-file 失败 → 'no-staged-blob'。
+// - cat-file 失败 → 不显示内容,原因见 stagedReadFailure。
 async function readIndexBlob(
   app: Pick<CoPluginApp, 'shell'>,
   repoRoot: string,
-  path: string,
+  change: FileChange,
 ): Promise<FileRead> {
-  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `:0:${path}`], FILE_READ_LIMITS);
-  return partialOrWhole(r) ?? { content: '', withheld: 'no-staged-blob' };
+  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `:0:${change.path}`], FILE_READ_LIMITS);
+  return partialOrWhole(r) ?? { content: '', withheld: await stagedReadFailure(app, repoRoot, change) };
 }
+
+/** status 的 XY 表示未合并(git-status(1) 的 unmerged 表:DD AU UD UA DU AA UU)。 */
+function isUnmerged(change: FileChange): boolean {
+  const { statusX: x, statusY: y } = change;
+  return x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D');
+}
+
+// index 版本没读出来的原因。此前一律说成"子模块或未解决的冲突"——被守卫拒绝、进程起不来、退出码 128
+// 也都这么显示,把读取失败说成了仓库的状态。只有确认是下面两种才用 'no-staged-blob':
+// - 未合并:status 已经给出(不再起命令);
+// - `ls-files -s -z -- <path>` 里该路径的记录是 gitlink(mode 160000)或只有 stage 1–3。
+// 其余(含 ls-files 本身失败 / 超时 / 输出不完整 / 没有这条记录)一律 'staged-unreadable'。
+// ls-files -s 只读 index:不刷新、不碰工作树、不起子进程。只在读取失败后才运行。
+async function stagedReadFailure(
+  app: Pick<CoPluginApp, 'shell'>,
+  repoRoot: string,
+  change: FileChange,
+): Promise<WithheldReason> {
+  if (isUnmerged(change)) return 'no-staged-blob';
+  const r = await gitExec(app, repoRoot, ['ls-files', '-s', '-z', '--', change.path], { timeoutMs: FILE_READ_TIMEOUT_MS });
+  if (r.exitCode !== 0 || r.timedOut || r.truncated) return 'staged-unreadable';
+  // 每条记录:`<mode> <oid> <stage>\t<path>`。只看这个路径自己的记录(路径是目录前缀时会列出其下的条目)。
+  const own = r.stdout
+    .split('\0')
+    .map((record) => /^(\d{6}) [0-9a-f]+ ([0-3])\t([\s\S]*)$/.exec(record))
+    .filter((m): m is RegExpExecArray => m !== null && m[3] === change.path);
+  const noBlob = own.some((m) => m[1] === GITLINK_MODE || m[2] !== '0');
+  return noBlob ? 'no-staged-blob' : 'staged-unreadable';
+}
+
+const GITLINK_MODE = '160000';
 
 export async function fetchDiff(
   app: DiffApp,
@@ -226,7 +259,7 @@ export async function fetchDiff(
     (mode === 'staged' ? change.statusX === 'D' : change.status === 'D')
       ? Promise.resolve<FileRead>({ content: '' })
       : mode === 'staged'
-        ? readIndexBlob(app, repoRoot, change.path)
+        ? readIndexBlob(app, repoRoot, change)
         : readWorktreeFile(app, repoRoot, change.path),
     gitExec(app, repoRoot, diffArgs),
   ]);

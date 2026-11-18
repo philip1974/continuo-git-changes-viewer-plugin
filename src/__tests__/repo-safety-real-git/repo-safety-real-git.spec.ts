@@ -2635,3 +2635,73 @@ describe('file names reach git byte for byte whatever core.precomposeUnicode say
     expect(disk(NFC)).toBe('nfc v1\n');
   });
 });
+
+describe('a staged version that cannot be read is not blamed on a submodule or a conflict (real git)', () => {
+  // 只让"读 index 版本"这一条命令失败(进程被杀 / 对象读不到的替身),其余命令照常交给真实 git
+  const failingIndexRead = (inner: CoPluginApp = realApp()): CoPluginApp => {
+    const exec = inner.shell.exec.bind(inner.shell);
+    return {
+      ...inner,
+      shell: {
+        exec: async (cmd: string, args: readonly string[], opts?: PluginShellExecOptions) =>
+          cmd === 'git' && args.includes('cat-file') && args.some((a) => a.startsWith(':0:'))
+            ? { stdout: '', stderr: 'fatal: unable to read', exitCode: 128, signal: null, timedOut: false, truncated: false }
+            : exec(cmd, args, opts),
+      },
+    } as unknown as CoPluginApp;
+  };
+
+  it('R69 with the index read failing: a regular staged file, a staged symbolic link and a staged file inside a directory are flagged staged-unreadable; a gitlink (real `ls-files -s` mode 160000) and an unmerged path keep no-staged-blob; in a restricted repository the refusal itself is reported', async () => {
+    writeFileSync(join(repo, 'new.txt'), 'staged new\n');
+    symlinkSync('f.txt', join(repo, 'ln'));
+    mkdirSync(join(repo, 'dir'));
+    writeFileSync(join(repo, 'dir', 'inner.txt'), 'inner\n');
+    const sub = join(repo, 'sub');
+    mkdirSync(sub);
+    git(sub, 'init', '-q', '-b', 'main');
+    writeFileSync(join(sub, 'x.txt'), 'x\n');
+    git(sub, 'add', '.');
+    git(sub, 'commit', '-qm', 'inner');
+    git(repo, '-c', 'advice.addEmbeddedRepo=false', 'add', '-A');
+
+    const app = failingIndexRead();
+    installRepoSafetyGuard(app);
+    let changes = await scanStatus(app, repo);
+    const withheld = async (path: string) => {
+      const d = await fetchDiff(app, repo, changes.find((c) => c.path === path)!, 'staged');
+      return d.ok ? d.withheld : d;
+    };
+    expect(await withheld('new.txt')).toBe('staged-unreadable');
+    expect(await withheld('ln')).toBe('staged-unreadable');
+    expect(await withheld('dir/inner.txt')).toBe('staged-unreadable');
+    expect(await withheld('sub')).toBe('no-staged-blob');
+    // 同一仓库、读取正常时:普通文件照常显示(不带标记)
+    const fine = await fetchDiff(realApp(), repo, changes.find((c) => c.path === 'new.txt')!, 'staged');
+    expect(fine).toMatchObject({ ok: true, modified: 'staged new\n' });
+    expect(fine).not.toHaveProperty('withheld');
+
+    // 未合并(UU):status 已说明
+    git(repo, 'commit', '-qm', 'base');
+    git(repo, 'checkout', '-q', '-b', 'side');
+    writeFileSync(join(repo, 'f.txt'), 'theirs\n');
+    git(repo, 'commit', '-qam', 'side');
+    git(repo, 'checkout', '-q', 'main');
+    writeFileSync(join(repo, 'f.txt'), 'ours\n');
+    git(repo, 'commit', '-qam', 'main');
+    expect(() => git(repo, 'merge', '-q', 'side')).toThrow();
+    changes = await scanStatus(app, repo);
+    expect(changes.find((c) => c.path === 'f.txt')).toMatchObject({ statusX: 'U', statusY: 'U' });
+    expect(await withheld('f.txt')).toBe('no-staged-blob');
+
+    // 受限仓库:守卫拒绝的是所有命令——显示的是拒绝原因,不是"子模块或冲突"
+    const stale = changes.find((c) => c.path === 'f.txt')!;
+    git(repo, 'config', 'core.fsmonitor', marker('fsmonitor'));
+    const restricted = realApp();
+    const { guard } = installRepoSafetyGuard(restricted);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('restricted');
+    const refused = await fetchDiff(restricted, repo, { ...stale, statusX: 'A', statusY: ' ' }, 'staged');
+    expect(refused).toMatchObject({ ok: false, reason: 'git-error' });
+    expect(JSON.stringify(refused)).toMatch(/disabled for this repository/);
+    expect(marks()).toEqual([]);
+  });
+});

@@ -24,6 +24,10 @@ both are capped; nothing is dropped from the underlying data.
 - L9: a staged new entry without a staged blob (`withheld:
   'no-staged-blob'`: submodule entry, unresolved conflict) shows "No staged
   file content to show (…)" instead of "(empty file)".
+- L9b: `withheld: 'staged-unreadable'` (the index version could not be read
+  for any other reason) shows "The staged content of this file could not be
+  read — … a commit would still include it", never the submodule / conflict
+  wording.
 - L6: a status output truncated by the host output limit loses only its last,
   possibly partial record — it is never parsed into a bogus entry. The scan
   reports the list as incomplete (`StatusUnavailableError.partial` carries the
