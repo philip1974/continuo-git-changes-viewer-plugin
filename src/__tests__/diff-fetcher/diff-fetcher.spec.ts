@@ -18,7 +18,13 @@ function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult 
 function makeApp(shellResult: PluginShellExecResult) {
   const exec = vi.fn().mockResolvedValue(shellResult);
   return {
-    app: { shell: { exec } } as unknown as CoPluginApp,
+    // 读工作树全文前要经 app.fs.lstat 确认路径不是符号链接(见 diff-symlink-guard)
+    app: {
+      shell: { exec },
+      fs: {
+        lstat: vi.fn().mockResolvedValue({ size: 1, mtimeMs: 0, isFile: true, isDirectory: false, isSymlink: false }),
+      },
+    } as unknown as CoPluginApp,
     exec,
   };
 }

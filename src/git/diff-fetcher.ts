@@ -1,5 +1,6 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
+import { isNotFoundError } from './fs-errors';
 import type { FileChange } from './status-scanner';
 
 // v0.1.3 hotfix: MergeView 必须接收两个全文（不是 filter unified diff +/-）。
@@ -13,6 +14,8 @@ export type DiffResult =
       modified: string; // working tree 全文；删除文件为 ""
       unifiedDiff: string;
       isUntracked: boolean;
+      /** 工作树全文未读取(modified 为 "")的原因;正常读取时不带此字段。 */
+      withheld?: WithheldReason;
     }
   | {
       ok: false;
@@ -21,6 +24,14 @@ export type DiffResult =
       exactCommand: string;
       message?: string;
     };
+
+/**
+ * - symlink:路径或其某级父目录是符号链接。
+ * - unverified:无法确认不是符号链接(无 app.fs、scope 错误、路径越出仓库根等)。
+ */
+export type WithheldReason = 'symlink' | 'unverified';
+
+type DiffApp = Pick<CoPluginApp, 'shell'> & Partial<Pick<CoPluginApp, 'fs'>>;
 
 export type DiffMode = 'changed' | 'staged';
 
@@ -44,17 +55,56 @@ async function gitShowHead(
   return r.exitCode === 0 ? r.stdout : '';
 }
 
-async function shellCat(
-  app: Pick<CoPluginApp, 'shell'>,
+// 读工作树全文(安全):`cat` 会跟随符号链接。来历不明的目录里,被跟踪/未跟踪的路径(或其父目录)
+// 可以是指向 workspace 之外的链接(`notes.txt -> ~/.ssh/id_rsa`);git 自身只显示链接目标路径,
+// 面板却会把外部文件内容显示出来。因此读取前用 app.fs.lstat(不跟随链接)逐级检查该路径及其在
+// repoRoot 之下的每一级父目录:
+// - 任一级是符号链接 → 不读('symlink')。
+// - 检查做不了(无 app.fs / lstat、scope 错误、EACCES 等)→ 不读('unverified',fail-closed);
+//   只有明确的 ENOENT 才算"不是链接"(文件已不存在,cat 本来也读不到)。
+// - 路径是绝对路径或含 `..` 段(越出仓库根)→ 不读。
+// 检查与读取之间有极小的时间窗(本地攻击者可在其间替换文件),与显示性质的低风险相称,不再加码。
+async function checkNoSymlink(
+  app: DiffApp,
   repoRoot: string,
   path: string,
-): Promise<string> {
+): Promise<WithheldReason | null> {
+  const fs = app.fs;
+  if (!fs || typeof fs.lstat !== 'function') return 'unverified';
+  const segments = path.split('/').filter((s) => s !== '' && s !== '.');
+  if (path.startsWith('/') || segments.length === 0 || segments.includes('..')) {
+    return 'unverified';
+  }
+  const root = repoRoot.replace(/[\\/]+$/, '');
+  const levels = segments.map((_, i) => `${root}/${segments.slice(0, i + 1).join('/')}`);
+  const results = await Promise.all(
+    levels.map(async (level): Promise<WithheldReason | null> => {
+      try {
+        return (await fs.lstat(level)).isSymlink ? 'symlink' : null;
+      } catch (err) {
+        return isNotFoundError(err) ? null : 'unverified';
+      }
+    }),
+  );
+  if (results.includes('symlink')) return 'symlink';
+  return results.includes('unverified') ? 'unverified' : null;
+}
+
+type WorktreeRead = { readonly content: string; readonly withheld?: WithheldReason };
+
+async function readWorktreeFile(
+  app: DiffApp,
+  repoRoot: string,
+  path: string,
+): Promise<WorktreeRead> {
+  const withheld = await checkNoSymlink(app, repoRoot, path);
+  if (withheld !== null) return { content: '', withheld };
   const r = await app.shell.exec('cat', [path], { cwd: repoRoot });
-  return r.exitCode === 0 ? r.stdout : '';
+  return { content: r.exitCode === 0 ? r.stdout : '' };
 }
 
 export async function fetchDiff(
-  app: Pick<CoPluginApp, 'shell'>,
+  app: DiffApp,
   repoRoot: string,
   change: FileChange,
   mode: DiffMode = 'changed',
@@ -63,14 +113,15 @@ export async function fetchDiff(
 
   // Untracked: 没 HEAD 版；只显示 WT 全文（DiffView 走 NewFileView 分支）
   if (untracked) {
-    const modified = await shellCat(app, repoRoot, change.path);
+    const wt = await readWorktreeFile(app, repoRoot, change.path);
     return {
       ok: true,
       path: change.path,
       original: '',
-      modified,
+      modified: wt.content,
       unifiedDiff: '',
       isUntracked: true,
+      ...(wt.withheld ? { withheld: wt.withheld } : {}),
     };
   }
 
@@ -82,11 +133,11 @@ export async function fetchDiff(
       : ['diff', '--', change.path];
 
   // 并发跑 3 个 shell 命令
-  const [originalRaw, modifiedRaw, diffR] = await Promise.all([
+  const [originalRaw, wt, diffR] = await Promise.all([
     gitShowHead(app, repoRoot, headPath),
     change.status === 'D'
-      ? Promise.resolve('')
-      : shellCat(app, repoRoot, change.path),
+      ? Promise.resolve<WorktreeRead>({ content: '' })
+      : readWorktreeFile(app, repoRoot, change.path),
     gitExec(app, repoRoot, diffArgs),
   ]);
 
@@ -112,9 +163,10 @@ export async function fetchDiff(
     ok: true,
     path: change.path,
     original: originalRaw,
-    modified: modifiedRaw,
+    modified: wt.content,
     unifiedDiff: diffR.stdout,
     isUntracked: false,
+    ...(wt.withheld ? { withheld: wt.withheld } : {}),
   };
 }
 

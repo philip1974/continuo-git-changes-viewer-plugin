@@ -35,6 +35,12 @@ function NewFileView({ content }: { readonly content: string }) {
   return <pre className="cgv-new-file">{content || '(empty file)'}</pre>;
 }
 
+// 工作树全文未读取(见 diff-fetcher 的符号链接检查):显示说明,不显示文件内容。
+const WITHHELD_NOTICE = {
+  symlink: 'Symbolic link — contents are not shown',
+  unverified: 'Could not verify that this path is not a symbolic link — contents are not shown',
+} as const;
+
 function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string }) {
   return (
     <div className="cgv-placeholder">
@@ -336,6 +342,9 @@ export function DiffView({
 
   // Untracked / Added (HEAD 无版本) → NewFileView 显示 modified 全文
   if (diff.isUntracked || (diff.original === '' && change.status === 'A')) {
+    if (diff.withheld) {
+      return <main className="cgv-diff-empty">{WITHHELD_NOTICE[diff.withheld]}</main>;
+    }
     return (
       <main className="cgv-diff">
         <NewFileView content={diff.modified} />

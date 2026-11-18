@@ -70,6 +70,10 @@
 
 - [`diff-fetcher.spec.ts`](./diff-fetcher/diff-fetcher.spec.ts)
 
+## [Diff Symlink Guard](./diff-symlink-guard/README.md)
+
+- [`diff-symlink-guard.spec.tsx`](./diff-symlink-guard/diff-symlink-guard.spec.tsx)
+
 ## [DiffView Banner Preserved](./diffview-banner-preserved/README.md)
 
 - [`diffview-no-toast.spec.tsx`](./diffview-banner-preserved/diffview-no-toast.spec.tsx)
