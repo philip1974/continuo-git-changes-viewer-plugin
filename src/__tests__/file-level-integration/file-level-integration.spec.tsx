@@ -37,11 +37,20 @@ function renderWithChanges(
       if (args.includes('rev-parse')) {
         return result({ exitCode: 0, stdout: 'HEAD\n' });
       }
+      // 文件级操作之前对 index 的只读查询(子模块条目 / 路径之下的条目):一律空;其余交给用例的 exec
+      if (args.includes('ls-files')) return result({ exitCode: 0 });
       return exec(cmd, args, opts);
     },
   );
   const app = {
     shell: { exec: shellExec },
+    // 工作树里被操作的路径:普通文件,其父级(`/repo/src`)是目录(stage / discard 之前的查看)
+    fs: {
+      lstat: async (path: string) => {
+        const isFile = /\.[a-z]+$/.test(path);
+        return { size: 1, mtimeMs: 0, isFile, isDirectory: !isFile, isSymlink: false };
+      },
+    },
     ...(withNotifications ? { notifications } : {}),
   } as unknown as CoPluginApp;
   const refresh = vi.fn(async () => undefined);

@@ -10,7 +10,8 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchDiff, FILE_READ_TIMEOUT_MS, isWorktreeDiffStale, MAX_FILE_BYTES } from '../../git/diff-fetcher';
-import { discardFile, SUBMODULE_DISCARD_ERROR } from '../../git/discard-file';
+import { DIRECTORY_DISCARD_ERROR, discardFile, parentNotDirectoryDiscardError, SUBMODULE_DISCARD_ERROR } from '../../git/discard-file';
+import { UNVERIFIED_PATH_ERROR } from '../../git/worktree-entry';
 import { discardHunk } from '../../git/discard-hunk';
 import { DISABLED_HOOKS_PATH, gitExec, KNOWN_HOOK_EVENTS, LITERAL_ARGV_CONFIG } from '../../git/exec';
 import { detectRepoHooks } from '../../git/repo-hooks';
@@ -20,14 +21,14 @@ import { canDiscardFile } from '../../git/can-discard-file';
 import { canStageFile } from '../../git/can-stage-file';
 import { canUnstageFile } from '../../git/can-unstage-file';
 import { PINNED_OUTPUT_CONFIG } from '../../git/exec';
-import { _resetRestoreCache, unstageFile } from '../../git/unstage-file';
+import { _resetRestoreCache, DIRECTORY_UNSTAGE_ERROR, unstageFile } from '../../git/unstage-file';
 import { unstageHunk } from '../../git/unstage-hunk';
 import { gitCommit, readLastCommitSubject } from '../../git/git-commit';
 import { hasHeadCommit, readHeadMessage, readHeadSha } from '../../git/head-meta';
 import { installRepoSafetyGuard, isKnownSafeConfigKey, isRepoControlledScope, isUnsafeConfigEntry, parseScopedConfigListStrict, PROBE_ARGS, probeRepoSafety } from '../../git/repo-safety';
 import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
-import { stageFile } from '../../git/stage-file';
+import { DIRECTORY_STAGE_ERROR, stageFile } from '../../git/stage-file';
 import { DiffView } from '../../panel/DiffView';
 import { createGitStore } from '../../state/git-store';
 import { parsePorcelainStatus, scanStatus, StatusUnavailableError, UnsafeIndexError } from '../../git/status-scanner';
@@ -1301,7 +1302,8 @@ describe('paths are passed to git literally, never as pathspec patterns (real gi
     mkdirSync(join(repo, 'dir'));
     writeFileSync(join(repo, 'dir', 'u.txt'), 'u\n');
     expect((await scanStatus(app, repo)).map((c) => c.path)).toContain('dir/');
-    expect((await stageFile(app, repo, 'dir/')).ok).toBe(true);
+    // 未跟踪行:面板传 untracked(runFileAction),与这里相同
+    expect((await stageFile(app, repo, 'dir/', { untracked: true })).ok).toBe(true);
     expect(porcelain()).toContain('A  dir/u.txt');
     expect((await stageHunk(app, repo, git(repo, 'diff', '--', 'f.txt'))).ok).toBe(true);
     expect(await readHeadMessage(app, repo)).toBe('pattern-named files');
@@ -3219,5 +3221,169 @@ describe('bytes that are not valid UTF-8 never make a round trip through a hunk 
     expect((await fetchDiff(app, repo, rows[0]!, 'staged')).ok).toBe(false);
     expect(git(repo, 'status', '--porcelain=v2')).toBe(before);
     expect(readFileSync(join(repo, 'caf�'), 'utf8')).toBe('the other file\n');
+  });
+});
+
+// 文件级操作的参数是路径,而 git 把路径当"前缀"用:磁盘上 / index 里这个位置现在是目录时,操作会波及用户没点的内容
+describe('a file-level action acts on the entry that was clicked, not on a directory that now sits at its path (real git)', () => {
+  const exists = (...parts: string[]) => existsSync(join(repo, ...parts));
+  // `x` 是被跟踪的文件;工作树里它被换成了一个目录,里面有 git 不跟踪的文件。status 只给出 ` D x`:
+  // x 还是 index 里的条目时,git 不列出这个目录里的未跟踪文件——面板里看不到 work.txt。
+  const fileBecomesDir = () => {
+    writeFileSync(join(repo, 'x'), 'tracked file\n');
+    git(repo, 'add', 'x');
+    git(repo, 'commit', '-qm', 'x');
+    rmSync(join(repo, 'x'));
+    mkdirSync(join(repo, 'x'));
+    writeFileSync(join(repo, 'x', 'work.txt'), 'unsaved work\n');
+  };
+  // `x` 被换成了一个嵌套仓库(状态 ` T x`),里面有未跟踪的文件
+  const fileBecomesRepo = () => {
+    writeFileSync(join(repo, 'x'), 'tracked file\n');
+    git(repo, 'add', 'x');
+    git(repo, 'commit', '-qm', 'x');
+    rmSync(join(repo, 'x'));
+    mkdirSync(join(repo, 'x'));
+    git(join(repo, 'x'), 'init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'x', 'inner.txt'), 'inner\n');
+    git(join(repo, 'x'), 'add', '.');
+    git(join(repo, 'x'), 'commit', '-qm', 'inner');
+    writeFileSync(join(repo, 'x', 'work.txt'), 'unsaved work\n');
+  };
+  // `a/b` 是被跟踪的文件;目录 `a` 被换成了一个未跟踪的文件
+  const parentBecomesFile = () => {
+    mkdirSync(join(repo, 'a'));
+    writeFileSync(join(repo, 'a', 'b'), 'tracked file\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'a/b');
+    rmSync(join(repo, 'a'), { recursive: true });
+    writeFileSync(join(repo, 'a'), 'unsaved work\n');
+  };
+  const rowOf = async (app: CoPluginApp, path: string) => (await scanStatus(app, repo)).find((c) => c.path === path)!;
+
+  it('R77 Discard: a directory (plain, or a nested repository) at the path, or a file where a parent folder was — `git checkout --` deletes them with everything inside, tracked or not. discardFile refuses and nothing is touched; an ordinary deleted / modified file is still restored', async () => {
+    const app = realApp();
+    installRepoSafetyGuard(app);
+
+    // 为什么:git 自己的行为
+    fileBecomesDir();
+    expect(git(repo, 'status', '--porcelain')).toBe(' D x\n');
+    expect((await gitExec(app, repo, ['checkout', '--', 'x'])).exitCode).toBe(0);
+    expect(readFileSync(join(repo, 'x'), 'utf8')).toBe('tracked file\n'); // 目录和 work.txt 没了
+
+    rmSync(join(repo, 'x'));
+    mkdirSync(join(repo, 'x'));
+    writeFileSync(join(repo, 'x', 'work.txt'), 'unsaved work\n');
+    expect(canDiscardFile(await rowOf(app, 'x'), 'changed')).toBe(true);
+    expect(await discardFile(app, repo, 'x')).toEqual({ ok: false, error: DIRECTORY_DISCARD_ERROR });
+    expect(readFileSync(join(repo, 'x', 'work.txt'), 'utf8')).toBe('unsaved work\n');
+    expect(git(repo, 'status', '--porcelain')).toBe(' D x\n');
+    rmSync(join(repo, 'x'), { recursive: true });
+    git(repo, 'rm', '-q', '--cached', 'x');
+    git(repo, 'commit', '-qm', 'drop x');
+
+    fileBecomesRepo();
+    expect(git(repo, 'status', '--porcelain')).toBe(' T x\n');
+    expect(canDiscardFile(await rowOf(app, 'x'), 'changed')).toBe(true);
+    expect(await discardFile(app, repo, 'x')).toEqual({ ok: false, error: DIRECTORY_DISCARD_ERROR });
+    expect(exists('x', '.git')).toBe(true);
+    expect(readFileSync(join(repo, 'x', 'work.txt'), 'utf8')).toBe('unsaved work\n');
+    expect(git(repo, 'status', '--porcelain')).toBe(' T x\n');
+
+    parentBecomesFile();
+    expect(git(repo, 'status', '--porcelain', '--', 'a')).toBe(' D a/b\n?? a\n');
+    expect(await discardFile(app, repo, 'a/b')).toEqual({ ok: false, error: parentNotDirectoryDiscardError('a') });
+    expect(readFileSync(join(repo, 'a'), 'utf8')).toBe('unsaved work\n');
+
+    // 普通情形不受影响:删掉的文件、改过的文件
+    rmSync(join(repo, 'g.txt'));
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    expect(await discardFile(app, repo, 'g.txt')).toEqual({ ok: true });
+    expect(await discardFile(app, repo, 'f.txt')).toEqual({ ok: true });
+    expect(readFileSync(join(repo, 'g.txt'), 'utf8')).toBe('gee\n');
+    expect(readFileSync(join(repo, 'f.txt'), 'utf8')).toBe('one\n');
+  });
+
+  it('R77b Discard is fail-closed: when the path cannot be looked at (no file access, or lstat fails with anything but "not found") nothing is checked out', async () => {
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const noFs = { shell: app.shell } as unknown as CoPluginApp;
+    expect(await discardFile(noFs, repo, 'f.txt')).toEqual({ ok: false, error: UNVERIFIED_PATH_ERROR });
+    const denied = { shell: app.shell, fs: { lstat: async () => { throw new Error('ScopeError: path is outside granted scopes'); } } } as unknown as CoPluginApp;
+    expect(await discardFile(denied, repo, 'f.txt')).toEqual({ ok: false, error: UNVERIFIED_PATH_ERROR });
+    expect(readFileSync(join(repo, 'f.txt'), 'utf8')).toBe('one\ntwo\n');
+  });
+
+  it('R78 Stage: on a ` D x` row `git add -- x` would add every untracked file inside the directory that replaced x — content the row never showed. stageFile refuses; a nested repository (` T x`) is staged as the one entry it is, and a deletion below a path that became a file is staged as that deletion', async () => {
+    const app = realApp();
+    installRepoSafetyGuard(app);
+
+    fileBecomesDir();
+    const row = await rowOf(app, 'x');
+    expect(`${row.statusX}${row.statusY}`).toBe(' D');
+    expect(canStageFile(row, 'changed')).toBe(true);
+    // 为什么:git 自己的行为
+    git(repo, 'add', '--', 'x');
+    expect(git(repo, 'status', '--porcelain')).toBe('D  x\nA  x/work.txt\n');
+    git(repo, 'reset', '-q');
+
+    expect(await stageFile(app, repo, 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+    expect(git(repo, 'status', '--porcelain')).toBe(' D x\n');
+    // (status 在 x 仍是 index 条目时不列出目录里的未跟踪文件:用户在面板里根本看不到 work.txt)
+    rmSync(join(repo, 'x'), { recursive: true });
+    git(repo, 'rm', '-q', '--cached', 'x');
+    git(repo, 'commit', '-qm', 'drop x');
+
+    fileBecomesRepo();
+    expect(await stageFile(app, repo, 'x')).toEqual({ ok: true });
+    // (不带 --ignore-submodules=dirty 时,嵌套仓库里未跟踪的 work.txt 让它显示成 `TM`)
+    expect(git(repo, 'status', '--porcelain', '--ignore-submodules=dirty')).toBe('T  x\n');
+    expect(git(repo, 'ls-files', '-s', '--', 'x')).toMatch(/^160000 [0-9a-f]+ 0\tx\n$/);
+    expect(readFileSync(join(repo, 'x', 'work.txt'), 'utf8')).toBe('unsaved work\n');
+
+    parentBecomesFile();
+    expect(await stageFile(app, repo, 'a/b')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain', '--', 'a')).toBe('D  a/b\n?? a\n');
+  });
+
+  it('R79 Unstage: with `D  x` and `AM x/work.txt` staged, `git restore --staged -- x` (and `git reset HEAD -- x`) also unstages x/work.txt and drops its staged content. unstageFile refuses on the x row; the x/work.txt row and ordinary rows unstage as before', async () => {
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const stageBoth = () => {
+      git(repo, 'add', '-A');
+      appendFileSync(join(repo, 'x', 'work.txt'), 'later edit\n');
+    };
+    fileBecomesDir();
+    stageBoth();
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    const STATUS = 'M  f.txt\nD  x\nAM x/work.txt\n';
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+    expect(canUnstageFile(await rowOf(app, 'x'), 'staged')).toBe(true);
+
+    // 为什么:git 自己的行为(两种写法都一样)
+    for (const args of [['restore', '--staged', '--', 'x'], ['reset', '-q', 'HEAD', '--', 'x']]) {
+      expect((await gitExec(app, repo, args)).exitCode).toBe(0);
+      expect(git(repo, 'status', '--porcelain')).toBe('M  f.txt\n D x\n');
+      git(repo, 'add', '-A');
+      expect(git(repo, 'status', '--porcelain')).toBe('M  f.txt\nD  x\nA  x/work.txt\n');
+    }
+    git(repo, 'reset', '-q', '--', 'x');
+    writeFileSync(join(repo, 'x', 'work.txt'), 'unsaved work\n');
+    stageBoth();
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+
+    _resetRestoreCache();
+    expect(await unstageFile(app, repo, 'x')).toEqual({ ok: false, error: DIRECTORY_UNSTAGE_ERROR });
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+    expect(git(repo, 'show', ':0:x/work.txt')).toBe('unsaved work\n');
+
+    expect(await unstageFile(app, repo, 'f.txt')).toEqual({ ok: true });
+    expect(await unstageFile(app, repo, 'x/work.txt')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain')).toBe(' M f.txt\nD  x\n?? x/\n');
+    // 子条目不在了:x 这一行可以撤销暂存
+    expect(await unstageFile(app, repo, 'x')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain')).toBe(' M f.txt\n D x\n');
   });
 });

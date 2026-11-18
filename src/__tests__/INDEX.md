@@ -340,3 +340,7 @@
 ## [Untracked Diff](./untracked-diff/README.md)
 
 - [`untracked-diff.spec.ts`](./untracked-diff/untracked-diff.spec.ts)
+
+## [worktree-entry](./worktree-entry/README.md)
+
+- [`worktree-entry.spec.ts`](./worktree-entry/worktree-entry.spec.ts)

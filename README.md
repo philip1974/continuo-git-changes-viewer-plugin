@@ -56,6 +56,17 @@ File-level Discard is destructive and requires typing `discard` exactly. It runs
 preserves already-staged content for `MM` files. Untracked file deletion is not
 supported in v0.4.0.
 
+A row names one entry, but git treats the path as a prefix. When a directory
+now sits where a tracked file was (or a file where one of its parent folders
+was), Discard would delete that directory or file with everything in it, and
+Stage would add every untracked file inside — files the list does not show
+while the old entry exists. Unstage would likewise unstage entries staged
+below a directory of the same name. In these cases the action is refused with
+an explanation and nothing is changed; resolve it in a terminal. A submodule or
+nested repository directory is still staged as the single entry it is. The
+check happens just before the git command; a change in the instant between
+the two is not caught.
+
 ## Commit
 
 The top of the panel includes a commit message editor. The Commit button is

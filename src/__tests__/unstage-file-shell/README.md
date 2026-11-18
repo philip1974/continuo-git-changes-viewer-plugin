@@ -24,3 +24,18 @@ and the next call probes again.
 - T7: a positive probe result is cached.
 
 Real-git coverage: `repo-safety-real-git` R59.
+
+Entries below the path. `git restore --staged -- x` and the `git reset HEAD --
+x` fallback treat `x` as a prefix. With `D  x` and `AM x/work.txt` staged (a
+file replaced by a directory, staged as a whole, then edited again),
+unstaging the `x` row also unstaged `x/work.txt` and dropped its staged
+version. `unstageFile` first asks the index (`ls-files -s -z -- <path>`,
+read-only) whether entries exist inside `<path>/` and refuses if so, or if the
+query fails (fail-closed).
+
+- T9: entries inside `<path>/` (any stage) → refused before anything else
+  runs.
+- T10: the path's own record, no record, or names that only share the first
+  letters do not block; a failed / timed-out / truncated query refuses.
+
+Real git: `repo-safety-real-git` R79.

@@ -421,3 +421,23 @@ Bytes that are not valid UTF-8 (`hunk-patch-builder` T8, `path-utils` T8,
   file really named `caf` + U+FFFD: both arrive as the same string. Both rows
   are inoperable, and stage / unstage / discard / diff refuse the name without
   running git — the other file is untouched.
+
+A file-level action acts on the clicked entry, not on a directory at its path
+(`worktree-entry`, `discard-file-shell` T14–T17, `stage-file-shell` T6–T8,
+`unstage-file-shell` T9–T10; run with git 2.50.1 and 2.56.1):
+
+- R77: Discard. A tracked file replaced by a directory with untracked work in
+  it (` D x` — git does not list the untracked file), by a nested repository
+  (` T x`), or a tracked `a/b` whose parent `a` became an untracked file:
+  `git checkout --` deletes the directory / the file. `discardFile` refuses
+  each and nothing is touched; ordinary deleted and modified files are still
+  restored.
+- R77b: with no file access, or an lstat error other than not-found, nothing
+  is checked out.
+- R78: Stage. `git add -- x` on the ` D x` row stages `A  x/work.txt` as well;
+  `stageFile` refuses. The nested repository is staged as one gitlink entry;
+  a deletion below a path that became a file is staged as that deletion.
+- R79: Unstage. With `D  x` and `AM x/work.txt`, both `restore --staged -- x`
+  and `reset HEAD -- x` unstage the child too; `unstageFile` refuses on the
+  `x` row, and works on the child row, on ordinary rows, and on `x` once
+  nothing is staged below it.

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { stageFile } from '../../git/stage-file';
+import { DIRECTORY_STAGE_ERROR, stageFile } from '../../git/stage-file';
+import { UNVERIFIED_PATH_ERROR } from '../../git/worktree-entry';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { buildGitArgs } from '../../git/exec';
 
@@ -15,10 +16,13 @@ function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult 
   };
 }
 
+// stageFile 先看工作树里这个位置现在是什么(app.fs.lstat,见 T6–T8):这里一律是普通文件
+const FILE_FS = { lstat: async () => ({ size: 1, mtimeMs: 0, isFile: true, isDirectory: false, isSymlink: false }) };
+
 describe('stageFile shell wrapper', () => {
   it('T1 runs git add through shell.exec with no optional locks', async () => {
     const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
-    const app = { shell: { exec } } as unknown as CoPluginApp;
+    const app = { shell: { exec }, fs: FILE_FS } as unknown as CoPluginApp;
 
     await expect(stageFile(app, '/repo', 'new.txt')).resolves.toEqual({ ok: true });
 
@@ -31,7 +35,7 @@ describe('stageFile shell wrapper', () => {
 
   it('T2 maps git add failures to error results', async () => {
     const exec = vi.fn().mockResolvedValue(result({ exitCode: 1, stderr: 'add failed' }));
-    const app = { shell: { exec } } as unknown as CoPluginApp;
+    const app = { shell: { exec }, fs: FILE_FS } as unknown as CoPluginApp;
 
     await expect(stageFile(app, '/repo', 'bad.txt')).resolves.toEqual({
       ok: false,
@@ -41,7 +45,7 @@ describe('stageFile shell wrapper', () => {
 
   it('T3 always uses -- before the file path', async () => {
     const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
-    const app = { shell: { exec } } as unknown as CoPluginApp;
+    const app = { shell: { exec }, fs: FILE_FS } as unknown as CoPluginApp;
 
     await stageFile(app, '/repo', '--looks-like-option');
 
@@ -50,7 +54,7 @@ describe('stageFile shell wrapper', () => {
 
   it('T4 falls back to an exit-code message when stderr is empty', async () => {
     const exec = vi.fn().mockResolvedValue(result({ exitCode: 128 }));
-    const app = { shell: { exec } } as unknown as CoPluginApp;
+    const app = { shell: { exec }, fs: FILE_FS } as unknown as CoPluginApp;
 
     await expect(stageFile(app, '/repo', 'a.ts')).resolves.toEqual({
       ok: false,
@@ -60,7 +64,7 @@ describe('stageFile shell wrapper', () => {
 
   it('T5 an untracked path is added with the repository\'s own core.precomposeUnicode (its name was read from the directory under that setting); a tracked path pins it to false', async () => {
     const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
-    const app = { shell: { exec } } as unknown as CoPluginApp;
+    const app = { shell: { exec }, fs: FILE_FS } as unknown as CoPluginApp;
     const pin = 'core.precomposeUnicode=false';
 
     await stageFile(app, '/repo', 'caf\u00e9.txt', { untracked: true });
@@ -71,5 +75,72 @@ describe('stageFile shell wrapper', () => {
     await stageFile(app, '/repo', 'cafe\u0301.txt', { untracked: false });
     expect(exec.mock.calls[1]?.[1]).toContain(pin);
     expect(exec.mock.calls[2]?.[1]).toContain(pin);
+  });
+  // `git add -- x` 在 x 的位置上是普通目录时,把目录里所有未跟踪的文件一并加入(real-git R78)
+  describe('a tracked row is not staged as a directory', () => {
+    const FILE = { size: 1, mtimeMs: 0, isFile: true, isDirectory: false, isSymlink: false };
+    const DIR = { ...FILE, isFile: false, isDirectory: true };
+    const enoent = () => Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+    // tree:绝对路径 → stat;不在表里的不存在。lsFiles:`ls-files -s -z -- <path>` 的输出
+    function setup(tree: Record<string, typeof FILE>, lsFiles = '') {
+      const exec = vi.fn(async (_cmd: string, args: readonly string[]) => result(args.includes('ls-files') ? { stdout: lsFiles } : {}));
+      const lstat = vi.fn(async (path: string) => tree[path] ?? Promise.reject(enoent()));
+      const adds = () => exec.mock.calls.filter(([, args]) => args.includes('add'));
+      return { app: { shell: { exec }, fs: { lstat } } as unknown as CoPluginApp, exec, lstat, adds };
+    }
+
+    it('T6 a plain directory at the path (the row is ` D x`, the file was replaced by a folder) → refused with an explanation; git add is not run', async () => {
+      const { app, adds } = setup({ '/repo/x': DIR }, '100644 587be6b4c3f93f93c489c0111bba5596147a26cb 0\tx\0');
+      expect(await stageFile(app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+      expect(adds()).toEqual([]);
+      expect(DIRECTORY_STAGE_ERROR).toBe(
+        'A directory now sits where this file was. Staging this row would also add every untracked file inside that directory. Nothing was staged — stage the files you want from the Untracked section, or use git in a terminal.',
+      );
+    });
+
+    it('T7 the directory is the entry itself — a submodule entry in the index (` M sub`), or a nested repository (` T x`: there is a .git inside) → staged as before', async () => {
+      const sub = setup({ '/repo/sub': DIR }, '160000 2c943cce73eac743e3686b3486b10af14c86853b 0\tsub\0');
+      expect(await stageFile(sub.app, '/repo', 'sub')).toEqual({ ok: true });
+      expect(sub.adds()).toHaveLength(1);
+
+      const nested = setup({ '/repo/x': DIR, '/repo/x/.git': DIR }, '100644 587be6b4c3f93f93c489c0111bba5596147a26cb 0\tx\0');
+      expect(await stageFile(nested.app, '/repo', 'x')).toEqual({ ok: true });
+      expect(nested.adds()).toHaveLength(1);
+
+      // 只有路径自己的记录算数:目录之下有子模块条目不算
+      const below = setup({ '/repo/x': DIR }, '160000 2c943cce73eac743e3686b3486b10af14c86853b 0\tx/sub\0');
+      expect(await stageFile(below.app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+      // index 查询失败:不能证明它是条目本身 → 拒绝
+      const failing = setup({ '/repo/x': DIR });
+      failing.exec.mockImplementation(async (_cmd: string, args: readonly string[]) => result(args.includes('ls-files') ? { exitCode: 128 } : {}));
+      expect(await stageFile(failing.app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+    });
+
+    it('T8 fail-closed when the path cannot be looked at; a missing file (a deletion), a file below a parent that is no longer a folder, a link and a regular file are staged as before; an untracked row is not looked at (the user clicked that very file or folder)', async () => {
+      const noFs = setup({});
+      expect(await stageFile({ shell: noFs.app.shell } as unknown as CoPluginApp, '/repo', 'a.ts')).toEqual({ ok: false, error: UNVERIFIED_PATH_ERROR });
+      expect(noFs.adds()).toEqual([]);
+      const denied = setup({});
+      denied.lstat.mockRejectedValue(new Error('ScopeError: path is outside granted scopes'));
+      expect(await stageFile(denied.app, '/repo', 'a.ts')).toEqual({ ok: false, error: UNVERIFIED_PATH_ERROR });
+      expect(denied.adds()).toEqual([]);
+
+      const trees: Array<[Record<string, typeof FILE>, string]> = [
+        [{}, 'gone.ts'],
+        [{ '/repo/a': FILE }, 'a/b.ts'],
+        [{ '/repo/l': { ...FILE, isFile: false, isSymlink: true } }, 'l'],
+        [{ '/repo/f.ts': FILE }, 'f.ts'],
+      ];
+      for (const [tree, path] of trees) {
+        const ok = setup(tree);
+        expect(await stageFile(ok.app, '/repo', path), path).toEqual({ ok: true });
+        expect(ok.adds(), path).toHaveLength(1);
+      }
+
+      const untracked = setup({ '/repo/dir': DIR });
+      expect(await stageFile(untracked.app, '/repo', 'dir/', { untracked: true })).toEqual({ ok: true });
+      expect(untracked.lstat).not.toHaveBeenCalled();
+      expect(untracked.exec).toHaveBeenCalledTimes(1);
+    });
   });
 });

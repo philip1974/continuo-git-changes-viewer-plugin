@@ -29,3 +29,22 @@ export async function readIndexEntries(
     .filter((m): m is RegExpExecArray => m !== null && m[3] === path)
     .map((m) => ({ mode: m[1]!, stage: m[2]! }));
 }
+
+/**
+ * index 里有没有位于 `<path>/` 之下的条目(任何 stage)。`git restore --staged -- x` / `git reset HEAD -- x` /
+ * `git checkout -- x` 把路径当前缀:x 自己的条目之外,`x/…` 的条目也一并被处理。
+ * 命令失败 / 超时 / 输出不完整 → null(不知道)。
+ */
+export async function hasIndexEntriesInside(
+  app: Pick<CoPluginApp, 'shell'>,
+  repoRoot: string,
+  path: string,
+  timeoutMs: number,
+): Promise<boolean | null> {
+  const r = await gitExec(app, repoRoot, ['ls-files', '-s', '-z', '--', path], { timeoutMs });
+  if (r.exitCode !== 0 || r.timedOut || r.truncated) return null;
+  const prefix = `${path.replace(/\/+$/, '')}/`;
+  return r.stdout
+    .split('\0')
+    .some((record) => record.slice(record.indexOf('\t') + 1).startsWith(prefix) && record.includes('\t'));
+}

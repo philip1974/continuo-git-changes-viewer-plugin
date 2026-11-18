@@ -1,5 +1,6 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
+import { hasIndexEntriesInside } from './index-entry';
 import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
 import type { FileOpResult } from './stage-file';
 
@@ -31,12 +32,28 @@ export function _resetRestoreCache(): void {
   restoreSupported = null;
 }
 
+// `git restore --staged -- x`(以及兜底的 `git reset HEAD -- x`)把 x 当前缀:index 里 `x/…` 的条目也一并
+// 撤销暂存。`D  x` + `AM x/work.txt`(文件换成目录后整体暂存,之后又改了里面的文件)时,点 x 那一行会把
+// x/work.txt 暂存的那一版从 index 里拿掉——用户没有点它,那一版内容也找不回来(实测 git 2.50 / 2.56)。
+export const DIRECTORY_UNSTAGE_ERROR =
+  'Other staged entries sit inside a directory of this name. Unstaging this row would unstage them too. ' +
+  'Nothing was changed — unstage those entries first, or use git in a terminal.';
+
+export const UNVERIFIED_INDEX_ERROR =
+  'Could not check the index for entries below this path, so nothing was unstaged. Refresh and try again, or use git in a terminal.';
+
+const PROBE_TIMEOUT_MS = 5_000;
+
 export async function unstageFile(
   app: Pick<CoPluginApp, 'shell'>,
   repoRoot: string,
   path: string,
 ): Promise<FileOpResult> {
   if (!isSafeRepoRelativePath(path)) return { ok: false, error: UNSAFE_PATH_ERROR };
+  // 查不了 → 不撤销(fail-closed)
+  const inside = await hasIndexEntriesInside(app, repoRoot, path, PROBE_TIMEOUT_MS);
+  if (inside === null) return { ok: false, error: UNVERIFIED_INDEX_ERROR };
+  if (inside) return { ok: false, error: DIRECTORY_UNSTAGE_ERROR };
   const useRestore = await supportsRestore(app, repoRoot);
   const args = useRestore
     ? ['restore', '--staged', '--', path]

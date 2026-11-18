@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { discardFile, SUBMODULE_DISCARD_ERROR } from '../../git/discard-file';
+import { DIRECTORY_DISCARD_ERROR, discardFile, parentNotDirectoryDiscardError, SUBMODULE_DISCARD_ERROR } from '../../git/discard-file';
+import { UNVERIFIED_PATH_ERROR } from '../../git/worktree-entry';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { buildGitArgs } from '../../git/exec';
 
@@ -44,7 +45,11 @@ afterEach(async () => {
 });
 
 // discardFile 先问 index 这个路径是不是子模块条目(`ls-files -s`),再 checkout。按子命令给结果:
-function shell(opts: { lsFiles?: Partial<PluginShellExecResult>; checkout?: Partial<PluginShellExecResult>[] } = {}) {
+const FILE_STAT = { size: 1, mtimeMs: 0, isFile: true, isDirectory: false, isSymlink: false };
+const DIR_STAT = { ...FILE_STAT, isFile: false, isDirectory: true };
+const enoent = () => Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+
+function shell(opts: { lsFiles?: Partial<PluginShellExecResult>; checkout?: Partial<PluginShellExecResult>[]; lstat?: (path: string) => Promise<typeof FILE_STAT> } = {}) {
   const checkouts = [...(opts.checkout ?? [{}])];
   const exec = vi.fn(async (_cmd: string, args: readonly string[]) =>
     args.includes('ls-files')
@@ -52,7 +57,9 @@ function shell(opts: { lsFiles?: Partial<PluginShellExecResult>; checkout?: Part
       : result(checkouts.length > 1 ? checkouts.shift()! : checkouts[0]!),
   );
   const calls = (sub: string) => exec.mock.calls.filter(([, args]) => args.includes(sub));
-  return { app: { shell: { exec } } as unknown as CoPluginApp, exec, calls };
+  // discardFile 还要看工作树里这个位置现在是什么(app.fs.lstat,见 T14–T16):默认是普通文件
+  const lstat = vi.fn(opts.lstat ?? (async () => FILE_STAT));
+  return { app: { shell: { exec }, fs: { lstat } } as unknown as CoPluginApp, exec, calls, lstat };
 }
 
 describe('discardFile shell wrapper', () => {
@@ -125,5 +132,53 @@ describe('discardFile shell wrapper', () => {
     const staged = git(repo, ['diff', '--cached', '--', 'file.txt']).stdout;
     expect(staged).toContain('-one');
     expect(staged).toContain('+ONE');
+  });
+  // `git checkout -- x` 在 x 的位置上是目录时递归删掉整个目录(real-git R77)
+  describe('what sits at the path now is looked at before the checkout', () => {
+    it('T14 a directory at the path → refused with an explanation, checkout is not run; the wording says what would have been lost', async () => {
+      const { app, calls, lstat } = shell({ lstat: async () => DIR_STAT });
+      expect(await discardFile(app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_DISCARD_ERROR });
+      expect(calls('checkout')).toEqual([]);
+      expect(lstat).toHaveBeenCalledWith('/repo/x');
+      expect(DIRECTORY_DISCARD_ERROR).toBe(
+        'A directory now sits where this file was. Discarding would delete that directory and everything in it, including files git does not track. Nothing was changed — move the directory away yourself, or use git in a terminal.',
+      );
+    });
+
+    it('T15 a file or link where a parent folder was → refused, naming that parent; checkout is not run', async () => {
+      const { app, calls } = shell({ lstat: async (path) => (path === '/repo/a' ? FILE_STAT : Promise.reject(enoent())) });
+      expect(await discardFile(app, '/repo', 'a/b.ts')).toEqual({ ok: false, error: parentNotDirectoryDiscardError('a') });
+      expect(parentNotDirectoryDiscardError('a')).toBe(
+        '"a" is no longer a folder: a file or link now sits there. Discarding would delete it to restore this file. Nothing was changed — move it away yourself, or use git in a terminal.',
+      );
+      expect(calls('checkout')).toEqual([]);
+    });
+
+    it('T16 fail-closed when the path cannot be looked at (no file access, or lstat fails with something other than not-found); a missing file, a regular file, a symbolic link and a FIFO are checked out as before', async () => {
+      const noFs = shell();
+      expect(await discardFile({ shell: noFs.app.shell } as unknown as CoPluginApp, '/repo', 'a.ts')).toEqual({ ok: false, error: UNVERIFIED_PATH_ERROR });
+      expect(noFs.calls('checkout')).toEqual([]);
+      const denied = shell({ lstat: async () => Promise.reject(new Error('ScopeError: path is outside granted scopes')) });
+      expect(await discardFile(denied.app, '/repo', 'a.ts')).toEqual({ ok: false, error: UNVERIFIED_PATH_ERROR });
+      expect(denied.calls('checkout')).toEqual([]);
+
+      for (const lstat of [
+        async () => Promise.reject(enoent()),
+        async () => FILE_STAT,
+        async () => ({ ...FILE_STAT, isFile: false, isSymlink: true }),
+        async () => ({ ...FILE_STAT, isFile: false }),
+      ]) {
+        const ok = shell({ lstat });
+        expect(await discardFile(ok.app, '/repo', 'a.ts')).toEqual({ ok: true });
+        expect(ok.calls('checkout')).toHaveLength(1);
+      }
+    });
+
+    it('T17 a submodule entry is still answered as a submodule (its path is a directory too), before the working tree is looked at', async () => {
+      const gitlink = '160000 2c943cce73eac743e3686b3486b10af14c86853b 0\tsub\0';
+      const { app, lstat } = shell({ lsFiles: { stdout: gitlink }, lstat: async () => DIR_STAT });
+      expect(await discardFile(app, '/repo', 'sub')).toEqual({ ok: false, error: SUBMODULE_DISCARD_ERROR });
+      expect(lstat).not.toHaveBeenCalled();
+    });
   });
 });
