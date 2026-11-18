@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { discardFile } from '../../git/discard-file';
 import { isPathSafeForPatch } from '../../git/hunk-patch';
-import { isSafeRepoRelativePath, joinRepoPath } from '../../git/path-utils';
+import { isForgedIndexPath, isSafeRepoRelativePath, joinRepoPath } from '../../git/path-utils';
 import { stageFile } from '../../git/stage-file';
 import { unstageFile } from '../../git/unstage-file';
 import type { CoPluginApp } from '../../sdk/types';
@@ -82,6 +82,23 @@ describe('isSafeRepoRelativePath', () => {
   ])('T6 rejects %j (absolute, escaping, or resolving into a git directory on some file system)', (path) => {
     expect(isSafeRepoRelativePath(path)).toBe(false);
   });
+});
+
+describe('isForgedIndexPath: paths git itself never records in an index', () => {
+  it.each(['../outside.txt', 'a/../../b', '/etc/passwd', '.git/hooks/pre-commit', 'sub/.git/config', '.GIT/config', 'git~1/config', '.git‌/config', 'a//b', './a', 'a/./b', '..'])(
+    'T8 %j is forged (escapes the repository, is absolute, or lies inside a git directory)',
+    (path) => {
+      expect(isForgedIndexPath(path)).toBe(true);
+      expect(isSafeRepoRelativePath(path)).toBe(false);
+    },
+  );
+
+  it.each(['a.txt', 'dir/', 'src/a b.ts', '.gitignore', '.github/x.yml', 'a..b', '...', 'c:notes.txt', 'C:\\x', '..\\x', 'a\\.git\\config', '\\\\server\\share'])(
+    'T9 %j is not forged — an ordinary name, or one that is only unsafe where `\\` / drive letters mean something (still not shown or operated on)',
+    (path) => {
+      expect(isForgedIndexPath(path)).toBe(false);
+    },
+  );
 });
 
 describe('every file-level entry point applies the same check', () => {

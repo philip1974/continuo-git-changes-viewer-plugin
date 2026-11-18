@@ -1,7 +1,7 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
 import { loadNumstat, type NumstatEntry } from './numstat';
-import { isSafeRepoRelativePath } from './path-utils';
+import { isForgedIndexPath, isSafeRepoRelativePath } from './path-utils';
 
 export type FileStatus = 'M' | 'A' | 'D' | 'R' | 'U';
 export type FileKind = 'text' | 'binary';
@@ -53,6 +53,37 @@ function hasOrigPath(code: string): boolean {
   return /[RC]/.test(code.slice(0, 2));
 }
 
+/**
+ * status 列出了 git 自己绝不会记录的路径(`../x`、绝对路径、`.git/...`):index 是伪造的。
+ * 只把这些条目从列表里丢掉不够——已暂存的那些仍会被 `commit` 写进 tree,而用户在面板里看不到它们。
+ * 正常的 git 不会产生这样的 index,所以整个仓库按受限处理(main.ts 捕获后交给 RepoSafetyGuard.restrict)。
+ */
+export class UnsafeIndexError extends Error {
+  constructor(readonly paths: readonly string[]) {
+    const shown = paths.slice(0, 3).join(', ');
+    const more = paths.length > 3 ? ` and ${paths.length - 3} more` : '';
+    super(
+      `Git commands are disabled for this repository: its index lists paths that are outside this folder ` +
+        `or inside the git directory (${shown}${more}). Git never records such paths itself, and a commit ` +
+        `would include them. For safety the viewer does not run git here. You can still use git in a terminal.`,
+    );
+    this.name = 'UnsafeIndexError';
+  }
+}
+
+/** status 输出里被判为伪造的路径(含重命名 / 复制记录的原路径),按出现顺序。 */
+function forgedPaths(stdout: string): string[] {
+  const parts = stdout.split('\0').filter((part) => part.length > 0);
+  const found: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const record = parts[i]!;
+    const candidates = [record.slice(3)];
+    if (hasOrigPath(record.slice(0, 2)) && i + 1 < parts.length) candidates.push(parts[++i]!);
+    for (const path of candidates) if (isForgedIndexPath(path)) found.push(path);
+  }
+  return found;
+}
+
 export function parsePorcelainStatus(
   stdout: string,
   numstat: Map<string, NumstatEntry> = new Map(),
@@ -96,10 +127,12 @@ export async function scanStatus(
 ): Promise<FileChange[]> {
   const status = await gitExec(app, repoRoot, ['status', '--porcelain=v1', '-z']);
   if (status.exitCode !== 0) return [];
-  const numstat = await loadNumstat(app, repoRoot);
   // 输出被宿主的输出上限截断时,最后一条记录可能只有半截(`-z` 下每条以 NUL 结尾):只解析完整记录。
   const stdout = status.truncated
     ? status.stdout.slice(0, status.stdout.lastIndexOf('\0') + 1)
     : status.stdout;
+  const forged = forgedPaths(stdout);
+  if (forged.length > 0) throw new UnsafeIndexError(forged);
+  const numstat = await loadNumstat(app, repoRoot);
   return parsePorcelainStatus(stdout, numstat);
 }

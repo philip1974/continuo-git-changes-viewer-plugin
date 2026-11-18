@@ -121,7 +121,7 @@ key.
 
 T1 output parsing. T2–T5 executable key classification (T4b diff.submodule). T18–T20 redirect keys (T18b attributesFile / excludesFile).
 T6–T9 config probe and fail-closed. L1–L7 layout probe. S1–S7 symlink scan.
-T10–T15b cache. T16–T17 guard wiring into `gitExec`.
+T10–T15b cache. T15c `restrict()` (a verdict set from outside the probe — the forged-index case — holds until the next fresh check). T16–T17 guard wiring into `gitExec`.
 K1 key-list notation. K2 reviewed table (common keys known, no restricted key in it). K3 both fixtures fully
 classified. K4 no extra git call for reviewed keys. K5 documented-but-unreviewed → restricted. K6 private tool
 keys → trusted. K7 `git help --config` unusable → restricted, not cached. K8 only repository scope. K9 restricted

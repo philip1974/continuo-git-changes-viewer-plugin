@@ -29,6 +29,20 @@ export function isSafeRepoRelativePath(path: string): boolean {
   return segments.every((s) => s !== '' && s !== '.' && s !== '..' && !isDotGitSegment(s));
 }
 
+/**
+ * git 自己绝不会写进 index 的路径:POSIX 绝对路径、含空段 / `.` / `..` 段、任何一段是 `.git`
+ * (git 的 verify_path 在写 index 时拒绝它们;读 index 时不校验)。status 里出现这样的条目说明 index 是
+ * 伪造的。只按 `/` 分段、不看盘符:`c:notes.txt`、`..\x` 在 POSIX 上是合法文件名,它们仍不满足
+ * isSafeRepoRelativePath(不显示、不可操作),但不构成"伪造"的证据。
+ */
+export function isForgedIndexPath(path: string): boolean {
+  if (path === '') return false;
+  if (path.startsWith('/')) return true;
+  const segments = path.split('/');
+  if (segments[segments.length - 1] === '') segments.pop();
+  return segments.some((s) => s === '' || s === '.' || s === '..' || isDotGitSegment(s));
+}
+
 /** 仓库内相对路径 → 绝对路径;不是规范的仓库内相对路径时返回 null(调用方不得使用)。 */
 export function joinRepoPath(repoRoot: string, relPath: string): string | null {
   if (!isSafeRepoRelativePath(relPath)) return null;

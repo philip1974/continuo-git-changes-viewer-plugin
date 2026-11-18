@@ -154,9 +154,14 @@ Paths reported by git:
 
 - R42: a forged `.git/index` listing `../outside.txt`, an absolute path and
   `.git/hooks/planted` → git lists them as changes and `git checkout --
-  .git/hooks/planted` writes into the git directory; the plugin drops those
-  entries, and stage / unstage / discard / diff for such paths are refused
-  without spawning any process.
+  .git/hooks/planted` writes into the git directory; the parser drops those
+  entries, the status scan as a whole rejects with `UnsafeIndexError`, and
+  stage / unstage / discard / diff for such paths are refused without spawning
+  any process.
+- R42b: the forged entries are staged, so a commit made without the check
+  writes `../outside.txt` and `.git/hooks/planted` into the tree; the status
+  scan rejects with `UnsafeIndexError`, and after `guard.restrict` the commit
+  is refused and HEAD does not move.
 - R43: `status.renames=copies` makes git emit copy records; with the plugin's
   pinned rename detection the list is the same whatever the repository
   configures (`copies`, `false`), and with the pins stripped the copy record is

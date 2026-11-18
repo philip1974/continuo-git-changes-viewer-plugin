@@ -209,7 +209,7 @@ export type RepoSafety =
   | { readonly kind: 'trusted' }
   | {
       readonly kind: 'restricted';
-      readonly reason: 'unsafe-config' | 'unknown-config' | 'unsafe-layout' | 'probe-failed';
+      readonly reason: 'unsafe-config' | 'unknown-config' | 'unsafe-layout' | 'unsafe-index' | 'probe-failed';
       readonly keys: readonly string[];
       readonly message: string;
     };
@@ -490,6 +490,7 @@ interface CacheEntry {
 export class RepoSafetyGuard {
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inflight = new Map<string, Promise<RepoSafety>>();
+  private readonly imposed = new Map<string, RepoSafety>();
 
   constructor(private readonly app: Pick<CoPluginApp, 'shell'> & Partial<Pick<CoPluginApp, 'fs'>>) {}
 
@@ -507,7 +508,22 @@ export class RepoSafetyGuard {
     }
   }
 
+  /**
+   * 探测之外发现的受限情形(status 扫描发现伪造的 index 条目,见 status-scanner 的 UnsafeIndexError):
+   * 此后对该仓库根的每次 check 都直接返回它(不起进程),直到下一次 fresh 检查——面板每次 refresh 都是
+   * fresh,随后重新扫描;index 仍有问题就会再次被设置。
+   */
+  restrict(cwd: string, safety: RepoSafety): void {
+    this.imposed.set(cwd, safety);
+  }
+
   async check(cwd: string, opts: { fresh?: boolean } = {}): Promise<RepoSafety> {
+    if (opts.fresh) {
+      this.imposed.delete(cwd);
+    } else {
+      const imposed = this.imposed.get(cwd);
+      if (imposed) return imposed;
+    }
     if (!opts.fresh) {
       const pending = this.inflight.get(cwd);
       if (pending) return pending;

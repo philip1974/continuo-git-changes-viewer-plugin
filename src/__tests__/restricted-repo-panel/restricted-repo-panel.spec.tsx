@@ -160,6 +160,46 @@ describe('restricted repository', () => {
     expect(plugin.store.getState().repoRoot).toBe('/repo');
   });
 
+  it('B7 a forged index (status lists paths git never records): the repository becomes restricted — no file list, every later git call is refused — and a refresh after the index is repaired clears it', async () => {
+    const { UnsafeIndexError } = await import('../../git/status-scanner');
+    const { app, exec } = makeApp('');
+    detectRepoMock.mockResolvedValue({ ok: true, root: '/repo' });
+    scanStatusMock.mockRejectedValueOnce(new UnsafeIndexError(['../outside.txt', '.git/hooks/pre-commit']));
+    const plugin = await loadPlugin(app);
+    const { gitExec } = await import('../../git/exec');
+
+    await plugin.store.getState().refresh();
+
+    const state = plugin.store.getState();
+    expect(state.repoRoot).toBeNull();
+    expect(state.changes).toEqual([]);
+    expect(state.restriction).toContain('Git commands are disabled for this repository');
+    expect(state.restriction).toContain('../outside.txt, .git/hooks/pre-commit');
+    expect(app.notifications?.show).not.toHaveBeenCalled();
+
+    // 守卫也记住了:面板之外的入口(提交、自动刷新的 status hash ...)同样被拒,不起 git
+    const spawned = exec.mock.calls.length;
+    const refused = await gitExec(app, '/repo', ['commit', '-F', '-'], { input: 'x' });
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain('../outside.txt');
+    expect(exec.mock.calls.length).toBe(spawned);
+
+    scanStatusMock.mockResolvedValue([]);
+    await plugin.store.getState().refresh();
+    expect(plugin.store.getState().restriction).toBeNull();
+    expect(plugin.store.getState().repoRoot).toBe('/repo');
+    expect((await gitExec(app, '/repo', ['status'])).exitCode).toBe(0);
+  });
+
+  it('B7b any other failure of the status scan is not turned into a restriction', async () => {
+    const { app } = makeApp('');
+    detectRepoMock.mockResolvedValue({ ok: true, root: '/repo' });
+    scanStatusMock.mockRejectedValueOnce(new Error('boom'));
+    const plugin = await loadPlugin(app);
+    await plugin.store.getState().refresh().catch(() => {});
+    expect(plugin.store.getState().restriction).toBeNull();
+  });
+
   it('B4 onload installs the guard on app.shell: any helper calling gitExec on a restricted repo is refused', async () => {
     const { app, exec } = makeApp('local\0diff.external\nevil\0');
     const plugin = await loadPlugin(app);

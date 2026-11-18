@@ -701,6 +701,25 @@ describe('RepoSafetyGuard cache', () => {
   });
 });
 
+describe('RepoSafetyGuard.restrict (a restriction found outside the probe, e.g. a forged index)', () => {
+  it('T15c restrict() makes every later check of that root return the given verdict without probing, until a fresh check; other roots are unaffected', async () => {
+    const exec = gitMock(z(['local', 'core.bare', 'false']));
+    const guard = new RepoSafetyGuard({ shell: { exec }, fs: fsMock() } as unknown as CoPluginApp);
+    expect(await guard.check('/repo')).toEqual({ kind: 'trusted' });
+    const calls = exec.mock.calls.length;
+
+    const verdict = { kind: 'restricted', reason: 'unsafe-index', keys: [], message: 'Git commands are disabled for this repository: forged' } as const;
+    guard.restrict('/repo', verdict);
+    expect(await guard.check('/repo')).toBe(verdict);
+    expect(await guard.check('/repo')).toBe(verdict);
+    expect(exec.mock.calls.length).toBe(calls);
+    expect(await guard.check('/other')).not.toBe(verdict);
+
+    expect(await guard.check('/repo', { fresh: true })).toEqual({ kind: 'trusted' });
+    expect(await guard.check('/repo')).toEqual({ kind: 'trusted' });
+  });
+});
+
 describe('installRepoSafetyGuard', () => {
   it('T16 restricted repo: gitExec refuses every command and only the probe ever spawns git', async () => {
     const exec = gitMock(z(['local', 'filter.x.clean', 'evil']), undefined, result({ stdout: 'x' }));

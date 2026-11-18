@@ -8,7 +8,7 @@ import {
 import { registerCommands } from './commands';
 import { detectRepo } from './git/repo-detect';
 import { installRepoSafetyGuard } from './git/repo-safety';
-import { scanStatus } from './git/status-scanner';
+import { scanStatus, UnsafeIndexError } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
 import { SettingsBus } from './lib/settings-bus';
 import { AutoRefreshTimer } from './state/auto-refresh-timer';
@@ -122,10 +122,15 @@ export default class GitChangesViewerPlugin extends Plugin {
           return { repoRoot: repo.root ?? null, changes: [] };
         }
 
-        return {
-          repoRoot: repo.root,
-          changes: await scanStatus(this.app, repo.root),
-        };
+        try {
+          return { repoRoot: repo.root, changes: await scanStatus(this.app, repo.root) };
+        } catch (err) {
+          if (!(err instanceof UnsafeIndexError)) throw err;
+          // 伪造的 index:与其它受限情形同样处理——不显示列表,并让守卫拒绝此后的一切 git 调用
+          // (否则 commit 会把面板没显示的条目写进 tree)。下一次 refresh 重新判断。
+          safety.guard.restrict(repo.root, { kind: 'restricted', reason: 'unsafe-index', keys: [], message: err.message });
+          return { repoRoot: null, changes: [], restriction: err.message };
+        }
       },
       fetchDiff: (repoRoot, change, mode) =>
         fetchDiff(this.app, repoRoot, change, mode),

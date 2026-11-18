@@ -21,3 +21,9 @@ symbolic links inside the git directory), the viewer does not run git for it.
 - B6: a refresh waits for the fs scope request to settle before probing,
   because the symlink check needs file access (without it the repository would
   be reported as restricted).
+- B7: when the status scan finds index entries git itself never records
+  (`../x`, absolute, inside `.git` — a forged index; `status-scanner` T7), the
+  repository is restricted the same way: no file list, the guard refuses every
+  later git call (a commit would otherwise write the hidden entries into the
+  tree), and a refresh after the index is repaired clears it. B7b: other scan
+  failures are not reported as a restriction.

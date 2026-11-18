@@ -23,7 +23,7 @@ import { installRepoSafetyGuard, isKnownSafeConfigKey, isUnsafeConfigEntry, prob
 import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
 import { stageFile } from '../../git/stage-file';
-import { scanStatus } from '../../git/status-scanner';
+import { parsePorcelainStatus, scanStatus, UnsafeIndexError } from '../../git/status-scanner';
 import type { CoPluginApp, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 
 // 最小 app.shell / app.fs 实现(对应宿主 shell.exec:env 合并进进程 env)
@@ -1325,8 +1325,12 @@ describe('paths reported by git are not trusted: forged index entries and copy r
       },
     } as unknown as CoPluginApp;
 
-    const changes = await scanStatus(spy, repo);
-    expect(changes.map((c) => c.path)).toEqual(['g.txt']); // g.txt 的条目指向 f.txt 的 blob,是唯一合法的变更
+    // 解析器丢弃这些条目(g.txt 的条目指向 f.txt 的 blob,是唯一合法的变更);扫描整体以 UnsafeIndexError 拒绝
+    const porcelain = (await gitExec(spy, repo, ['status', '--porcelain=v1', '-z'])).stdout;
+    expect(parsePorcelainStatus(porcelain).map((c) => c.path)).toEqual(['g.txt']);
+    const scan = await scanStatus(spy, repo).then(() => null, (e: unknown) => e);
+    expect(scan).toBeInstanceOf(UnsafeIndexError);
+    expect([...(scan as UnsafeIndexError).paths].sort()).toEqual(['../outside.txt', '.GIT/hooks/planted2', '.git/hooks/planted', outside].sort());
     spawnedCommands.length = 0;
 
     for (const path of ['../outside.txt', outside, '.git/hooks/planted', '.GIT/hooks/planted2']) {
@@ -1343,6 +1347,29 @@ describe('paths reported by git are not trusted: forged index entries and copy r
     expect(spawnedCommands).toEqual([]);
     expect(readdirSync(join(repo, '.git', 'hooks')).filter((n) => n.startsWith('planted'))).toEqual([]);
     expect(readFileSync(outside, 'utf8')).toBe('OUTSIDE-SECRET\n');
+  });
+
+  it('R42b the forged entries are staged: a plain commit writes them into the tree although the file list never showed them; once the scan has flagged the index the guard refuses the commit', async () => {
+    forgeIndex(['f.txt', 'g.txt', '../outside.txt', '.git/hooks/planted']);
+    const tree = () => git(repo, 'ls-tree', '-r', '--name-only', 'HEAD').split('\n').filter(Boolean);
+
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('trusted');
+    const head = git(repo, 'rev-parse', 'HEAD');
+
+    // 插件的流程:refresh 扫描 status → UnsafeIndexError → guard.restrict(main.ts 的 load 就是这么做的)
+    const scan = await scanStatus(app, repo).then(() => null, (e: unknown) => e);
+    expect(scan).toBeInstanceOf(UnsafeIndexError);
+    guard.restrict(repo, { kind: 'restricted', reason: 'unsafe-index', keys: [], message: (scan as Error).message });
+    const refused = await gitCommit(app, repo, 'looks harmless');
+    expect(refused.ok).toBe(false);
+    expect(JSON.stringify(refused)).toContain('its index lists paths that are outside this folder or inside the git directory');
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
+
+    // 证明缺口:没有这一步时,同一个提交把面板没显示的条目写进了 tree
+    expect(await gitCommit(realApp(), repo, 'looks harmless')).toMatchObject({ ok: true });
+    expect(tree()).toEqual(expect.arrayContaining(['../outside.txt', '.git/hooks/planted']));
   });
 
   it('R43 status.renames=copies: git emits copy records (`C  new\\0orig\\0`); the plugin pins rename detection so the list does not depend on repository config, and still parses copies correctly if they appear', async () => {

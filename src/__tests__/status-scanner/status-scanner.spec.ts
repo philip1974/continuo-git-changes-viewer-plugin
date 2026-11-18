@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   parsePorcelainStatus,
   scanStatus,
+  UnsafeIndexError,
   type FileChange,
 } from '../../git/status-scanner';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
@@ -109,5 +110,27 @@ describe('porcelain status parsing', () => {
       buildGitArgs(['status', '--porcelain=v1', '-z']),
       expect.objectContaining({ cwd: '/repo' }),
     );
+  });
+
+  it.each([
+    ['a staged entry outside the repository', 'A  ../outside.txt\0 M ok.txt\0', ['../outside.txt']],
+    ['entries inside the git directory and an absolute path', 'AD .git/hooks/pre-commit\0AM /etc/passwd\0 M .GIT/config\0', ['.git/hooks/pre-commit', '/etc/passwd', '.GIT/config']],
+    ['a rename whose source is forged', 'R  ok-new.txt\0../old-outside.txt\0', ['../old-outside.txt']],
+    ['a rename whose target is forged', 'R  .git/x\0ok-old.txt\0', ['.git/x']],
+  ])('T7 %s → scanStatus rejects with UnsafeIndexError naming the paths (git never records them, and a commit would write them into the tree unseen); numstat is not run', async (_label, stdout, paths) => {
+    const exec = vi.fn().mockResolvedValueOnce(result(stdout)).mockResolvedValue(result(''));
+    const app = { shell: { exec } } as unknown as CoPluginApp;
+
+    const error = await scanStatus(app, '/repo').then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(UnsafeIndexError);
+    expect((error as UnsafeIndexError).paths).toEqual(paths);
+    expect((error as UnsafeIndexError).message).toContain(paths[0]);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('T8 a name that is only unsafe on Windows (`c:notes.txt`, `..\\x`) is dropped as before but does not fail the scan', async () => {
+    const exec = vi.fn().mockResolvedValueOnce(result('?? c:notes.txt\0 M ..\\x\0 M ok.txt\0')).mockResolvedValue(result(''));
+    const app = { shell: { exec } } as unknown as CoPluginApp;
+    expect((await scanStatus(app, '/repo')).map((c) => c.path)).toEqual(['ok.txt']);
   });
 });

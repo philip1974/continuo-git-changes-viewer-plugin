@@ -21,3 +21,10 @@ therefore only accepts canonical repo-relative paths:
 
 The same predicate gates the status parser (entries are dropped), `fetchDiff`,
 stage / unstage / discard file, and the hunk-action predicates.
+
+- T8–T9 `isForgedIndexPath`: the subset git itself never writes into an index
+  (POSIX-absolute, an empty / `.` / `..` segment, a `.git` segment). Such an
+  entry means the index was forged; the status scan then refuses the whole
+  repository (see `status-scanner` T7). Names that are only unsafe on Windows
+  (`c:notes.txt`, `..\x`) are legitimate file names elsewhere: still dropped,
+  but they do not condemn the repository.

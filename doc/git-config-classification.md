@@ -78,7 +78,9 @@ Not config, but found by the same audit:
 - Paths. `GIT_LITERAL_PATHSPECS=1` on every command but `commit`: a file named
   `*` or `:(glob)**` is one file. Paths reported by git are checked with
   `isSafeRepoRelativePath` — a forged index can list `../x`, absolute paths
-  and `.git/hooks/x` (`repo-safety-real-git` R42).
+  and `.git/hooks/x` (`repo-safety-real-git` R42). Dropping them from the list
+  is not enough — staged ones would still be committed — so a status scan that
+  meets such a path puts the repository into the restricted state (R42b).
 - Nested repositories. A gitlink entry needs no `.gitmodules`; the nested
   repository's own config is never inspected, so the invariant is that no
   plugin command starts a process inside it (`repo-safety-real-git` R32–R34,
