@@ -21,6 +21,11 @@ export interface GitStoreLoadResult {
    * Commit / Amend——否则会提交面板里看不到的暂存内容。
    */
   readonly statusError?: string | null;
+  /**
+   * 仓库状态的指纹(status-hash 的 readStatusHash),在读 `changes` **之前**读出——它不比列表新:两者之间
+   * 仓库若变了,指纹是旧的,下一次比较判为"变了"并刷新(反过来会漏掉)。读不到时为 null。
+   */
+  readonly statusFingerprint?: string | null;
 }
 
 export interface SelectedRef {
@@ -50,6 +55,11 @@ export interface GitViewerState {
   restriction: string | null;
   /** 最近一次 refresh 没拿到可信的 status(原因);下一次成功的 refresh 清除。非 null 时禁用 Commit / Amend。 */
   statusError: string | null;
+  /**
+   * 当前 `changes` 对应的仓库指纹(见 GitStoreLoadResult.statusFingerprint)。"仓库有没有变"一律拿现在的
+   * 指纹与**这一份**比较(自动刷新的 tick、面板 / 窗口重新可见、提交前的确认)——没有别的基线。
+   */
+  statusFingerprint: string | null;
   refresh(): Promise<void>;
   selectFile(path: string, mode: DiffMode): void;
   loadDiff(path: string, mode: DiffMode): Promise<void>;
@@ -154,6 +164,7 @@ const emptyState = {
   amend: false,
   restriction: null,
   statusError: null,
+  statusFingerprint: null,
 } satisfies Pick<
   GitViewerState,
   | 'repoRoot'
@@ -166,6 +177,7 @@ const emptyState = {
   | 'amend'
   | 'restriction'
   | 'statusError'
+  | 'statusFingerprint'
 >;
 
 export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState> {
@@ -205,6 +217,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
           isLoading: false,
           restriction: loaded.restriction ?? null,
           statusError: loaded.statusError ?? null,
+          statusFingerprint: loaded.statusFingerprint ?? null,
         });
         if (nextSelected) void get().loadDiff(nextSelected.path, nextSelected.mode);
       } catch (err) {
@@ -276,6 +289,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         amend: false,
         restriction: null,
         statusError: null,
+        statusFingerprint: null,
       });
     },
     setBanner(banner) {

@@ -258,6 +258,7 @@
 
 ## [Repo Safety — real git integration](./repo-safety-real-git/README.md)
 
+- [`panel-real-git.spec.tsx`](./repo-safety-real-git/panel-real-git.spec.tsx)
 - [`repo-safety-real-git.spec.ts`](./repo-safety-real-git/repo-safety-real-git.spec.ts)
 
 ## [Restricted Repository (panel behavior)](./restricted-repo-panel/README.md)

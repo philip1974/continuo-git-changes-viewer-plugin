@@ -167,6 +167,39 @@ describe('plugin refresh when git status is unusable', () => {
   });
 });
 
+describe('plugin refresh: the fingerprint is read before the list it is stored with', () => {
+  const isV2 = (args: readonly string[]) => args.includes('--porcelain=v2');
+  const isV1 = (args: readonly string[]) => args.includes('--porcelain=v1');
+
+  it('S13 each refresh runs the fingerprint status (v2) first and the list status (v1) second, and stores the two together; a change between the two reads leaves an older fingerprint in the store, never a newer one', async () => {
+    let n = 0;
+    const { plugin, app } = await loadPlugin(() => ({ stdout: `M  a.txt\0#${++n}` }));
+    const exec = vi.mocked(app.shell.exec);
+    exec.mockClear();
+    await plugin.store.getState().refresh();
+    const statusCalls = exec.mock.calls.map((call) => call[1] as readonly string[]).filter(isStatus);
+    expect(statusCalls.map((args) => (isV2(args) ? 'v2' : isV1(args) ? 'v1' : '?'))).toEqual(['v2', 'v1']);
+    // 指纹是第一次(更早的)status 的输出
+    expect(plugin.store.getState().statusFingerprint).toBe('M  a.txt\0#1');
+  });
+
+  it('S14 a fingerprint that cannot be read is stored as null (the list is still shown); with an unusable status the fingerprint read before it is kept', async () => {
+    const { plugin, app } = await loadPlugin(() => ({ stdout: 'M  a.txt\0' }));
+    const exec = vi.mocked(app.shell.exec);
+    const base = exec.getMockImplementation()!;
+    exec.mockImplementation(async (cmd, args, opts) =>
+      isV2(args as readonly string[]) ? res({ exitCode: 128, stderr: 'fatal' }) : base(cmd, args, opts));
+    await plugin.store.getState().refresh();
+    expect(plugin.store.getState()).toMatchObject({ statusFingerprint: null, statusError: null });
+    expect(plugin.store.getState().changes).toHaveLength(1);
+
+    exec.mockImplementation(async (cmd, args, opts) =>
+      isV1(args as readonly string[]) ? res({ exitCode: 128, stderr: 'fatal: index file corrupt' }) : isV2(args as readonly string[]) ? res({ stdout: 'fp' }) : base(cmd, args, opts));
+    await plugin.store.getState().refresh();
+    expect(plugin.store.getState()).toMatchObject({ statusFingerprint: 'fp', statusError: 'git status failed (fatal: index file corrupt)' });
+  });
+});
+
 describe('panel when the status is unavailable', () => {
   const headApp = () => {
     // rev-parse --verify HEAD 成功 → 有 HEAD,Amend 复选框可用

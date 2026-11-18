@@ -8,6 +8,7 @@ import {
 import { registerCommands } from './commands';
 import { detectRepo } from './git/repo-detect';
 import { installRepoSafetyGuard } from './git/repo-safety';
+import { readStatusHash } from './git/status-hash';
 import { scanStatus, StatusUnavailableError, UnsafeIndexError } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
 import { SettingsBus } from './lib/settings-bus';
@@ -122,13 +123,16 @@ export default class GitChangesViewerPlugin extends Plugin {
           return { repoRoot: repo.root ?? null, changes: [] };
         }
 
+        // 指纹在列表**之前**读(见 git-store 的 statusFingerprint):它不比列表新。读不到 → null,
+        // 之后的任何比较都判为"变了"(刷新 / 中止提交)。
+        const statusFingerprint = await readStatusHash(this.app, repo.root).catch(() => null);
         try {
-          return { repoRoot: repo.root, changes: await scanStatus(this.app, repo.root) };
+          return { repoRoot: repo.root, changes: await scanStatus(this.app, repo.root), statusFingerprint };
         } catch (err) {
           if (err instanceof StatusUnavailableError) {
             // status 失败 / 超时 / 被截断:列表不可信。仓库本身没有问题(不受限),但面板要说明原因并禁用
             // Commit / Amend(见 git-store 的 statusError);截断时仍显示已读到的那部分。
-            return { repoRoot: repo.root, changes: [...err.partial], statusError: err.message };
+            return { repoRoot: repo.root, changes: [...err.partial], statusError: err.message, statusFingerprint };
           }
           if (!(err instanceof UnsafeIndexError)) throw err;
           // 伪造的 index:与其它受限情形同样处理——不显示列表,并让守卫拒绝此后的一切 git 调用

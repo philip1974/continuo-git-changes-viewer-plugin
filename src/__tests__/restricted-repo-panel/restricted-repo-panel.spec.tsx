@@ -115,8 +115,13 @@ describe('restricted repository', () => {
     state.probeStdout = '';
     await plugin.store.getState().refresh();
 
-    // 第二次:配置探测 + 布局探测
-    expect(exec).toHaveBeenCalledTimes(3);
+    // 第二次:配置探测 + 布局探测,然后(仓库已不受限)读一次状态指纹——它在列表之前读(scanStatus 在此被 mock);
+    // 指纹那次调用经守卫再探测一遍(这个 mock 的探测结果不可缓存)。除指纹外没有别的 git 命令。
+    const second = exec.mock.calls.slice(1).map((c) => c[1]);
+    expect(second.slice(0, 2).every((args) => args.includes('--show-scope') || isLayoutProbe(args))).toBe(true);
+    const others = second.filter((args) => !args.includes('--show-scope') && !isLayoutProbe(args));
+    expect(others).toHaveLength(1);
+    expect(others[0]).toEqual(expect.arrayContaining(['status', '--porcelain=v2']));
     expect(plugin.store.getState().restriction).toBeNull();
     expect(plugin.store.getState().repoRoot).toBe('/repo');
     expect(scanStatusMock).toHaveBeenCalledTimes(1);

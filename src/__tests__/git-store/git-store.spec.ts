@@ -313,4 +313,31 @@ describe('git viewer store', () => {
       expect(fetchDiff).toHaveBeenCalledTimes(1);
     });
   });
+  describe('the status fingerprint lives in the store, next to the list it belongs to', () => {
+    it('T16 refresh stores the fingerprint the load returned together with the list; a load without one stores null; clear() resets it; a superseded (older) refresh does not overwrite the newer fingerprint', async () => {
+      let resolveFirst!: (value: { repoRoot: string; changes: never[]; statusFingerprint: string }) => void;
+      const first = { promise: new Promise<{ repoRoot: string; changes: never[]; statusFingerprint: string }>((res) => (resolveFirst = res)) };
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce({ repoRoot: '/repo', changes: [], statusFingerprint: 'fp-1' })
+        .mockResolvedValueOnce({ repoRoot: '/repo', changes: [] })
+        .mockReturnValueOnce(first.promise)
+        .mockResolvedValue({ repoRoot: '/repo', changes: [], statusFingerprint: 'fp-new' });
+      const store = createGitStore({ load });
+      expect(store.getState().statusFingerprint).toBeNull();
+      await store.getState().refresh();
+      expect(store.getState().statusFingerprint).toBe('fp-1');
+      await store.getState().refresh();
+      expect(store.getState().statusFingerprint).toBeNull();
+
+      const slow = store.getState().refresh();
+      await store.getState().refresh();
+      resolveFirst({ repoRoot: '/repo', changes: [], statusFingerprint: 'fp-old' });
+      await slow;
+      expect(store.getState().statusFingerprint).toBe('fp-new');
+
+      store.getState().clear();
+      expect(store.getState().statusFingerprint).toBeNull();
+    });
+  });
 });

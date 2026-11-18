@@ -34,3 +34,16 @@ most recently started one lands.
 - T13: a diff read started before a refresh does not land after it.
 - T14: asking for a diff that is already being read joins that read.
 - T15: `clear()` retires in-flight refreshes and diff reads as well.
+
+The status fingerprint is part of the store. `load` reads it (`status-hash`)
+before it reads the list and returns the two together; the store keeps it as
+`statusFingerprint`. Every "did the repository change?" question — the
+auto-refresh tick, the panel or the window becoming visible again
+(`auto-refresh-wiring` T21–T25), the check before a commit — compares the
+current fingerprint with this one. Because it was read first, it is never
+newer than the list: a change between the two reads leaves an older
+fingerprint, which the next comparison reports as a change.
+
+- T16: refresh stores the fingerprint that came with the list (null when the
+  load had none); a superseded refresh does not overwrite a newer one;
+  `clear()` resets it.

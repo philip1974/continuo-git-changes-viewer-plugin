@@ -59,7 +59,6 @@ export function GitViewerPanel({
   );
   const [intervalSec, setIntervalSec] =
     useState<AutoRefreshIntervalSec | null>(null);
-  const lastHashRef = useRef('');
   const mountedRef = useRef(true);
   const closeTimerRef = useRef<number | null>(null);
   const [drawer, dispatchDrawer] = useReducer(previewDrawerReducer, {
@@ -112,13 +111,13 @@ export function GitViewerPanel({
       }
       if (!panelApi.isVisible) return;
 
-      const repoRoot = store.getState().repoRoot;
-      if (repoRoot) {
-        try {
-          lastHashRef.current = await readStatusHash(app, repoRoot);
-        } catch {
-          // Keep the previous hash across interval-only restarts.
-        }
+      // 面板(重新)可见:立即比较一次,不等下一个 tick。面板隐藏期间 timer 是停的——此前这里把"上次的指纹"
+      // 直接覆盖成当前值,隐藏期间的变化(终端里重新 `git add`)于是永远不会触发刷新:面板显示旧内容,
+      // Commit 提交新内容。
+      try {
+        await refreshIfChanged();
+      } catch (err) {
+        console.warn('[git-viewer] auto-refresh:', err);
       }
       if (cancelled || !panelApi.isVisible) return;
 
@@ -133,7 +132,7 @@ export function GitViewerPanel({
           // exactly when the window comes back, no events needed.
           if (document.visibilityState !== 'visible') return;
 
-          // 上一次 refresh 没拿到可信的 status(statusError):不能再靠"哈希变了才刷新"——一次瞬时失败之后
+          // 上一次 refresh 没拿到可信的 status(statusError):不能再靠"指纹变了才刷新"——一次瞬时失败之后
           // status 输出往往没变,错误提示和被禁用的 Commit / Amend 会一直留到用户手动 Refresh。此时每个 tick
           // 都重新完整刷新,直到成功;持续失败时按退避放慢(不在每个 tick 空转一次完整刷新)。
           if (store.getState().statusError !== null) {
@@ -144,23 +143,8 @@ export function GitViewerPanel({
             return;
           }
           retry.reset();
-
-          const currentRoot = store.getState().repoRoot;
-          if (!currentRoot) return;
-          // 两项比较,任一变了就刷新:
-          // - status 指纹(porcelain v2:含 HEAD / index 的对象 id,覆盖一切已暂存内容的变化);
-          // - 当前显示的是工作树 diff 时,文件的标记与读取那份 diff 时是否相同(status 不含工作树内容:
-          //   同一个未暂存文件再次被编辑,XY 不变)。
-          const nextHash = await readStatusHash(app, currentRoot);
-          const hashChanged = nextHash !== lastHashRef.current;
-          lastHashRef.current = nextHash;
-          if (!hashChanged) {
-            // Staged 区的 diff 不读工作树、不带标记:isWorktreeDiffStale 对它直接是 false
-            const { selected: shown, diffCache } = store.getState();
-            const shownDiff = shown ? diffCache.get(cacheKey(shown.path, shown.mode)) : undefined;
-            if (!(await isWorktreeDiffStale(app, currentRoot, shownDiff))) return;
-          }
-          await store.getState().refresh();
+          // 见下面的 refreshIfChanged(readStatusHash 与 store 里的指纹比较)
+          await refreshIfChanged();
         },
         onError: (err) => {
           console.warn('[git-viewer] auto-refresh:', err);
@@ -168,6 +152,31 @@ export function GitViewerPanel({
       };
       timer.start(opts);
     };
+
+    // "仓库变了就刷新"的唯一实现——tick、面板重新可见、窗口重新可见都走这里。基线只有一份:store 里
+    // 与当前列表同一次读取的指纹(statusFingerprint,由 load 在读 status 之前读出)。没有组件自己的"上次指纹"。
+    // 两项比较,任一变了就刷新:
+    // - status 指纹(porcelain v2:含 HEAD / index 的对象 id,覆盖一切已暂存内容的变化);
+    // - 当前显示的是工作树 diff 时,文件的标记与读取那份 diff 时是否相同(status 不含工作树内容:
+    //   同一个未暂存文件再次被编辑,XY 不变)。
+    async function refreshIfChanged(): Promise<void> {
+      if (!app) return;
+      const before = store.getState();
+      // statusError:由 tick 的重试(带退避)处理。isLoading:在途的那次 refresh 会带来新的指纹与列表——
+      // 首次挂载时正是这种情况(挂载即 refresh),此时再比较只会多刷一次。
+      if (before.statusError !== null || before.isLoading) return;
+      const currentRoot = before.repoRoot;
+      if (!currentRoot) return;
+      const nextHash = await readStatusHash(app, currentRoot);
+      if (cancelled) return;
+      const { statusFingerprint, selected: shown, diffCache } = store.getState();
+      if (nextHash === statusFingerprint) {
+        // Staged 区的 diff 不读工作树、不带标记:isWorktreeDiffStale 对它直接是 false
+        const shownDiff = shown ? diffCache.get(cacheKey(shown.path, shown.mode)) : undefined;
+        if (!(await isWorktreeDiffStale(app, currentRoot, shownDiff))) return;
+      }
+      await store.getState().refresh();
+    }
 
     const disposable = panelApi.onDidVisibilityChange((event) => {
       if (event.isVisible) {
@@ -177,12 +186,23 @@ export function GitViewerPanel({
       }
     });
 
+    // 窗口重新可见:同样立即比较一次。只是"更快";这个事件在 Electron macOS 上不可靠(见 onTick 的说明),
+    // 没触发时由下一个 tick 的同一比较兜底。
+    const onWindowVisibility = () => {
+      if (document.visibilityState !== 'visible' || !panelApi.isVisible || intervalSec === 0) return;
+      void refreshIfChanged().catch((err: unknown) => {
+        console.warn('[git-viewer] auto-refresh:', err);
+      });
+    };
+    document.addEventListener('visibilitychange', onWindowVisibility);
+
     if (panelApi.isVisible) {
       void start();
     }
 
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', onWindowVisibility);
       disposable.dispose();
       timer.stop();
     };

@@ -394,3 +394,12 @@ with git 2.50.1 and 2.56.1):
   Discard answers that the entry is a submodule instead of running a checkout
   that does nothing and reporting success. R33 keeps proving that `checkout
   -- sub` itself starts no process in the nested repository.
+
+The real panel against real git (`panel-real-git.spec.tsx`: the actual
+`GitViewerPanel`, store, scanner, diff reader and fingerprint, with the timer
+driven by the test; run with git 2.50.1 and 2.56.1):
+
+- P1: staged v1 is shown → the panel is hidden → the file is edited and staged
+  again in a terminal → the panel is shown again. It shows v2 at once, with no
+  tick, and the commit made from the panel holds what is shown
+  (`auto-refresh-wiring` T21).

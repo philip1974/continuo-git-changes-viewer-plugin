@@ -54,5 +54,10 @@ Specs:
   a message; hint "Status unavailable".
 - S11: Amend disabled too; enabled again with a usable status.
 - S12: a restriction alert takes precedence.
+- S13: a plugin refresh runs the fingerprint status (porcelain v2) before the
+  list status (v1) and stores the fingerprint of the earlier read
+  (`git-store` T16).
+- S14: an unreadable fingerprint is stored as null while the list is still
+  shown; with an unusable status the fingerprint read before it is kept.
 
 Real-git coverage: `repo-safety-real-git` R63–R63b.

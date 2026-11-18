@@ -91,13 +91,19 @@ async function renderHarness({
   readStatusHashMock.mockResolvedValue('initial');
 
   const app = makeApp();
+  // load 与真实的 main.ts 一致:列表连同读它之前的指纹一起返回(fingerprint 可由用例改写)
+  const loaded = { fingerprint: 'initial' as string | null, count: 0 };
   const store = createGitStore({
-    load: async () => ({
-      repoRoot,
-      changes: repoRoot
-        ? [{ path: 'src/a.ts', status: 'M' as const, statusX: ' ' as const, statusY: 'M' as const, kind: 'text' as const }]
-        : [],
-    }),
+    load: async () => {
+      loaded.count += 1;
+      return {
+        repoRoot,
+        changes: repoRoot
+          ? [{ path: 'src/a.ts', status: 'M' as const, statusX: ' ' as const, statusY: 'M' as const, kind: 'text' as const }]
+          : [],
+        statusFingerprint: loaded.fingerprint,
+      };
+    },
   });
   store.setState({ repoRoot });
   const timer = makeTimer();
@@ -116,8 +122,10 @@ async function renderHarness({
   if (visible) {
     await waitFor(() => expect(readIntervalMock).toHaveBeenCalled());
   }
+  // 挂载时的那次 refresh 落盘(指纹进入 store)
+  await waitFor(() => expect(store.getState().isLoading).toBe(false));
 
-  return { app, store, timer, panelApi };
+  return { app, store, timer, panelApi, loaded };
 }
 
 afterEach(() => {
@@ -153,15 +161,34 @@ describe('GitViewerPanel auto-refresh wiring', () => {
     await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(1));
   });
 
-  it('T11 initializes last hash without forcing a second refresh', async () => {
-    const { store } = await renderHarness();
-    const refresh = vi.spyOn(store.getState(), 'refresh');
+  it('T11 the first mount does not refresh twice: the mount-time load establishes the fingerprint, and the comparison made when polling starts finds it unchanged', async () => {
+    const { timer, loaded, store } = await renderHarness();
 
-    await waitFor(() =>
-      expect(readStatusHashMock).toHaveBeenCalledWith(expect.anything(), '/repo'),
-    );
+    await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(1));
+    expect(readStatusHashMock).toHaveBeenCalledWith(expect.anything(), '/repo');
+    expect(loaded.count).toBe(1);
+    expect(store.getState().statusFingerprint).toBe('initial');
+  });
 
-    expect(refresh).not.toHaveBeenCalled();
+  it('T11b a comparison that arrives while a refresh is still in flight (the mount-time one) does not start a second refresh', async () => {
+    readIntervalMock.mockResolvedValue(5);
+    readStatusHashMock.mockResolvedValue('initial');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const load = vi.fn(async () => {
+      await gate;
+      return { repoRoot: '/repo', changes: [], statusFingerprint: 'initial' };
+    });
+    const store = createGitStore({ load });
+    store.setState({ repoRoot: '/repo' });
+    const timer = makeTimer();
+    render(<GitViewerPanel app={makeApp()} store={store} panelApi={makePanelApi(true)} timer={timer} pluginId="git-viewer" />);
+
+    await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(1));
+    expect(readStatusHashMock).not.toHaveBeenCalled();
+    release();
+    await waitFor(() => expect(store.getState().isLoading).toBe(false));
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it('T12 skips refresh when the raw status hash is unchanged', async () => {
@@ -186,6 +213,89 @@ describe('GitViewerPanel auto-refresh wiring', () => {
     await startOpts?.onTick();
 
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // 基线只有 store 里的那一份指纹:面板隐藏期间 timer 是停的,重新可见时必须拿当前指纹与它比较
+  describe('the only baseline is the fingerprint stored with the list', () => {
+    it('T21 hidden → the repository changes → visible again: the panel refreshes at once, before any tick (it used to overwrite its own baseline with the current fingerprint and never refresh)', async () => {
+      const { panelApi, timer, loaded, store } = await renderHarness();
+      await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(1));
+      expect(loaded.count).toBe(1);
+
+      panelApi.emit(false);
+      readStatusHashMock.mockResolvedValue('restaged');
+      loaded.fingerprint = 'restaged';
+      panelApi.emit(true);
+
+      await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(2));
+      expect(loaded.count).toBe(2);
+      expect(store.getState().statusFingerprint).toBe('restaged');
+      // 之后的 tick:与 store 里的新指纹相同,不再刷新
+      await timer.start.mock.calls[1]![0].onTick();
+      expect(loaded.count).toBe(2);
+    });
+
+    it('T22 hidden and visible again with nothing changed: no refresh', async () => {
+      const { panelApi, timer, loaded } = await renderHarness();
+      await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(1));
+      panelApi.emit(false);
+      panelApi.emit(true);
+      await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(2));
+      expect(loaded.count).toBe(1);
+    });
+
+    it('T23 a tick compares with the fingerprint in the store, not with what the previous tick read: a change the previous comparison saw but whose refresh did not land is still a change', async () => {
+      const { timer, store } = await renderHarness();
+      await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(1));
+      const onTick = timer.start.mock.calls[0]![0].onTick;
+      // refresh 没有落盘(被更晚的一次取代 / 失败后恢复):store 里的指纹仍是旧的
+      const refresh = vi.fn(async () => {});
+      store.setState({ refresh });
+      readStatusHashMock.mockResolvedValue('changed');
+      await onTick();
+      await onTick();
+      expect(refresh).toHaveBeenCalledTimes(2);
+      // 另一条路径(手动 Refresh / 文件操作之后的 refresh)已经把列表与指纹更新到当前:tick 不再刷新
+      store.setState({ statusFingerprint: 'changed' });
+      await onTick();
+      expect(refresh).toHaveBeenCalledTimes(2);
+    });
+
+    it('T24 a load that could not read a fingerprint (null) never compares equal: the next tick refreshes', async () => {
+      const { timer, store } = await renderHarness();
+      await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(1));
+      const refresh = vi.fn(async () => {});
+      store.setState({ refresh, statusFingerprint: null });
+      await timer.start.mock.calls[0]![0].onTick();
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('T25 the window becoming visible again (visibilitychange) compares at once; while the window or the panel is hidden the event does nothing', async () => {
+      const { timer, store, panelApi } = await renderHarness();
+      await waitFor(() => expect(timer.start).toHaveBeenCalledTimes(1));
+      const refresh = vi.fn(async () => {});
+      store.setState({ refresh });
+      readStatusHashMock.mockResolvedValue('changed');
+      const setVisibility = (value: DocumentVisibilityState) =>
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value });
+      try {
+        setVisibility('hidden');
+        document.dispatchEvent(new Event('visibilitychange'));
+        await Promise.resolve();
+        expect(refresh).not.toHaveBeenCalled();
+
+        setVisibility('visible');
+        document.dispatchEvent(new Event('visibilitychange'));
+        await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+
+        panelApi.emit(false);
+        document.dispatchEvent(new Event('visibilitychange'));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(refresh).toHaveBeenCalledTimes(1);
+      } finally {
+        setVisibility('visible');
+      }
+    });
   });
 
   describe('a status error does not stick until a manual Refresh', () => {
