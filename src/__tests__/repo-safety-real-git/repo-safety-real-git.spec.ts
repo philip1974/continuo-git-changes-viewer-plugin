@@ -6,6 +6,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchDiff } from '../../git/diff-fetcher';
+import { discardFile } from '../../git/discard-file';
+import { discardHunk } from '../../git/discard-hunk';
+import { DISABLED_HOOKS_PATH, gitExec } from '../../git/exec';
+import { detectRepoHooks } from '../../git/repo-hooks';
+import { stageHunk } from '../../git/stage-hunk';
+import { _resetRestoreCache, unstageFile } from '../../git/unstage-file';
+import { unstageHunk } from '../../git/unstage-hunk';
 import { gitCommit } from '../../git/git-commit';
 import { hasHeadCommit, readHeadMessage } from '../../git/head-meta';
 import { installRepoSafetyGuard } from '../../git/repo-safety';
@@ -35,7 +42,45 @@ function realApp(): CoPluginApp {
     const s = statSync(p);
     return { size: s.size, mtimeMs: s.mtimeMs, isFile: s.isFile(), isDirectory: s.isDirectory(), isSymlink: false };
   };
-  return { shell: { exec }, fs: { stat } } as unknown as CoPluginApp;
+  const listDir = async (p: string) =>
+    readdirSync(p, { withFileTypes: true }).map((e) => ({
+      name: e.name,
+      isFile: e.isFile(),
+      isDirectory: e.isDirectory(),
+      isSymlink: e.isSymbolicLink(),
+    }));
+  return { shell: { exec }, fs: { stat, listDir } } as unknown as CoPluginApp;
+}
+
+// 去掉插件注入的 `-c core.hooksPath=/dev/null`,模拟"未加防护"的插件:用于证明 fixture 的 hooks 确实会被触发
+function unprotectedApp(): CoPluginApp {
+  const app = realApp();
+  const exec = app.shell.exec.bind(app.shell);
+  const strip = (args: readonly string[]) => {
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-c' && args[i + 1] === `core.hooksPath=${DISABLED_HOOKS_PATH}`) {
+        i++;
+        continue;
+      }
+      out.push(args[i]!);
+    }
+    return out;
+  };
+  return {
+    ...app,
+    shell: { exec: (cmd: string, args: readonly string[], opts?: PluginShellExecOptions) => exec(cmd, strip(args), opts) },
+  } as unknown as CoPluginApp;
+}
+
+const HOOK_NAMES = ['post-index-change', 'post-checkout', 'reference-transaction', 'pre-commit', 'post-commit'];
+function plantHooks(hooksDir = join(repo, '.git', 'hooks')): void {
+  mkdirSync(hooksDir, { recursive: true });
+  for (const h of HOOK_NAMES) {
+    const p = join(hooksDir, h);
+    writeFileSync(p, `#!/bin/sh\ntouch "${join(markDir, h)}"\nexit 0\n`);
+    chmodSync(p, 0o755);
+  }
 }
 
 let base: string;
@@ -226,5 +271,129 @@ describe('repo safety against a real git with a hostile .git/config', () => {
 
     expect(marks()).toEqual(['pre-commit']);
     expect(existsSync(join(repo, '.git', 'index'))).toBe(true);
+  });
+
+  // 每个写操作:准备状态 → 运行 → 返回触发的 hook 标记
+  const WRITE_OPS: ReadonlyArray<readonly [string, (app: CoPluginApp) => Promise<{ ok: boolean }>]> = [
+    ['stageFile (git add)', async (app) => {
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      clearMarks();
+      return stageFile(app, repo, 'f.txt');
+    }],
+    ['unstageFile (git restore --staged)', async (app) => {
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      git(repo, 'add', 'f.txt');
+      clearMarks();
+      _resetRestoreCache();
+      return unstageFile(app, repo, 'f.txt');
+    }],
+    ['unstage fallback (git reset HEAD --)', async (app) => {
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      git(repo, 'add', 'f.txt');
+      clearMarks();
+      const r = await gitExec(app, repo, ['reset', 'HEAD', '--', 'f.txt']);
+      return { ok: r.exitCode === 0 };
+    }],
+    ['stageHunk (git apply --cached)', async (app) => {
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      const patch = git(repo, 'diff');
+      clearMarks();
+      return stageHunk(app, repo, patch);
+    }],
+    ['unstageHunk (git apply --cached --reverse)', async (app) => {
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      git(repo, 'add', 'f.txt');
+      const patch = git(repo, 'diff', '--cached');
+      clearMarks();
+      return unstageHunk(app, repo, patch);
+    }],
+    ['discardHunk (git apply --reverse)', async (app) => {
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      const patch = git(repo, 'diff');
+      clearMarks();
+      return discardHunk(app, repo, patch);
+    }],
+    ['discardFile (git checkout --)', async (app) => {
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      clearMarks();
+      return discardFile(app, repo, 'f.txt');
+    }],
+  ];
+
+  it('R7 baseline: without the hooksPath override, stage / unstage / discard run planted .git/hooks (proves the fixture)', async () => {
+    plantHooks();
+    const app = unprotectedApp();
+    installRepoSafetyGuard(app);
+    const fired: Record<string, string[]> = {};
+    for (const [name, op] of WRITE_OPS) {
+      git(repo, 'reset', '-q', '--hard');
+      expect((await op(app)).ok).toBe(true);
+      fired[name] = marks();
+    }
+    expect(fired['stageFile (git add)']).toContain('post-index-change');
+    expect(fired['unstageFile (git restore --staged)']).toContain('post-index-change');
+    expect(fired['unstage fallback (git reset HEAD --)']).toContain('post-index-change');
+    expect(fired['stageHunk (git apply --cached)']).toContain('post-index-change');
+    expect(fired['unstageHunk (git apply --cached --reverse)']).toContain('post-index-change');
+    expect(fired['discardFile (git checkout --)']).toContain('post-checkout');
+  });
+
+  it('R8 planted .git/hooks in a trusted-config repo: plugin stage / unstage / discard / refresh run no hook', async () => {
+    plantHooks();
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('trusted');
+    for (const [name, op] of WRITE_OPS) {
+      git(repo, 'reset', '-q', '--hard');
+      expect({ name, ok: (await op(app)).ok }).toEqual({ name, ok: true });
+      expect({ name, marks: marks() }).toEqual({ name, marks: [] });
+    }
+    clearMarks();
+    await runEverything(app);
+    expect(marks()).toEqual([]);
+  });
+
+  it('R9 detectRepoHooks: samples only → none; planted hook → present; commit still runs hooks', async () => {
+    const app = realApp();
+    expect(readdirSync(join(repo, '.git', 'hooks')).every((n) => n.endsWith('.sample'))).toBe(true);
+    expect(await detectRepoHooks(app, repo)).toEqual({ kind: 'none' });
+
+    rmSync(join(repo, '.git', 'hooks'), { recursive: true });
+    expect(await detectRepoHooks(app, repo)).toEqual({ kind: 'none' });
+
+    plantHooks();
+    expect(await detectRepoHooks(app, repo)).toEqual({
+      kind: 'present',
+      hooks: [...HOOK_NAMES].sort(),
+      hooksPath: null,
+    });
+
+    // 确认后的提交照常运行用户 hooks
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    clearMarks();
+    expect(await gitCommit(app, repo, 'with hooks')).toMatchObject({ ok: true });
+    expect(marks()).toEqual(expect.arrayContaining(['pre-commit', 'post-commit']));
+  });
+
+  it('R10 detectRepoHooks: local core.hooksPath → present; linked worktree sees the main repo hooks', async () => {
+    const app = realApp();
+    git(repo, 'config', 'core.hooksPath', '.husky');
+    expect(await detectRepoHooks(app, repo)).toEqual({ kind: 'present', hooks: [], hooksPath: '.husky' });
+    git(repo, 'config', '--unset', 'core.hooksPath');
+
+    const wt = join(base, 'wt');
+    git(repo, 'worktree', 'add', '-q', '-b', 'side', wt);
+    expect(await detectRepoHooks(app, wt)).toEqual({ kind: 'none' });
+    plantHooks();
+    expect(await detectRepoHooks(app, wt)).toMatchObject({ kind: 'present', hooksPath: null });
+  });
+
+  it('R11 detectRepoHooks: core.hooksPath from global config (user-owned) → none even with .git/hooks present', async () => {
+    plantHooks();
+    const globalCfg = join(base, 'global.cfg');
+    writeFileSync(globalCfg, `[core]\n\thooksPath = ${join(base, 'user-hooks')}\n`);
+    process.env.GIT_CONFIG_GLOBAL = globalCfg;
+    expect(await detectRepoHooks(realApp(), repo)).toEqual({ kind: 'none' });
   });
 });

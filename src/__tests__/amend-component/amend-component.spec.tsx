@@ -65,6 +65,7 @@ function renderEditor(opts: {
         readHeadMessage={readHeadMessage}
         hasHeadCommit={hasHeadCommit}
         readHeadSha={readHeadSha}
+        detectHooks={async () => ({ kind: 'none' as const })}
       />
     );
   }

@@ -54,6 +54,10 @@
 
 - [`commit-editor-component.spec.tsx`](./commit-editor-component/commit-editor-component.spec.tsx)
 
+## [Commit Hooks Confirmation](./commit-hooks-confirm/README.md)
+
+- [`commit-hooks-confirm.spec.tsx`](./commit-hooks-confirm/commit-hooks-confirm.spec.tsx)
+
 ## [commit-integration](./commit-integration/README.md)
 
 - [`commit-integration.spec.tsx`](./commit-integration/commit-integration.spec.tsx)

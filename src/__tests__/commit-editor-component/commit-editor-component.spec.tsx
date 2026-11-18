@@ -43,6 +43,7 @@ function renderEditor(opts: {
       stagedCount={opts.stagedCount ?? 1}
       commit={commit}
       readSubject={readSubject}
+      detectHooks={async () => ({ kind: 'none' as const })}
     />,
   );
   return { store, commit, readSubject };
@@ -119,6 +120,9 @@ describe('CommitEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
 
+    // 提交前先异步检测 hooks,commit 在其后调用
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
     expect(commit).toHaveBeenCalledTimes(1);
     resolveCommit({ ok: true });
     await vi.waitFor(() => expect(screen.getByText('Commit')).toBeTruthy());

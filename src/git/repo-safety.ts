@@ -18,8 +18,12 @@ import { gitExecUnguarded, registerGitGuard } from './exec';
 // - core.sshCommand / credential.* / core.askPass 以外的传输类:只在联网时执行,而读命令已
 //   `-c protocol.allow=never` + GIT_NO_LAZY_FETCH=1 断网;per-repo sshCommand / credential.helper
 //   是常见的合法配置,检测会误伤。
-// - core.hooksPath / .git/hooks:hooks 只在用户主动 commit / discard 时运行,与在终端执行
-//   `git commit` 同一信任模型;husky 等工具普遍设置 local core.hooksPath,检测会误伤。
+// - core.hooksPath / .git/hooks:不在此受限检测。hooks 并非只在 commit 时运行——写 index 的
+//   add / apply --cached / restore / reset 会触发 post-index-change,checkout / restore 触发
+//   post-checkout。中和方式:除 commit 外每次调用都 `-c core.hooksPath=/dev/null`(见 exec.ts),
+//   插件的 stage / unstage / discard / 刷新不运行任何 hook;commit 照常运行用户 hooks,但提交前
+//   由 repo-hooks 检测仓库 hooks / local core.hooksPath 并要求用户再次确认。husky 等工具普遍设置
+//   local core.hooksPath,因此不把它列为受限键(否则会误伤正常仓库)。
 const UNSAFE_KEY_PATTERNS: readonly RegExp[] = [
   /^filter\..+\.(clean|smudge|process)$/i,
   /^diff\..+\.(textconv|command)$/i,

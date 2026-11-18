@@ -46,6 +46,7 @@ describe('amend integration', () => {
       refresh: vi.fn(async () => undefined),
     });
     const exec = vi.fn(async (_cmd: string, args: readonly string[]) => {
+      if (args.includes('--git-common-dir')) return result({ exitCode: 0, stdout: '.git\n' });
       if (args.includes('rev-parse')) return result({ exitCode: 0, stdout: args.includes('--verify') ? 'HEAD\n' : 'after\n' });
       if (args.includes('commit')) return result({ exitCode: 0 });
       if (args.includes('log')) return result({ exitCode: 0, stdout: 'new subject\n' });
@@ -53,6 +54,10 @@ describe('amend integration', () => {
     });
     const app = {
       shell: { exec },
+      fs: {
+        listDir: async () => [],
+        stat: async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true, isSymlink: false }),
+      },
       notifications: { show: vi.fn() },
     } as unknown as CoPluginApp;
 

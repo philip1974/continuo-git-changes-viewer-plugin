@@ -29,7 +29,7 @@ const GLOBALS = [
   '-c',
   'submodule.recurse=false',
 ];
-const NO_NETWORK = ['-c', 'protocol.allow=never'];
+const NO_NETWORK = ['-c', 'protocol.allow=never', '-c', 'core.hooksPath=/dev/null'];
 const ENV = {
   GIT_OPTIONAL_LOCKS: '0',
   GIT_TERMINAL_PROMPT: '0',
@@ -87,7 +87,19 @@ describe('gitExec hardened shell wrapper', () => {
     const [, args, opts] = exec.mock.calls[0]!;
     expect(args).toEqual([...GLOBALS, 'commit', '-F', '-']);
     expect(args).not.toContain('protocol.allow=never');
+    expect(args.some((a: string) => a.startsWith('core.hooksPath'))).toBe(false);
     expect(opts.env).toEqual({ GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: ':' });
+  });
+
+  it('T8 every non-commit subcommand (index / worktree writers included) disables repository hooks', () => {
+    for (const sub of [['add', '--', 'a'], ['apply', '--cached', '-'], ['restore', '--staged', '--', 'a'],
+      ['reset', 'HEAD', '--', 'a'], ['checkout', '--', 'a'], ['status'], ['rev-parse', '--git-common-dir'], ['config', '--list']]) {
+      const args = buildGitArgs(sub);
+      const i = args.indexOf('core.hooksPath=/dev/null');
+      expect(i).toBeGreaterThan(0);
+      expect(args[i - 1]).toBe('-c');
+      expect(i).toBeLessThan(args.indexOf(sub[0]!));
+    }
   });
 
   it('T5 a registered guard refusal returns a failed result without spawning git', async () => {

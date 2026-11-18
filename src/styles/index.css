@@ -131,6 +131,32 @@
   font-weight: 500;
 }
 
+.cgv-hooks-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--danger-bg);
+  font-size: 12px;
+}
+
+.cgv-hooks-warning {
+  color: var(--text-fg);
+}
+
+.cgv-hooks-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cgv-hooks-confirm-btn {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .cgv-commit-actions {
   display: flex;
   align-items: center;

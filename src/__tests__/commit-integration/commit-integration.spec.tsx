@@ -84,6 +84,7 @@ describe('commit integration', () => {
     });
     const exec = vi.fn(
       async (_cmd: string, args: readonly string[]) => {
+        if (args.includes('--git-common-dir')) return result({ exitCode: 0, stdout: '.git\n' });
         if (args.includes('commit')) return result({ exitCode: 0 });
         if (args.includes('log')) return result({ exitCode: 0, stdout: 'subject\n' });
         return result({ exitCode: 0 });
@@ -91,6 +92,10 @@ describe('commit integration', () => {
     );
     const app = {
       shell: { exec },
+      fs: {
+        listDir: async () => [],
+        stat: async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true, isSymlink: false }),
+      },
       notifications: { show: vi.fn() },
     } as unknown as CoPluginApp;
 

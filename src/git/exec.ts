@@ -19,6 +19,16 @@ export interface GitExecOptions
 //   (传输层会执行 core.sshCommand / remote.*.uploadpack / ext:: 等)。
 //   例外:会运行用户 hooks 的子命令(commit)不加——`-c` 经 GIT_CONFIG_PARAMETERS 传给 hooks,
 //   会让用户 pre-commit 里正常的 clone/fetch 失败。受限仓库(见 repo-safety)根本不会运行 commit。
+// - core.hooksPath=/dev/null(同上,commit 例外):禁用仓库 hooks。不止 commit 会跑 hooks——
+//   写 index 的 add / apply --cached / restore --staged / reset 触发 post-index-change,
+//   checkout / restore 触发 post-checkout,改 ref 的命令触发 reference-transaction;恶意目录只需
+//   放一个可执行的 .git/hooks/post-index-change,用户点一次 Stage 就会执行(实测 git 2.50)。
+//   依据:git 按 `<hooksPath>/<hook名>` 查找 hook,`/dev/null` 不是目录,其下不可能存在文件,
+//   故任何 hook 都找不到(实测 add/apply/restore/reset/checkout 均不再执行 hook)。不能用空值
+//   `core.hooksPath=`——会被拼成 `/<hook名>`(文件系统根)。Windows(Git for Windows)上 `/dev/null`
+//   解析为当前盘符下的 `\dev\null`,同样不存在;只有能在盘符根目录写文件的本机攻击者才能放置,
+//   超出"恶意仓库"威胁模型(未在 Windows 实机验证)。commit 照常运行用户 hooks,提交前由
+//   repo-hooks 检测并要求确认。
 // - --no-pager:不启动 core.pager / pager.*。
 // 注意:不能用 `-c diff.external=` 置空——实测会让 git diff 报错;改为按子命令追加
 // `--no-ext-diff`(见 SUBCOMMAND_HARDENING)。
@@ -35,7 +45,11 @@ export const GIT_GLOBAL_ARGS: readonly string[] = [
 
 const NO_NETWORK_ARGS: readonly string[] = ['-c', 'protocol.allow=never'];
 
-/** 会运行仓库 hooks 的子命令:不注入断网配置,hooks 照常工作。 */
+/** 指向一个不可能是目录的路径,使 git 找不到任何 hook(见上方说明)。 */
+export const DISABLED_HOOKS_PATH = '/dev/null';
+const NO_HOOKS_ARGS: readonly string[] = ['-c', `core.hooksPath=${DISABLED_HOOKS_PATH}`];
+
+/** 会运行仓库 hooks 的子命令:不禁用 hooks、不注入断网配置,hooks 照常工作(提交前另行确认)。 */
 export const HOOK_RUNNING_SUBCOMMANDS: ReadonlySet<string> = new Set(['commit']);
 
 // 子命令级加固,紧跟在子命令名之后插入:
@@ -68,7 +82,7 @@ export function buildGitArgs(args: readonly string[]): string[] {
   const [subcommand, ...rest] = args;
   const globals = runsHooks(args)
     ? GIT_GLOBAL_ARGS
-    : [...GIT_GLOBAL_ARGS, ...NO_NETWORK_ARGS];
+    : [...GIT_GLOBAL_ARGS, ...NO_NETWORK_ARGS, ...NO_HOOKS_ARGS];
   if (subcommand === undefined) return [...globals];
   const extra = SUBCOMMAND_HARDENING[subcommand] ?? [];
   return [...globals, subcommand, ...extra, ...rest];
