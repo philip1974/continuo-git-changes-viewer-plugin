@@ -3,7 +3,7 @@ import type { StoreApi } from 'zustand/vanilla';
 import { canDiscardHunk } from '../git/can-discard-hunk';
 import { canStageHunk } from '../git/can-stage-hunk';
 import { canUnstageHunk } from '../git/can-unstage-hunk';
-import type { DiffMode, DiffResult } from '../git/diff-fetcher';
+import { MAX_FILE_BYTES, type DiffMode, type DiffResult } from '../git/diff-fetcher';
 import { discardHunk } from '../git/discard-hunk';
 import { extractHunkPatchFromUnifiedDiff } from '../git/hunk-patch';
 import { joinRepoPath } from '../git/path-utils';
@@ -31,8 +31,17 @@ interface DiffViewProps {
   readonly dispatchDrawer?: Dispatch<PreviewDrawerAction>;
 }
 
-function NewFileView({ content }: { readonly content: string }) {
-  return <pre className="cgv-new-file">{content || '(empty file)'}</pre>;
+function NewFileView({ content, truncated }: { readonly content: string; readonly truncated?: boolean }) {
+  return (
+    <>
+      <pre className="cgv-new-file">{content || '(empty file)'}</pre>
+      {truncated ? (
+        <div className="cgv-truncated-note" role="note">
+          {`File too large — showing the first ${MAX_FILE_BYTES / (1024 * 1024)} MB. Open the file in an editor to see the rest.`}
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 // 工作树全文未读取(见 diff-fetcher 的符号链接检查):显示说明,不显示文件内容。
@@ -370,7 +379,7 @@ export function DiffView({
     }
     return (
       <main className="cgv-diff">
-        <NewFileView content={diff.modified} />
+        <NewFileView content={diff.modified} truncated={diff.modifiedTruncated} />
       </main>
     );
   }

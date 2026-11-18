@@ -14,5 +14,9 @@ both are capped; nothing is dropped from the underlying data.
   renders the first 2000 rows and a notice; the section count still shows the
   real total.
 - L5: sections at or below the limit render completely, without the notice.
+- L7: a new / untracked file larger than the whole-file read limit
+  (`MAX_FILE_BYTES`, 1 MiB) shows the part that was read followed by "File too
+  large — showing the first 1 MB. Open the file in an editor to see the rest."
+- L8: a file within the limit shows no notice.
 - L6: a status output truncated by the host output limit loses only its last,
   possibly partial record — it is never parsed into a bogus entry.

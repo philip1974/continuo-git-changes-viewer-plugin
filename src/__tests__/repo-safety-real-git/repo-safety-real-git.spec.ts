@@ -7,7 +7,7 @@ import { chmodSync, existsSync, readFileSync, renameSync, mkdtempSync, readdirSy
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { fetchDiff } from '../../git/diff-fetcher';
+import { fetchDiff, MAX_FILE_BYTES } from '../../git/diff-fetcher';
 import { discardFile } from '../../git/discard-file';
 import { discardHunk } from '../../git/discard-hunk';
 import { DISABLED_HOOKS_PATH, gitExec } from '../../git/exec';
@@ -27,7 +27,12 @@ import { parsePorcelainStatus, scanStatus, UnsafeIndexError } from '../../git/st
 import type { CoPluginApp, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 import { keyPatterns, overlappingKeys, REVIEWED_OVERLAP } from '../repo-safety/key-overlap';
 
-// 最小 app.shell / app.fs 实现(对应宿主 shell.exec:env 合并进进程 env)
+// 宿主 shell.exec 不带 maxOutputBytes 时的默认输出上限(Continuo electron/main/services/shell.service.ts:
+// DEFAULT_MAX_OUTPUT_BYTES)。
+const HOST_DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+
+// 最小 app.shell / app.fs 实现(对应宿主 shell.exec:env 合并进进程 env;stdout / stderr 各自按字节封顶,
+// 超出部分丢弃并置 truncated,进程照常跑完)
 function realApp(): CoPluginApp {
   const exec = (cmd: string, args: readonly string[], opts: PluginShellExecOptions = {}) =>
     new Promise<PluginShellExecResult>((resolve) => {
@@ -35,12 +40,27 @@ function realApp(): CoPluginApp {
         cwd: opts.cwd,
         env: { ...process.env, ...(opts.env ?? {}) },
       });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (d) => (stdout += d));
-      child.stderr.on('data', (d) => (stderr += d));
+      const max = opts.maxOutputBytes ?? HOST_DEFAULT_MAX_OUTPUT_BYTES;
+      let truncated = false;
+      const capped = () => {
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        return {
+          push: (d: Buffer) => {
+            const room = max - bytes;
+            if (d.length > room) truncated = true;
+            if (room > 0) chunks.push(d.subarray(0, room));
+            bytes += Math.min(d.length, Math.max(room, 0));
+          },
+          text: () => Buffer.concat(chunks).toString('utf8'),
+        };
+      };
+      const out = capped();
+      const err = capped();
+      child.stdout.on('data', out.push);
+      child.stderr.on('data', err.push);
       child.on('close', (code, signal) =>
-        resolve({ stdout, stderr, exitCode: code, signal, timedOut: false, truncated: false }),
+        resolve({ stdout: out.text(), stderr: err.text(), exitCode: code, signal, timedOut: false, truncated }),
       );
       // 子进程不读 stdin 就退出时写端会报 EPIPE(与被测行为无关),忽略
       child.stdin.on('error', () => {});
@@ -1798,7 +1818,7 @@ describe('extensions: only reviewed names, and extensions.refStorage only as a f
 
 describe('HEAD content of a file whose name looks like revision syntax (real git)', () => {
   // 冒号后的部分应整体是路径;`git show` 却先把整个参数按 `..` / `...` 拆成修订区间
-  const NAMES = ['a..b', 'a...b', 'a@{1}', 'a^{tree}', 'a~1', 'a^', ':(top)x', '-x', '--help', 'ab:c', '@{u}', 'a b', 'd/e..b'];
+  const NAMES = ['a..b', 'a...b', 'a@{1}', 'a^{tree}', 'a~1', 'a^', ':(top)x', '-x', '-n', '--help', 'ab:c', ':x', '@{u}', 'a b', 'd/e..b', '中文 文件.txt', 'd/名字 带 空格.md'];
 
   it('R50 the original pane shows the HEAD blob for every such name; `git show HEAD:a..b` (the previous command) prints a commit log instead', async () => {
     // `HEAD:a..b` 作为区间成立的条件:存在路径 a 与分支 b
@@ -1820,6 +1840,7 @@ describe('HEAD content of a file whose name looks like revision syntax (real git
 
     const changes = await scanStatus(app, repo);
     expect(changes.map((c) => c.path).sort()).toEqual([...NAMES].sort());
+    // (`a:b` 这类"盘符形"名字不在此列:它不满足 isSafeRepoRelativePath,列表里是不可操作行,插件不为它运行 git——见 R59。)
     for (const change of changes) {
       const d = await fetchDiff(app, repo, change);
       expect({ path: change.path, original: d.ok && d.original, modified: d.ok && d.modified }).toEqual({
@@ -1830,7 +1851,7 @@ describe('HEAD content of a file whose name looks like revision syntax (real git
     }
   });
 
-  it('R51 a path that is not a blob in HEAD (new file, directory, gitlink) yields an empty original, never a tree listing', async () => {
+  it('R51 a path that is not a blob in HEAD (new file, directory) yields an empty original, never a tree listing', async () => {
     mkdirSync(join(repo, 'dir'));
     writeFileSync(join(repo, 'dir', 'x.txt'), 'x\n');
     git(repo, 'add', '-A');
@@ -1840,5 +1861,93 @@ describe('HEAD content of a file whose name looks like revision syntax (real git
       const d = await fetchDiff(app, repo, { path, status: 'M', statusX: ' ', statusY: 'M', kind: 'text' });
       expect({ path, original: d.ok && d.original }).toEqual({ path, original: '' });
     }
+  });
+
+  it('R51b a gitlink in HEAD (nested repository whose commit moved): empty original, the change itself is still shown as a submodule diff, and the nested directory is not read', async () => {
+    const sub = join(repo, 'sub');
+    mkdirSync(sub);
+    git(sub, 'init', '-q', '-b', 'main');
+    writeFileSync(join(sub, 'inner.txt'), 'INNER-CONTENT\n');
+    git(sub, 'add', '.');
+    git(sub, 'commit', '-qm', 'inner');
+    git(repo, '-c', 'advice.addEmbeddedRepo=false', 'add', 'sub');
+    git(repo, 'commit', '-qm', 'gitlink');
+    git(sub, 'commit', '-q', '--allow-empty', '-m', 'inner 2');
+
+    const app = realApp();
+    const [change] = await scanStatus(app, repo);
+    expect(change).toMatchObject({ path: 'sub', statusX: ' ', statusY: 'M' });
+    const d = await fetchDiff(app, repo, change!);
+    expect(d).toMatchObject({ ok: true, original: '', modified: '', withheld: 'not-regular' });
+    expect(d.ok && d.unifiedDiff).toMatch(/^-Subproject commit [0-9a-f]{40}$/m);
+    expect(JSON.stringify(d)).not.toContain('INNER-CONTENT');
+  });
+
+  it('R51c a symbolic link in HEAD: the original is the link target text git stores, never the content of the file it points to (inside or outside the folder); the working-tree side is withheld', async () => {
+    const secret = join(realpathSync(base), 'secret.txt');
+    writeFileSync(secret, 'OUTSIDE-SECRET\n');
+    symlinkSync('f.txt', join(repo, 'inside-link'));
+    symlinkSync(secret, join(repo, 'outside-link'));
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'links');
+    // 两个链接都改了目标 → ` M`
+    for (const name of ['inside-link', 'outside-link']) {
+      rmSync(join(repo, name));
+      symlinkSync('g.txt', join(repo, name));
+    }
+
+    const app = realApp();
+    const changes = await scanStatus(app, repo);
+    expect(changes.map((c) => c.path)).toEqual(['inside-link', 'outside-link']);
+    const [inside, outside] = await Promise.all(changes.map((c) => fetchDiff(app, repo, c)));
+    expect(inside).toMatchObject({ ok: true, original: 'f.txt', modified: '', withheld: 'symlink' });
+    expect(outside).toMatchObject({ ok: true, original: secret, modified: '', withheld: 'symlink' });
+    expect(JSON.stringify([inside, outside])).not.toMatch(/OUTSIDE-SECRET|one\\n|gee\\n/);
+  });
+});
+
+describe('whole-file reads are size-limited (real git, host-like output cap)', () => {
+  const MiB = 1024 * 1024;
+  // 每行 64 字节的 ASCII 文本,恰好 bytes 字节
+  const text = (bytes: number, tag: string) => `${tag}${'x'.repeat(63 - tag.length)}\n`.repeat(bytes / 64);
+
+  it('R57 a 3 MiB tracked file with a one-line change: the diff is complete and hunk-accurate, while the two whole-file reads stop at MAX_FILE_BYTES; an untracked 3 MiB file comes back as its first 1 MiB flagged modifiedTruncated; a file of exactly the limit is not flagged', async () => {
+    expect(MAX_FILE_BYTES).toBe(MiB);
+    writeFileSync(join(repo, 'big.txt'), text(3 * MiB, 'big'));
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'big');
+    appendFileSync(join(repo, 'big.txt'), 'tail line\n');
+    writeFileSync(join(repo, 'new-big.log'), text(3 * MiB, 'new'));
+    writeFileSync(join(repo, 'new-exact.log'), text(MiB, 'fit'));
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const changes = await scanStatus(app, repo);
+    expect(changes.map((c) => c.path)).toEqual(['big.txt', 'new-big.log', 'new-exact.log']);
+    const [tracked, untracked, exact] = await Promise.all(changes.map((c) => fetchDiff(app, repo, c)));
+
+    expect(tracked).toMatchObject({ ok: true, modifiedTruncated: true });
+    if (!tracked!.ok) throw new Error('unreachable');
+    expect(tracked!.unifiedDiff).toContain('\n+tail line\n');
+    expect(tracked!.unifiedDiff.split('\n').length).toBeLessThan(20);
+    expect(tracked!.original).toBe(text(MiB, 'big'));
+    expect(tracked!.modified).toBe(text(MiB, 'big'));
+
+    expect(untracked).toMatchObject({ ok: true, isUntracked: true, modifiedTruncated: true });
+    expect(untracked!.ok && untracked!.modified).toBe(text(MiB, 'new'));
+
+    expect(exact!.ok && exact!.modified).toBe(text(MiB, 'fit'));
+    expect(exact).not.toHaveProperty('modifiedTruncated');
+  });
+
+  it('R58 a change whose unified diff exceeds the host default output limit (10 MiB) degrades to the "Diff too large" placeholder with the command to run; status and staging of that file still work', async () => {
+    writeFileSync(join(repo, 'f.txt'), text(11 * MiB, 'huge'));
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const [change] = await scanStatus(app, repo);
+    expect(change).toMatchObject({ path: 'f.txt', statusY: 'M' });
+    expect(await fetchDiff(app, repo, change!)).toEqual({ ok: false, reason: 'too-large', path: 'f.txt', exactCommand: 'git diff -- f.txt' });
+    expect((await stageFile(app, repo, 'f.txt')).ok).toBe(true);
+    expect(git(repo, 'status', '--porcelain')).toBe('M  f.txt\n');
   });
 });

@@ -73,6 +73,31 @@ describe('diff rendering is capped', () => {
   });
 });
 
+describe('whole-file view of a new / untracked file is capped', () => {
+  const untracked: FileChange = { path: 'huge.log', status: 'U', statusX: '?', statusY: '?', kind: 'text' };
+  const renderNew = (extra: { modifiedTruncated?: true }) =>
+    render(
+      <DiffView
+        store={createGitStore()}
+        change={untracked}
+        diff={{ ok: true, path: 'huge.log', original: '', modified: 'line 1\nline 2\n', unifiedDiff: '', isUntracked: true, ...extra }}
+      />,
+    );
+
+  it('L7 a file larger than the read limit shows the part that was read followed by a "File too large" notice', () => {
+    const { container } = renderNew({ modifiedTruncated: true });
+    expect(container.querySelector('.cgv-new-file')!.textContent).toBe('line 1\nline 2\n');
+    expect(screen.getByRole('note').textContent).toBe(
+      'File too large — showing the first 1 MB. Open the file in an editor to see the rest.',
+    );
+  });
+
+  it('L8 a file within the limit shows no notice', () => {
+    renderNew({});
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+});
+
 describe('file list rendering is capped', () => {
   const many = (n: number, x: FileChange['statusX'], y: FileChange['statusY']): FileChange[] =>
     Array.from({ length: n }, (_, i) => ({ path: `f${i}.txt`, status: x === '?' ? 'U' : 'M', statusX: x, statusY: y, kind: 'text' }));

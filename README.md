@@ -95,7 +95,9 @@ detect whether HEAD is already on a remote branch.
 - The workspace root must be the git toplevel. Opening a subdirectory of a repo
   is reported as unsupported in this version.
 - Very large diffs degrade to a file-level placeholder with the exact git
-  command to run manually.
+  command to run manually (the host caps command output at 10 MiB). A new or
+  untracked file is shown in full up to 1 MiB; beyond that the panel shows the
+  first 1 MB and says so.
 
 ## Untrusted folders: known limitation
 

@@ -185,11 +185,27 @@ Config enumeration (see `doc/git-config-classification.md`):
 File names that look like revision syntax:
 
 - R50: files named `a..b` (with a path `a` and a branch `b`), `a...b`,
-  `a@{1}`, `a^{tree}`, `a~1`, `a^`, `:(top)x`, `-x`, `--help`, `ab:c`, `@{u}`,
-  `a b`, `d/e..b` → the original pane is the HEAD blob of exactly that path.
+  `a@{1}`, `a^{tree}`, `a~1`, `a^`, `:(top)x`, `:x`, `-x`, `-n`, `--help`,
+  `ab:c`, `@{u}`, `a b`, `d/e..b`, `中文 文件.txt`, `d/名字 带 空格.md` → the
+  original pane is the HEAD blob of exactly that path. (`a:b` looks like a
+  drive-relative path and is an inoperable row instead: R59.)
   `git show HEAD:a..b` (the earlier command) prints branch `b`'s commit log.
 - R51: a path that is a directory in HEAD or absent from it → empty original
   (`cat-file blob` fails; no tree listing).
+- R51b: a gitlink whose nested repository moved → empty original, the change
+  is shown as a `Subproject commit` diff, nothing of the nested repository is
+  read.
+- R51c: a symbolic link in HEAD → the original is the link target text git
+  stores (for a link to a file outside the folder: its path, never its
+  content); the working-tree side is withheld.
+
+Large files (host-like output cap: 10 MiB unless the call sets its own):
+
+- R57: a 3 MiB tracked file with a one-line change → complete diff; both
+  whole-file reads stop at 1 MiB (`modifiedTruncated`). An untracked 3 MiB
+  file → its first 1 MiB, flagged; a file of exactly 1 MiB → not flagged.
+- R58: a change whose diff exceeds 10 MiB → `too-large` placeholder with the
+  command; status and staging still work.
 
 Keys the viewer has not reviewed (`repo-safety` K1–K10 with the real `git help
 --config`; also run with git 2.56.1):

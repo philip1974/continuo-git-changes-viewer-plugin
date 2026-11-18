@@ -17,6 +17,8 @@ export type DiffResult =
       isUntracked: boolean;
       /** 工作树全文未读取(modified 为 "")的原因;正常读取时不带此字段。 */
       withheld?: WithheldReason;
+      /** 工作树文件超过 MAX_FILE_BYTES:modified 只是开头的那一部分。 */
+      modifiedTruncated?: true;
     }
   | {
       ok: false;
@@ -32,6 +34,12 @@ export type DiffResult =
  * - not-regular:路径存在但不是普通文件(目录、FIFO、设备、socket)。
  */
 export type WithheldReason = 'symlink' | 'unverified' | 'not-regular';
+
+// 读"整个文件"(HEAD 版 blob、工作树全文)的输出上限。不设时用宿主 shell.exec 的默认值(10 MiB,超出部分
+// 丢弃并置 truncated)——新文件 / 未跟踪文件的全文直接渲染进一个 <pre>,10 MiB 既卡又没有任何"被截断"的
+// 提示。这里显式设 1 MiB:超出时只取开头部分并标记 modifiedTruncated,面板显示 "File too large" 说明。
+// unified diff 不在此列:它被截断时整体降级为 "Diff too large" 占位(见 fetchDiff),渲染另有行数上限。
+export const MAX_FILE_BYTES = 1024 * 1024;
 
 type DiffApp = Pick<CoPluginApp, 'shell'> & Partial<Pick<CoPluginApp, 'fs'>>;
 
@@ -58,7 +66,8 @@ async function gitShowHead(
   // `:`、以 `-` 开头都按字面解析(real-git R50);不是 blob(目录、gitlink)时报错而不是列出 tree。
   // 不做 textconv / filter 转换(那需要 --textconv / --filters)。
   // exit 128 if HEAD doesn't contain the path (new / renamed-to file)
-  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `HEAD:${path}`]);
+  // 超过 MAX_FILE_BYTES 时只拿到开头部分:original 只用来区分"HEAD 里没有这个文件",显示内容来自 unified diff。
+  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `HEAD:${path}`], { maxOutputBytes: MAX_FILE_BYTES });
   return r.exitCode === 0 ? r.stdout : '';
 }
 
@@ -104,7 +113,12 @@ async function checkReadable(
   return results.includes('not-regular') ? 'not-regular' : null;
 }
 
-type WorktreeRead = { readonly content: string; readonly withheld?: WithheldReason };
+type WorktreeRead = { readonly content: string; readonly withheld?: WithheldReason; readonly truncated?: boolean };
+
+const worktreeFlags = (wt: WorktreeRead) => ({
+  ...(wt.withheld ? { withheld: wt.withheld } : {}),
+  ...(wt.truncated ? { modifiedTruncated: true as const } : {}),
+});
 
 async function readWorktreeFile(
   app: DiffApp,
@@ -114,7 +128,9 @@ async function readWorktreeFile(
   const withheld = await checkReadable(app, repoRoot, path);
   if (withheld !== null) return { content: '', withheld };
   // `--`:文件名可以以 `-` 开头(`-n`、`--help`),不能被 cat 当成选项
-  const r = await app.shell.exec('cat', ['--', path], { cwd: repoRoot });
+  const r = await app.shell.exec('cat', ['--', path], { cwd: repoRoot, maxOutputBytes: MAX_FILE_BYTES });
+  // 被截断时 cat 可能因写端关闭而以非 0 / 信号结束:已读到的开头部分照常使用
+  if (r.truncated) return { content: r.stdout, truncated: true };
   return { content: r.exitCode === 0 ? r.stdout : '' };
 }
 
@@ -147,7 +163,7 @@ export async function fetchDiff(
       modified: wt.content,
       unifiedDiff: '',
       isUntracked: true,
-      ...(wt.withheld ? { withheld: wt.withheld } : {}),
+      ...worktreeFlags(wt),
     };
   }
 
@@ -192,7 +208,7 @@ export async function fetchDiff(
     modified: wt.content,
     unifiedDiff: diffR.stdout,
     isUntracked: false,
-    ...(wt.withheld ? { withheld: wt.withheld } : {}),
+    ...worktreeFlags(wt),
   };
 }
 
