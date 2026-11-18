@@ -52,7 +52,7 @@ describe('tracked diff fetcher', () => {
     );
     expect(exec).toHaveBeenCalledWith(
       'cat',
-      ['src/a.ts'],
+      ['--', 'src/a.ts'],
       expect.objectContaining({ cwd: '/repo' }),
     );
     expect(exec).toHaveBeenCalledWith(

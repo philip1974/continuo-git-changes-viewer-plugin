@@ -2,7 +2,7 @@
 // 工作树全文读取(cat)不得跟随符号链接:真实 git + 真实文件系统构造恶意工作树,
 // 断言 workspace 之外的文件内容不会进入 DiffResult / 面板。
 import React from 'react';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -247,6 +247,71 @@ describe('diff symlink guard (fail-closed)', () => {
   });
 });
 
+describe('working-tree read: regular files only, file names are never options (real file system)', () => {
+  it('T10 tracked file replaced by a FIFO: `cat` would block until the host timeout; the plugin does not run it and withholds the content', async () => {
+    rmSync(join(repo, 'notes.txt'));
+    execFileSync('mkfifo', [join(repo, 'notes.txt')]);
+    // 证明 fixture:cat 这个路径不会自己结束
+    const blocked = spawnSync('cat', ['--', 'notes.txt'], { cwd: repo, timeout: 300 });
+    expect(blocked.status).toBeNull();
+
+    const { app, exec } = realApp();
+    const change: FileChange = { path: 'notes.txt', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' };
+    const diff = await fetchDiff(app, repo, change);
+
+    // git 自己拒绝这种文件(unsupported file type),关键是 cat 没有被启动——否则 fetchDiff 要等它超时
+    expect(catCalls(exec)).toEqual([]);
+    expect(diff).toMatchObject({ ok: false, reason: 'git-error', message: expect.stringContaining('unsupported file type') });
+    // 作为未跟踪条目(无 git diff 可依赖)时给出"非普通文件"的说明
+    expect(await fetchDiff(app, repo, untracked('notes.txt'))).toMatchObject({ ok: true, modified: '', withheld: 'not-regular' });
+    expect(catCalls(exec)).toEqual([]);
+  });
+
+  it('T11 an untracked directory entry (`dir/`) is not handed to cat either', async () => {
+    mkdirSync(join(repo, 'newdir'));
+    writeFileSync(join(repo, 'newdir', 'u.txt'), 'u\n');
+    const { app, exec } = realApp();
+    const change = (await scanStatus(app, repo)).find((c) => c.path === 'newdir/')!;
+    expect(change).toBeTruthy();
+
+    const diff = await fetchDiff(app, repo, change);
+
+    expect(catCalls(exec)).toEqual([]);
+    expect(diff).toMatchObject({ ok: true, isUntracked: true, modified: '', withheld: 'not-regular' });
+  });
+
+  it('T12 a file named like an option (`-n`, `--help`) is read as a file: cat gets `--` before the path', async () => {
+    writeFileSync(join(repo, '-n'), 'dash-n content\n');
+    writeFileSync(join(repo, '--help'), 'dash-help content\n');
+    // 证明 fixture:不加 `--` 时 cat 把它当选项,读不到文件内容
+    expect(spawnSync('cat', ['-n'], { cwd: repo, input: '', encoding: 'utf8' }).stdout).not.toContain('dash-n content');
+
+    const { app, exec } = realApp();
+    expect(await fetchDiff(app, repo, untracked('-n'))).toMatchObject({ ok: true, modified: 'dash-n content\n' });
+    expect(await fetchDiff(app, repo, untracked('--help'))).toMatchObject({ ok: true, modified: 'dash-help content\n' });
+    expect(catCalls(exec).map((c) => c[1])).toEqual([['--', '-n'], ['--', '--help']]);
+  });
+
+  it('T13 only an explicit isFile === true is read: a host stat without that field, or any non-file kind, withholds the content', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: SECRET, stderr: '', exitCode: 0, signal: null, timedOut: false, truncated: false });
+    for (const st of [
+      { size: 1, mtimeMs: 0, isFile: false, isDirectory: false, isSymlink: false },
+      { size: 1, mtimeMs: 0, isFile: false, isDirectory: true, isSymlink: false },
+      { size: 1, mtimeMs: 0, isDirectory: false, isSymlink: false },
+    ]) {
+      const lstat = vi.fn().mockResolvedValue(st);
+      const app = { shell: { exec }, fs: { lstat } } as unknown as CoPluginApp;
+      expect(await fetchDiff(app, '/repo', untracked('x.txt'))).toMatchObject({ ok: true, modified: '', withheld: 'not-regular' });
+    }
+    expect(catCalls(exec)).toEqual([]);
+
+    // 父目录是目录(isFile=false)不影响读取:只对末级要求普通文件
+    const lstat = vi.fn(async (p: string) => ({ size: 1, mtimeMs: 0, isFile: p.endsWith('c.txt'), isDirectory: !p.endsWith('c.txt'), isSymlink: false }));
+    const app = { shell: { exec }, fs: { lstat } } as unknown as CoPluginApp;
+    expect(await fetchDiff(app, '/repo', untracked('a/b/c.txt'))).toMatchObject({ ok: true, modified: SECRET });
+  });
+});
+
 describe('diff symlink guard (panel)', () => {
   it('T9 shows a notice instead of file content when content was withheld', () => {
     const store = createGitStore();
@@ -271,5 +336,15 @@ describe('diff symlink guard (panel)', () => {
     expect(
       screen.getByText('Could not verify that this path is not a symbolic link — contents are not shown'),
     ).toBeTruthy();
+
+    rerender(
+      <DiffView
+        store={store}
+        change={change}
+        diff={{ ok: true, path: 'new.txt', original: '', modified: '', unifiedDiff: '', isUntracked: true, withheld: 'not-regular' }}
+      />,
+    );
+    expect(screen.getByText('Not a regular file (directory, pipe or device) — contents are not shown')).toBeTruthy();
+    expect(screen.queryByText('(empty file)')).toBeNull();
   });
 });

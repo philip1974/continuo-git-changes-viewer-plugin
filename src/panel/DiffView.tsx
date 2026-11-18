@@ -39,6 +39,7 @@ function NewFileView({ content }: { readonly content: string }) {
 const WITHHELD_NOTICE = {
   symlink: 'Symbolic link — contents are not shown',
   unverified: 'Could not verify that this path is not a symbolic link — contents are not shown',
+  'not-regular': 'Not a regular file (directory, pipe or device) — contents are not shown',
 } as const;
 
 function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string }) {

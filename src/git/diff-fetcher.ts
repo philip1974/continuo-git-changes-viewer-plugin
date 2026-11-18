@@ -29,8 +29,9 @@ export type DiffResult =
 /**
  * - symlink:路径或其某级父目录是符号链接。
  * - unverified:无法确认不是符号链接(无 app.fs、scope 错误、路径越出仓库根等)。
+ * - not-regular:路径存在但不是普通文件(目录、FIFO、设备、socket)。
  */
-export type WithheldReason = 'symlink' | 'unverified';
+export type WithheldReason = 'symlink' | 'unverified' | 'not-regular';
 
 type DiffApp = Pick<CoPluginApp, 'shell'> & Partial<Pick<CoPluginApp, 'fs'>>;
 
@@ -64,8 +65,10 @@ async function gitShowHead(
 // - 检查做不了(无 app.fs / lstat、scope 错误、EACCES 等)→ 不读('unverified',fail-closed);
 //   只有明确的 ENOENT 才算"不是链接"(文件已不存在,cat 本来也读不到)。
 // - 路径是绝对路径或含 `..` 段(越出仓库根)→ 不读。
+// - 路径本身存在但不是普通文件 → 不读('not-regular'):`cat` 一个 FIFO 会一直阻塞到宿主的超时
+//   (自动刷新会反复发起),字符设备(/dev/zero 的硬链接等)会无限输出。
 // 检查与读取之间有极小的时间窗(本地攻击者可在其间替换文件),与显示性质的低风险相称,不再加码。
-async function checkNoSymlink(
+async function checkReadable(
   app: DiffApp,
   repoRoot: string,
   path: string,
@@ -78,17 +81,22 @@ async function checkNoSymlink(
   }
   const root = repoRoot.replace(/[\\/]+$/, '');
   const levels = segments.map((_, i) => `${root}/${segments.slice(0, i + 1).join('/')}`);
+  const last = levels.length - 1;
   const results = await Promise.all(
-    levels.map(async (level): Promise<WithheldReason | null> => {
+    levels.map(async (level, i): Promise<WithheldReason | null> => {
       try {
-        return (await fs.lstat(level)).isSymlink ? 'symlink' : null;
+        const st = await fs.lstat(level);
+        if (st.isSymlink) return 'symlink';
+        // 只认明确的 isFile === true;宿主没给出该字段也按"不是普通文件"处理(fail-closed)
+        return i === last && st.isFile !== true ? 'not-regular' : null;
       } catch (err) {
         return isNotFoundError(err) ? null : 'unverified';
       }
     }),
   );
   if (results.includes('symlink')) return 'symlink';
-  return results.includes('unverified') ? 'unverified' : null;
+  if (results.includes('unverified')) return 'unverified';
+  return results.includes('not-regular') ? 'not-regular' : null;
 }
 
 type WorktreeRead = { readonly content: string; readonly withheld?: WithheldReason };
@@ -98,9 +106,10 @@ async function readWorktreeFile(
   repoRoot: string,
   path: string,
 ): Promise<WorktreeRead> {
-  const withheld = await checkNoSymlink(app, repoRoot, path);
+  const withheld = await checkReadable(app, repoRoot, path);
   if (withheld !== null) return { content: '', withheld };
-  const r = await app.shell.exec('cat', [path], { cwd: repoRoot });
+  // `--`:文件名可以以 `-` 开头(`-n`、`--help`),不能被 cat 当成选项
+  const r = await app.shell.exec('cat', ['--', path], { cwd: repoRoot });
   return { content: r.exitCode === 0 ? r.stdout : '' };
 }
 

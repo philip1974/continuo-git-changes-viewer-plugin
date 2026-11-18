@@ -24,3 +24,12 @@ scope error, any failure other than an explicit ENOENT). The git unified diff
   `.git` directory are never read: `fetchDiff` fails without spawning anything
   (see `path-utils`).
 - T9: the panel shows a notice instead of file content when content was withheld.
+
+The same pre-read check also keeps `cat` away from anything that is not a
+regular file, and the path is passed after `--`:
+
+- T10: tracked file replaced by a FIFO — `cat` would block until the host
+  timeout (and auto-refresh would start it again); not run, content withheld.
+- T11: an untracked directory entry is not handed to `cat`.
+- T12: files named `-n` / `--help` are read as files (`cat -- <path>`).
+- T13: only an explicit `isFile === true` on the last path level is read.

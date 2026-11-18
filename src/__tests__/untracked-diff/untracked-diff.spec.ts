@@ -46,7 +46,7 @@ describe('untracked diff fetcher', () => {
     });
     expect(exec).toHaveBeenCalledWith(
       'cat',
-      ['new.txt'],
+      ['--', 'new.txt'],
       expect.objectContaining({ cwd: '/repo' }),
     );
   });
