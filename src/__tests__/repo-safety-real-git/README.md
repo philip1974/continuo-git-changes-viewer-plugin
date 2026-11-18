@@ -4,6 +4,21 @@ Builds throwaway repositories with a real `git` binary whose config points each
 executable setting at a script that drops a marker file, then drives the
 plugin's git helpers.
 
+Config-defined hooks (new in git 2.54; the per-event switch in 2.55). The
+verdict assertions run on every git; the "it really executes" / "the switch
+really stops it" halves run only when the git under test documents the keys
+(`git help --config`). Verified by running this suite with git 2.56.1 on
+`PATH` in addition to the system git 2.50.1:
+
+- R46: `[hook "evil"]` in `.git/config` → restricted (`hook.evil.event`,
+  `hook.evil.command`), guarded ops run nothing, `detectRepoHooks` → present.
+  git ≥ 2.54: `git -c core.hooksPath=/dev/null add` does execute it. git ≥
+  2.55: with the guard absent, the fixed `-c hook.<event>.enabled=false`
+  arguments alone keep every plugin read / write op from executing it.
+- R47: the same hook in the user's global config → trusted, no commit prompt;
+  git ≥ 2.55: plain `git add` runs it, the plugin's stage / unstage / discard /
+  refresh do not.
+
 - R1: fixture sanity — plain `git status` does run the hostile clean filter.
 - R2: hostile filter/textconv/diff.external/gpg+showSignature/fsmonitor → the
   repo is restricted; status/diff/show/log/add/commit through the plugin leave

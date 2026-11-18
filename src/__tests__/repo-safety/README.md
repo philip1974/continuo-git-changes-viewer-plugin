@@ -24,6 +24,11 @@ restricted verdict at one step skips the later ones.
      upload/receive pack, protocol.*.allow, trailer commands, git-lfs
      extensions/custom transfers, gc.recentObjectsHook, non-boolean
      core.fsmonitor, `diff.submodule` other than short/log) → restricted.
+   - The whole `hook.*` section → restricted. Since git 2.54 a hook can be
+     defined in config (`hook.<name>.command` + `hook.<name>.event`); git runs
+     it on the event without consulting the hooks directory, so the
+     `core.hooksPath=/dev/null` override does not stop it (verified with git
+     2.56.1: it fires on `add` and on a `status` that refreshes the index).
    - Redirect keys → restricted: `core.worktree` (any value) and `core.bare`
      unless false.
 2. **Layout** (defense in depth, independent of the key list) — one

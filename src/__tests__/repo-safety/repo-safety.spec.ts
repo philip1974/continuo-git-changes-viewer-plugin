@@ -110,6 +110,15 @@ describe('isUnsafeConfigEntry', () => {
     'lfs.extension.foo.clean',
     'lfs.customtransfer.foo.path',
     'gc.recentObjectsHook',
+    // 配置式 hooks(git >= 2.54):不经 hooks 目录,core.hooksPath=/dev/null 管不到;整个 hook.* 段受限
+    'hook.x.command',
+    'hook.x.event',
+    'hook.x.enabled',
+    'hook.x.parallel',
+    'hook.pre-commit.enabled',
+    'hook.post-index-change.jobs',
+    'hook.jobs',
+    'Hook.My.Linter.Command',
   ])('T2 flags executable key %s in local scope', (key) => {
     expect(isUnsafeConfigEntry(local(key))).toBe(true);
     expect(isUnsafeConfigEntry({ scope: 'worktree', key, value: 'x' })).toBe(true);

@@ -22,9 +22,9 @@ keys git gives no switch for.
 
 | Handling | Keys | Count |
 | --- | --- | ---: |
-| **Restricted** — repository is not operated on | `filter.<drv>.clean/smudge/process`, `diff.<drv>.textconv/command`, `diff.external`, `merge.<drv>.driver`, `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `core.askPass`, `core.gitProxy`, `core.alternateRefsCommand`, `uploadpack.packObjectsHook`, `remote.<n>.uploadpack/receivepack`, `protocol.<n>.allow`, `trailer.<k>.cmd/command`, `gc.recentObjectsHook`, `core.worktree`, `core.bare` (unless false); by value: `core.fsmonitor` (non-boolean), `diff.submodule` (other than short/log); plus git-lfs `lfs.extension.*` / `lfs.customtransfer.*` | 21 |
+| **Restricted** — repository is not operated on | `filter.<drv>.clean/smudge/process`, `diff.<drv>.textconv/command`, `diff.external`, `merge.<drv>.driver`, `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `core.askPass`, `core.gitProxy`, `core.alternateRefsCommand`, `uploadpack.packObjectsHook`, `remote.<n>.uploadpack/receivepack`, `protocol.<n>.allow`, `trailer.<k>.cmd/command`, `gc.recentObjectsHook`, `hook.*` (config-defined hooks, git ≥ 2.54), `core.worktree`, `core.bare` (unless false); by value: `core.fsmonitor` (non-boolean), `diff.submodule` (other than short/log); plus git-lfs `lfs.extension.*` / `lfs.customtransfer.*` | 21 |
 | **Pinned with `-c`** (every command) | `core.fsmonitor=false`, `log.showSignature=false`, `submodule.recurse=false`, `diff.submodule=short`, `status.submoduleSummary=false`, `maintenance.auto=false`, `gc.auto=0`, `core.protectHFS=true`, `core.protectNTFS=true`, `i18n.commitEncoding=UTF-8`; `fsmonitor.*` (daemon never started) | 12 |
-| **Pinned with `-c`** (every command but `commit`, whose `-c` values reach hooks) | `protocol.allow=never` (also on a commit whose hooks were not confirmed), `core.hooksPath=/dev/null`, `status.renames=true`, `diff.renames=true`, `color.ui=false`, `color.diff=false`, `diff.noprefix=false`, `diff.mnemonicPrefix=false`, `diff.srcPrefix=a/`, `diff.dstPrefix=b/`, `diff.context=3`, `diff.interHunkContext=0`, `diff.suppressBlankEmpty=false`, `diff.relative=false`, `i18n.logOutputEncoding=UTF-8`, `apply.ignoreWhitespace=no` | 16 |
+| **Pinned with `-c`** (every command but `commit`, whose `-c` values reach hooks) | `protocol.allow=never` (also on a commit whose hooks were not confirmed), `core.hooksPath=/dev/null`, `hook.<event>.enabled=false` for every githooks(5) event (git ≥ 2.55), `status.renames=true`, `diff.renames=true`, `color.ui=false`, `color.diff=false`, `diff.noprefix=false`, `diff.mnemonicPrefix=false`, `diff.srcPrefix=a/`, `diff.dstPrefix=b/`, `diff.context=3`, `diff.interHunkContext=0`, `diff.suppressBlankEmpty=false`, `diff.relative=false`, `i18n.logOutputEncoding=UTF-8`, `apply.ignoreWhitespace=no` | 16 |
 | **Never triggered** — auto-maintenance is pinned off | remaining `gc.*`, `maintenance.*` | 31 |
 | **Overridden by a fixed flag** | `diff.ignoreSubmodules`, `submodule.<n>.ignore` (`--ignore-submodules=dirty`; a `-c` would lose to `submodule.<n>.ignore`); `core.pager`, `pager.<cmd>` (`--no-pager`); `diff.trustExitCode`, `diff.<drv>.trustExitCode/cachetextconv` (`--no-ext-diff --no-textconv`); `apply.whitespace` (`--whitespace=nowarn`); `format.pretty` (explicit `--pretty`); `status.branch/short/showStash/aheadBehind/relativePaths/displayCommentPrefix`, `column.*` (`--porcelain=v1 -z`); remaining `color.*` (`--no-color`, porcelain, `commit --quiet`); `commit.status/verbose/template` (`-F -`, no editor) | 104 |
 | **Overridden by environment** | `core.editor`, `sequence.editor` (`GIT_EDITOR=:`) | 2 |
@@ -51,6 +51,14 @@ Notes on the last two rows (keys whose names look dangerous):
   repository, and do not start for the single path the plugin checks out.
 - `core.hooksPath` / `.git/hooks`: disabled for everything but `commit`;
   commit asks for confirmation (`commit-hooks-confirm`).
+- `hook.*` (not in the 2.50.1 list; added by git 2.54, extended in 2.55 /
+  2.56): `hook.<name>.command` runs on `hook.<name>.event` without the hooks
+  directory, so `core.hooksPath=/dev/null` does not cover it. Restricted in
+  repository scope; for the user's own global ones every non-commit command
+  carries `-c hook.<event>.enabled=false` (git ≥ 2.55; git has no global off
+  switch). Sources: `Documentation/config/hook.adoc`, `git-hook(1)`, `hook.c`
+  at v2.54.0 / v2.56.1; behaviour verified with git 2.56.1
+  (`repo-safety-real-git` R46–R47).
 - `extensions.partialClone` and promisor remotes are deliberately not
   restricted (blobless clones are common); the network block keeps missing
   objects missing, and `commit --quiet` avoids reading them at all.
@@ -70,7 +78,7 @@ Not config, but found by the same audit:
   checked with `GIT_TRACE`).
 
 Real-git assertions per group: `repo-safety-real-git` R2–R5 (restricted keys,
-first pins), R7–R15 (hooks), R14 / R35–R38 (network), R32–R34 (submodules,
+first pins), R7–R15, R46–R47 (hooks), R14 / R35–R38 (network), R32–R34 (submodules,
 maintenance), R39–R41 (pathspecs), R43–R44 (output pins), R45 (pager, editor,
 alias, trace2, help / tool commands).
 

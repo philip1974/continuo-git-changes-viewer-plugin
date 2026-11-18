@@ -54,6 +54,7 @@ import { isNotFoundError } from './fs-errors';
 //   插件的 stage / unstage / discard / 刷新不运行任何 hook;commit 照常运行用户 hooks,但提交前
 //   由 repo-hooks 检测仓库 hooks / local core.hooksPath 并要求用户再次确认。husky 等工具普遍设置
 //   local core.hooksPath,因此不把它列为受限键(否则会误伤正常仓库)。
+//   配置式 hooks(hook.*,git >= 2.54)不走 hooks 目录,上面的中和对它无效 → 列为受限键(见列表末尾)。
 //
 // 评估后不列入的"指向外部文件"的键(实测不泄露内容、不越界读写,见 R30):
 // - core.excludesFile / core.attributesFile / diff.orderFile / mailmap.file:只按模式 / 映射解析,
@@ -82,6 +83,11 @@ const UNSAFE_KEY_PATTERNS: readonly RegExp[] = [
   /^lfs\.extension\..+\.(clean|smudge)$/i,
   /^lfs\.customtransfer\..+\.path$/i,
   /^gc\.recentobjectshook$/i,
+  // 配置式 hooks(git >= 2.54):`hook.<name>.command` + `hook.<name>.event` 让 git 在对应事件执行任意命令,
+  // 不经 hooks 目录,core.hooksPath=/dev/null 管不到(实测 git 2.56.1:add、刷新 index 的 status 都触发)。
+  // 整个 hook.* 段受限:`hook.<event>.enabled` / `hook.jobs` 等本身不执行程序,但它们只在配置式 hooks
+  // 存在时才有意义,且仓库不该能改写用户全局 hooks 的开关。
+  /^hook\./i,
 ];
 
 // core.fsmonitor=true/false 是内置 daemon 开关(Scalar 等会在 local 设置),只有非布尔值

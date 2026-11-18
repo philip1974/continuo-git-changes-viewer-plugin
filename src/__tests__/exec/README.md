@@ -17,6 +17,16 @@ invocation against executable settings in an untrusted repository config:
   `restore`, `reset`, `checkout`) otherwise run `post-index-change` /
   `post-checkout` hooks planted in an untrusted `.git/hooks`. `commit` keeps
   hooks (see `commit-hooks-confirm`).
+- Config-defined hooks (git ≥ 2.54: `hook.<name>.command` + `hook.<name>.event`)
+  do not live in the hooks directory, so `core.hooksPath` has no effect on
+  them. Every command except `commit` therefore also carries
+  `-c hook.<event>.enabled=false` for each event of githooks(5)
+  (`KNOWN_HOOK_EVENTS`; the per-event switch exists since git 2.55 and turns
+  off configured and directory hooks alike — git has no single switch or
+  environment variable for all of them). This keeps "no hook runs for anything
+  but commit" true for the user's own global / system configured hooks;
+  repository-scope `hook.*` keys are restricted outright (`repo-safety`). On
+  git 2.54 the switch does not exist yet and the arguments are inert.
 - Output pins (`PINNED_OUTPUT_CONFIG`, every command except `commit`, whose
   output is not parsed and whose `-c` values reach hooks): `status.renames=true`,
   `diff.renames=true` (the file list must not change shape with repository
@@ -48,6 +58,6 @@ invocation against executable settings in an untrusted repository config:
 
 T1 status argv + env. T2 caller env preserved, hardening values win. T3 diff/show/log
 flags. T3b nested-repository pins/flags on every subcommand. T4 commit keeps hooks enabled, `--quiet`, network blocked unless `repoHooksConfirmed`. T4b the option affects commit only. T5 guard refusal skips spawn.
-T6 throwing guard fails closed. T7 passing guard runs the hardened command. T8 every non-commit subcommand disables hooks.
+T6 throwing guard fails closed. T7 passing guard runs the hardened command. T8 every non-commit subcommand disables hooks. T8b … and switches off every hook event; commit carries no `hook.*` argument.
 T9 `GIT_ALLOW_PROTOCOL` is empty (caller env cannot re-enable it) and unset only for a hooks-confirmed commit.
 T11 literal pathspecs for every non-commit call. T12 output pins. T10 `stripTrailingNewline` (used for path-valued git output instead of `trim()`) removes one trailing LF/CRLF only.

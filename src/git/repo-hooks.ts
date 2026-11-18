@@ -11,6 +11,10 @@ import { parseScopedConfigList, PROBE_ARGS } from './repo-safety';
 //   来自 local / worktree(仓库可控)→ 视为有 hooks(不去列目录:相对路径语义复杂,且 husky 等
 //   常见设置本来就意味着有 hooks)。来自 global / system → 用户自己的 hooks 目录,可信,且 git
 //   此时不读 .git/hooks,判为无。
+// - 配置式 hooks(git >= 2.54,`hook.<name>.command` / `.event`,不经 hooks 目录、不受 core.hooksPath 影响):
+//   local / worktree 作用域出现任何 `hook.*` 键 → 视为有 hooks,先于 hooksPath 判断(全局 hooksPath 不能
+//   让它们"消失")。repo-safety 已把这些键列为受限(根本到不了提交),这里是同一判断的第二道。
+//   global / system 的配置式 hooks 是用户自己的,与全局 core.hooksPath 一样不提示。
 // - 未设置 hooksPath:hooks 在 `<git-common-dir>/hooks`(linked worktree / .git 为 gitdir 文件时
 //   common dir 不在 `<root>/.git`,故用 rev-parse 定位)。先 lstat(不跟随链接)hooks 路径:
 //   · 只有明确的 ENOENT 才判为无(git 不会跑任何 hook)。
@@ -24,7 +28,7 @@ export type RepoHooks =
   | { readonly kind: 'none' }
   | {
       readonly kind: 'present';
-      /** 检测到的 hook 文件名(hooksPath 情形为空)。 */
+      /** 检测到的 hook 文件名(hooksPath 情形为空);配置式 hooks 为其配置键(`hook.<name>.command` 等)。 */
       readonly hooks: readonly string[];
       /** 仓库 local / worktree 设置的 core.hooksPath;未设置为 null。 */
       readonly hooksPath: string | null;
@@ -45,7 +49,12 @@ export async function detectRepoHooks(
   if (!config || config.exitCode !== 0 || config.truncated || config.timedOut) {
     return { kind: 'unknown', reason: 'could not read git config' };
   }
-  const hooksPathEntries = parseScopedConfigList(config.stdout).filter(
+  const entries = parseScopedConfigList(config.stdout);
+  const configured = entries.filter((e) => LOCAL_SCOPES.has(e.scope) && /^hook\./i.test(e.key));
+  if (configured.length > 0) {
+    return { kind: 'present', hooks: [...new Set(configured.map((e) => e.key))].sort(), hooksPath: null };
+  }
+  const hooksPathEntries = entries.filter(
     (e) => e.scope !== 'command' && e.key.toLowerCase() === 'core.hookspath',
   );
   const effective = hooksPathEntries[hooksPathEntries.length - 1];

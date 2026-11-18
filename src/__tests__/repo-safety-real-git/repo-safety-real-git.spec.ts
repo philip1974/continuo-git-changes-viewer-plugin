@@ -1462,3 +1462,84 @@ describe('config enumeration: keys neutralized by fixed arguments / environment,
     expect(marks()).toEqual(['trace2-global']);
   });
 });
+
+// 配置式 hooks 是 git 2.54 的新功能(事件级开关 hook.<event>.enabled 是 2.55)。受限判定对任何 git 版本都断言;
+// "不加防护确实会执行"与"事件开关确实关得掉"只有运行测试的 git 支持时才可能断言——能力以 git 自己的
+// `git help --config` 为准,不比较版本号。
+function gitDocumentsKey(key: string): boolean {
+  return execFileSync('git', ['help', '--config'], { env: ENV, encoding: 'utf8' }).split('\n').includes(key);
+}
+
+describe('config-defined hooks (hook.<name>.command / .event, git >= 2.54) ignore core.hooksPath (real git)', () => {
+  const plantConfigHook = (file: string, name: string) =>
+    appendFileSync(
+      file,
+      `[hook "${name}"]\n\tevent = post-index-change\n\tevent = post-checkout\n\tevent = reference-transaction\n\tcommand = touch "${join(markDir, name)}"\n`,
+    );
+
+  it('R46 hook.* in the repository config: restricted, detectRepoHooks reports present, guarded write ops run nothing; on a git that implements them, core.hooksPath=/dev/null alone does not stop them and the per-event switch does', async () => {
+    plantConfigHook(join(repo, '.git', 'config'), 'evil');
+
+    const guarded = realApp();
+    const { guard } = installRepoSafetyGuard(guarded);
+    const verdict = await guard.check(repo, { fresh: true });
+    expect(verdict).toMatchObject({ kind: 'restricted', reason: 'unsafe-config' });
+    expect(verdict.kind === 'restricted' && verdict.keys).toEqual(['hook.evil.event', 'hook.evil.command']);
+    await runEverything(guarded);
+    for (const [, op] of WRITE_OPS) expect((await op(guarded)).ok).toBe(false);
+    expect(marks()).toEqual([]);
+
+    // 守卫之外(纵深):提交前的 hooks 检测也把它算作有 hooks
+    expect(await detectRepoHooks(realApp(), repo)).toEqual({
+      kind: 'present',
+      hooks: ['hook.evil.command', 'hook.evil.event'],
+      hooksPath: null,
+    });
+
+    if (gitDocumentsKey('hook.<friendly-name>.command')) {
+      // 证明缺口:只有 core.hooksPath=/dev/null(修复前的全部防护)时,git add 执行仓库 config 里的命令
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      git(repo, '-c', `core.hooksPath=${DISABLED_HOOKS_PATH}`, 'add', 'f.txt');
+      expect(marks()).toEqual(['evil']);
+      clearMarks();
+    }
+    if (gitDocumentsKey('hook.<event>.enabled')) {
+      // 纵深:不经守卫,仅靠固定参数里的事件开关,插件的全部读写操作也不执行它
+      const unguarded = realApp();
+      for (const [name, op] of WRITE_OPS) {
+        git(repo, '-c', 'hook.evil.enabled=false', 'reset', '-q', '--hard');
+        clearMarks();
+        expect({ name, ok: (await op(unguarded)).ok }).toEqual({ name, ok: true });
+        expect({ name, marks: marks() }).toEqual({ name, marks: [] });
+      }
+      await runEverything(unguarded);
+      expect(marks()).toEqual([]);
+    }
+  });
+
+  it('R47 the user\'s own config-defined hooks (global scope): repository stays trusted, no prompt before commit, and — like directory hooks under a global core.hooksPath — they do not run for stage / unstage / discard / refresh where git has the per-event switch', async () => {
+    const globalCfg = join(base, 'global.cfg');
+    plantConfigHook(globalCfg, 'mine');
+    process.env.GIT_CONFIG_GLOBAL = globalCfg;
+
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('trusted');
+    expect(await detectRepoHooks(app, repo)).toEqual({ kind: 'none' });
+
+    if (gitDocumentsKey('hook.<event>.enabled')) {
+      // fixture:不带事件开关时它确实会跑
+      appendFileSync(join(repo, 'f.txt'), 'zero\n');
+      execFileSync('git', ['add', 'f.txt'], { cwd: repo, env: { ...process.env } });
+      expect(marks()).toEqual(['mine']);
+      for (const [name, op] of WRITE_OPS) {
+        execFileSync('git', ['-c', 'hook.mine.enabled=false', 'reset', '-q', '--hard'], { cwd: repo, env: { ...process.env } });
+        clearMarks();
+        expect({ name, ok: (await op(app)).ok }).toEqual({ name, ok: true });
+        expect({ name, marks: marks() }).toEqual({ name, marks: [] });
+      }
+      await runEverything(app);
+      expect(marks()).toEqual([]);
+    }
+  });
+});

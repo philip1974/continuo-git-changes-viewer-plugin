@@ -111,7 +111,31 @@ const NO_NETWORK_ARGS: readonly string[] = ['-c', 'protocol.allow=never'];
 
 /** 指向一个不可能是目录的路径,使 git 找不到任何 hook(见上方说明)。 */
 export const DISABLED_HOOKS_PATH = '/dev/null';
-const NO_HOOKS_ARGS: readonly string[] = ['-c', `core.hooksPath=${DISABLED_HOOKS_PATH}`];
+
+// 配置式 hooks(git >= 2.54):`[hook "x"] event = post-index-change` + `command = <任意命令>` 写在 config 里,
+// git 在对应事件执行该命令,**不经 hooks 目录**——core.hooksPath=/dev/null 对它无效(实测 git 2.56.1:
+// 仓库 config 里的这种 hook 在 add 以及会刷新 index 的 status 上都执行)。仓库作用域的 `hook.*` 由
+// repo-safety 列为受限键(主防线,对 2.54 起的所有版本有效);这里是纵深,同时让"非 commit 子命令
+// 不运行任何 hook"对用户自己 global / system config 里的配置式 hooks 同样成立(与全局 core.hooksPath
+// 的目录式 hook 被 /dev/null 禁掉一致):git >= 2.55 的事件级开关 `hook.<event>.enabled=false` 关掉该事件的
+// 全部 hook(配置式与目录式),命令行作用域最后解析,仓库 config 无法再打开(实测)。git 没有"关掉全部
+// 配置式 hooks"的总开关或环境变量(hook.c 无此逻辑),只能逐事件列出;列表取自 git 2.56 githooks(5)。
+// git 2.54 没有事件级开关:这些 `-c` 在那里只是给一个不存在的 hook 名设 enabled(无效果,也不报错),
+// 全局配置式 hooks 在 2.54 上照常运行(它们是用户自己的)。更早的 git 完全不读 hook.*。
+export const KNOWN_HOOK_EVENTS: readonly string[] = [
+  'applypatch-msg', 'pre-applypatch', 'post-applypatch', 'pre-commit', 'pre-merge-commit',
+  'prepare-commit-msg', 'commit-msg', 'post-commit', 'pre-rebase', 'post-checkout', 'post-merge',
+  'pre-push', 'pre-receive', 'update', 'proc-receive', 'post-receive', 'post-update',
+  'reference-transaction', 'push-to-checkout', 'pre-auto-gc', 'post-rewrite', 'sendemail-validate',
+  'fsmonitor-watchman', 'p4-changelist', 'p4-prepare-changelist', 'p4-post-changelist',
+  'p4-pre-submit', 'post-index-change',
+];
+
+const NO_HOOKS_ARGS: readonly string[] = [
+  '-c',
+  `core.hooksPath=${DISABLED_HOOKS_PATH}`,
+  ...KNOWN_HOOK_EVENTS.flatMap((event) => ['-c', `hook.${event}.enabled=false`]),
+];
 
 /** 会运行仓库 hooks 的子命令:不禁用 hooks(提交前另行确认);仅在用户确认运行仓库 hooks 后才不断网。 */
 export const HOOK_RUNNING_SUBCOMMANDS: ReadonlySet<string> = new Set(['commit']);

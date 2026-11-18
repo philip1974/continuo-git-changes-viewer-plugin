@@ -98,6 +98,34 @@ describe('detectRepoHooks', () => {
     expect(await detectRepoHooks(both.app, '/repo')).toMatchObject({ kind: 'present', hooksPath: 'evil' });
   });
 
+  it('H16 config-defined hooks (hook.<name>.*, git >= 2.54) in local / worktree config → present, even when a global core.hooksPath would otherwise mean none; global ones are user-owned', async () => {
+    for (const scope of ['local', 'worktree']) {
+      const { app, listDir } = mockApp({
+        config: ok(
+          cfg(
+            ['global', 'core.hookspath', '~/hooks'],
+            [scope, 'hook.lint.event', 'pre-commit'],
+            [scope, 'hook.lint.command', 'sh ./x.sh'],
+            [scope, 'hook.lint.event', 'post-commit'],
+            PLUGIN_OVERRIDE,
+            ['command', 'hook.pre-commit.enabled', 'false'],
+          ),
+        ),
+      });
+      expect(await detectRepoHooks(app, '/repo')).toEqual({
+        kind: 'present',
+        hooks: ['hook.lint.command', 'hook.lint.event'],
+        hooksPath: null,
+      });
+      expect(listDir).not.toHaveBeenCalled();
+    }
+    const userOwned = mockApp({
+      config: ok(cfg(['global', 'hook.lint.event', 'pre-commit'], ['system', 'hook.lint.command', 'x'], ['command', 'hook.pre-commit.enabled', 'false'])),
+      listDir: async () => [],
+    });
+    expect(await detectRepoHooks(userOwned.app, '/repo')).toEqual({ kind: 'none' });
+  });
+
   it('H5 git config / rev-parse failures and missing app.fs fail closed to unknown', async () => {
     expect((await detectRepoHooks(mockApp({ config: fail() }).app, '/repo')).kind).toBe('unknown');
     expect((await detectRepoHooks(mockApp({ config: { ...ok(''), truncated: true } }).app, '/repo')).kind).toBe('unknown');

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildGitArgs, buildGitEnv, gitExec, registerGitGuard, stripTrailingNewline } from '../../git/exec';
+import { buildGitArgs, buildGitEnv, gitExec, KNOWN_HOOK_EVENTS, registerGitGuard, stripTrailingNewline } from '../../git/exec';
 import type { CoPluginApp } from '../../sdk/types';
 
 function makeApp() {
@@ -43,9 +43,19 @@ const GLOBALS = [
   '-c',
   'i18n.commitEncoding=UTF-8',
 ];
+// git 2.56 的 githooks(5) 全部事件(写死在测试里:源码里的列表被删改时这里会红)
+const HOOK_EVENTS = [
+  'applypatch-msg', 'pre-applypatch', 'post-applypatch', 'pre-commit', 'pre-merge-commit',
+  'prepare-commit-msg', 'commit-msg', 'post-commit', 'pre-rebase', 'post-checkout', 'post-merge',
+  'pre-push', 'pre-receive', 'update', 'proc-receive', 'post-receive', 'post-update',
+  'reference-transaction', 'push-to-checkout', 'pre-auto-gc', 'post-rewrite', 'sendemail-validate',
+  'fsmonitor-watchman', 'p4-changelist', 'p4-prepare-changelist', 'p4-post-changelist',
+  'p4-pre-submit', 'post-index-change',
+];
 const NO_NETWORK = [
   '-c', 'protocol.allow=never',
   '-c', 'core.hooksPath=/dev/null',
+  ...HOOK_EVENTS.flatMap((e) => ['-c', `hook.${e}.enabled=false`]),
   '-c', 'status.renames=true',
   '-c', 'diff.renames=true',
   '-c', 'color.ui=false',
@@ -170,6 +180,23 @@ describe('gitExec hardened shell wrapper', () => {
       expect(i).toBeGreaterThan(0);
       expect(args[i - 1]).toBe('-c');
       expect(i).toBeLessThan(args.indexOf(sub[0]!));
+    }
+  });
+
+  it('T8b every non-commit subcommand switches off every hook event (config-defined hooks, git >= 2.54, ignore core.hooksPath); commit does not', () => {
+    expect([...KNOWN_HOOK_EVENTS]).toEqual(HOOK_EVENTS);
+    for (const sub of [['add', '--', 'a'], ['apply', '--cached', '-'], ['restore', '--staged', '--', 'a'],
+      ['checkout', '--', 'a'], ['status'], ['diff'], ['config', '--list'], ['help', '--config']]) {
+      const args = buildGitArgs(sub);
+      for (const event of HOOK_EVENTS) {
+        const i = args.indexOf(`hook.${event}.enabled=false`);
+        expect(i, `${sub[0]} ${event}`).toBeGreaterThan(0);
+        expect(args[i - 1]).toBe('-c');
+        expect(i).toBeLessThan(args.indexOf(sub[0]!));
+      }
+    }
+    for (const opts of [{}, { repoHooksConfirmed: true }]) {
+      expect(buildGitArgs(['commit', '-F', '-'], opts).filter((a) => /^hook\./.test(a))).toEqual([]);
     }
   });
 
