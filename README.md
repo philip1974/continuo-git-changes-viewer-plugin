@@ -69,6 +69,15 @@ success, the plugin clears the draft, refreshes the working tree, and reads the
 real subject from `git log -1 --pretty=%s` so commit-msg hook rewrites are
 reflected in the toast.
 
+Right before committing, the plugin checks that the repository is still in
+the state the panel last read (the same fingerprint the auto-refresh uses:
+`git status --porcelain=v2`, i.e. what is staged). If something changed in
+between — for example you staged another edit in a terminal — nothing is
+committed: the panel refreshes and asks you to review and commit again. The
+same check runs before an amend. A very short window remains between that
+check and git reading the index for the commit (two process starts); a change
+landing exactly there is committed without having been shown.
+
 ### Amend
 
 The commit editor can amend the last commit. Enable "Amend last commit" to load

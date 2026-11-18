@@ -146,7 +146,8 @@ describe('inoperable entries: whole panel', () => {
     });
     const app = { shell: { exec }, fs: { lstat, listDir: vi.fn(async () => []) }, notifications: { show: vi.fn() } } as unknown as CoPluginApp;
     const store = createGitStore({
-      load: async () => ({ repoRoot: '/repo', changes }),
+      // 指纹:exec 对 status 的回答是空输出,store 里放同一个值(提交前确认通过)
+      load: async () => ({ repoRoot: '/repo', changes, statusFingerprint: '' }),
       fetchDiff: (repoRoot, change, mode) => fetchDiff(app, repoRoot, change, mode),
     });
     return { app, exec, lstat, store };

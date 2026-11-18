@@ -73,6 +73,7 @@ describe('commit integration', () => {
         return {
           repoRoot: '/repo',
           changes: loadCount <= 1 ? [partial] : [afterCommit],
+          statusFingerprint: 'fp', // 与下面 exec 对指纹 status 的回答相同:提交前确认通过
         };
       },
     });
@@ -85,6 +86,7 @@ describe('commit integration', () => {
     const exec = vi.fn(
       async (_cmd: string, args: readonly string[]) => {
         if (args.includes('--git-common-dir')) return result({ exitCode: 0, stdout: '.git\n' });
+        if (args.includes('--porcelain=v2')) return result({ exitCode: 0, stdout: 'fp' });
         if (args.includes('commit')) return result({ exitCode: 0 });
         if (args.includes('log')) return result({ exitCode: 0, stdout: 'subject\n' });
         return result({ exitCode: 0 });

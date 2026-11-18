@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { fetchDiff } from '../../git/diff-fetcher';
 import { readStatusHash } from '../../git/status-hash';
 import { scanStatus } from '../../git/status-scanner';
+import { REPO_CHANGED_MESSAGE } from '../../panel/CommitEditor';
 import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CoPluginApp, Disposable, PanelApi, PanelVisibilityEvent, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 import type { AutoRefreshTimerOpts } from '../../state/auto-refresh-timer';
@@ -50,7 +51,7 @@ function realApp(intervalSec: number): CoPluginApp {
   return {
     shell: { exec },
     fs: { lstat, stat, listDir },
-    dataStore: { read: async () => ({ autoRefreshIntervalSec: intervalSec }), write: async () => {} },
+    dataStore: { read: async () => ({ autoRefresh: { intervalSec } }), write: async () => {} },
   } as unknown as CoPluginApp;
 }
 
@@ -149,6 +150,50 @@ describe('the panel shows what a commit would take after it was hidden (real pan
     fireEvent.click(commit);
     await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'), { timeout: 4000 });
     expect(git(repo, 'cat-file', 'blob', 'HEAD:f')).toBe('v2 not reviewed\n');
+    await settled(store);
+  });
+});
+
+describe('a commit takes what the panel shows, or nothing (real panel, real git)', () => {
+  const clickCommit = async () => {
+    const commit = (await screen.findByRole('button', { name: 'Commit staged changes' })) as HTMLButtonElement;
+    await waitFor(() => expect(commit.disabled).toBe(false));
+    fireEvent.click(commit);
+  };
+
+  it('P2 auto-refresh off: staged v1 is shown, the file is staged again in a terminal, Commit is clicked — nothing is committed, the panel says the repository changed and now shows v2; a second click commits exactly that', async () => {
+    writeFileSync(join(repo, 'f'), 'v1 reviewed\n');
+    git(repo, 'add', 'f');
+    const { store, timer, shown } = mount(0);
+    await waitFor(() => expect(shown()).toBe('staged:v1 reviewed\n'));
+    expect(timer.starts).toBe(0);
+
+    writeFileSync(join(repo, 'f'), 'v2 not reviewed\n');
+    git(repo, 'add', 'f');
+    store.getState().setCommitMessage('msg');
+    await clickCommit();
+
+    await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'warn', message: REPO_CHANGED_MESSAGE, dismissable: true }), { timeout: 4000 });
+    expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('init');
+    await waitFor(() => expect(shown()).toBe('staged:v2 not reviewed\n'), { timeout: 4000 });
+    expect(store.getState().commitMessage).toBe('msg');
+
+    await clickCommit();
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'), { timeout: 4000 });
+    expect(git(repo, 'cat-file', 'blob', 'HEAD:f')).toBe('v2 not reviewed\n');
+    await settled(store);
+  });
+
+  it('P3 nothing changed in between: the first click commits what is shown', async () => {
+    writeFileSync(join(repo, 'f'), 'v1 reviewed\n');
+    git(repo, 'add', 'f');
+    const { store, shown } = mount(0);
+    await waitFor(() => expect(shown()).toBe('staged:v1 reviewed\n'));
+    store.getState().setCommitMessage('msg');
+    await clickCommit();
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'), { timeout: 4000 });
+    expect(git(repo, 'cat-file', 'blob', 'HEAD:f')).toBe('v1 reviewed\n');
+    expect(store.getState().banner).toBeNull();
     await settled(store);
   });
 });

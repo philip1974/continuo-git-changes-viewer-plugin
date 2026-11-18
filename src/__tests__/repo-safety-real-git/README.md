@@ -403,3 +403,8 @@ driven by the test; run with git 2.50.1 and 2.56.1):
   again in a terminal → the panel is shown again. It shows v2 at once, with no
   tick, and the commit made from the panel holds what is shown
   (`auto-refresh-wiring` T21).
+- P2: auto-refresh off; staged v1 is shown, the file is staged again in a
+  terminal, Commit is clicked: nothing is committed, the warning appears and
+  the panel now shows v2; the second click commits exactly that
+  (`commit-editor-component` T29–T30).
+- P3: with nothing changed in between, the first click commits what is shown.

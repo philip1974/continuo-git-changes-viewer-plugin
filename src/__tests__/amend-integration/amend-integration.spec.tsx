@@ -43,10 +43,12 @@ describe('amend integration', () => {
       changes: [{ path: 'src/a.ts', status: 'M', statusX: 'M', statusY: ' ', kind: 'text' }],
       commitMessage: 'new subject',
       amend: true,
+      statusFingerprint: 'fp', // 与下面 exec 对指纹 status 的回答相同:提交前确认通过
       refresh: vi.fn(async () => undefined),
     });
     const exec = vi.fn(async (_cmd: string, args: readonly string[]) => {
       if (args.includes('--git-common-dir')) return result({ exitCode: 0, stdout: '.git\n' });
+      if (args.includes('--porcelain=v2')) return result({ exitCode: 0, stdout: 'fp' });
       if (args.includes('rev-parse')) return result({ exitCode: 0, stdout: args.includes('--verify') ? 'HEAD\n' : 'after\n' });
       if (args.includes('commit')) return result({ exitCode: 0 });
       if (args.includes('log')) return result({ exitCode: 0, stdout: 'new subject\n' });

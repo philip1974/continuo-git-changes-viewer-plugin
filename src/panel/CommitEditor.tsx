@@ -18,6 +18,7 @@ import {
   detectRepoHooks as defaultDetectRepoHooks,
   type RepoHooks,
 } from '../git/repo-hooks';
+import { readStatusHash } from '../git/status-hash';
 import type { CoPluginApp } from '../sdk/types';
 import type { GitViewerState } from '../state/git-store';
 
@@ -51,6 +52,20 @@ interface CommitEditorProps {
   readonly hasHeadCommit?: (app: CoPluginApp, repoRoot: string) => Promise<boolean>;
   readonly readHeadSha?: ReadSubjectFn;
   readonly detectHooks?: (app: CoPluginApp, repoRoot: string) => Promise<RepoHooks>;
+  /** 仓库当前的指纹(status-hash);提交前与 store 里那份比较。 */
+  readonly readFingerprint?: (app: CoPluginApp, repoRoot: string) => Promise<string>;
+}
+
+// 提交前的确认没通过:仓库(index / HEAD)与面板最近一次读到的不同。提交被中止,面板已刷新。
+export const REPO_CHANGED_MESSAGE =
+  'The repository changed since this view was last refreshed. Nothing was committed — the view is now up to date; review it and commit again.';
+
+function showWarning(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
+  if (typeof app.notifications?.show === 'function') {
+    app.notifications.show({ kind: 'warning', message });
+    return;
+  }
+  store.getState().setBanner({ kind: 'warn', message, dismissable: true });
 }
 
 function showInfo(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
@@ -87,6 +102,7 @@ export function CommitEditor({
   hasHeadCommit = defaultHasHeadCommit,
   readHeadSha = defaultReadHeadSha as ReadSubjectFn,
   detectHooks = defaultDetectRepoHooks,
+  readFingerprint = readStatusHash,
 }: CommitEditorProps) {
   const [committing, setCommitting] = useState(false);
   // 提交前 hooks 确认:非 null 时显示提示,用户点确认才真正提交(每次提交都重新检测与确认)。
@@ -173,6 +189,22 @@ export function CommitEditor({
         }
       }
       setHooksPrompt(null);
+      // 提交前确认:面板显示的是最近一次 refresh 读到的状态,而 `git commit` 提交的是**此刻**的 index。
+      // 两者之间仓库可能已被改动(终端里又 `git add` 了别的内容;自动刷新关着,或还没轮到下一个 tick)。
+      // 读一次当前指纹,与 store 里和列表一起读出的那份(statusFingerprint)比较:不同、或读不到 → 不提交,
+      // 刷新面板并说明,由用户重新确认。Amend 同样(指纹含 HEAD:被改写的是用户看到的那个提交)。
+      // 残余:读指纹与 `git commit` 读 index 之间仍有一个很短的窗口(两次进程启动之间),见 README。
+      let current: string | null;
+      try {
+        current = await readFingerprint(app, repoRoot);
+      } catch {
+        current = null;
+      }
+      if (current === null || current !== store.getState().statusFingerprint) {
+        await store.getState().refresh();
+        showWarning(app, store, REPO_CHANGED_MESSAGE);
+        return;
+      }
       const headBefore = amend ? await readHeadSha(app, repoRoot) : null;
       const result = await commit(
         app,

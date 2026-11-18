@@ -40,6 +40,7 @@ function renderEditor(opts: {
     repoRoot: opts.repoRoot === undefined ? '/repo' : opts.repoRoot,
     commitMessage: opts.message ?? 'subject',
     amend: opts.amend ?? false,
+    statusFingerprint: 'fp', // 提交前确认(commit-editor T31–T35):store 里的指纹与当前读到的相同才提交
   });
   const commit = opts.commit ?? vi.fn(async () => ({ ok: true as const }));
   const readSubject = opts.readSubject ?? vi.fn(async () => 'subject');
@@ -66,6 +67,7 @@ function renderEditor(opts: {
         hasHeadCommit={hasHeadCommit}
         readHeadSha={readHeadSha}
         detectHooks={async () => ({ kind: 'none' as const })}
+        readFingerprint={async () => 'fp'}
       />
     );
   }
