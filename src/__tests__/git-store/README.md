@@ -7,3 +7,6 @@ inline banner used for degraded jump-back / large-diff feedback.
 - T2: clear resets repo, changes, selection, cache, loading, and banner.
 - T3: setBanner/dismissBanner state transition.
 - T4: refresh runs the injected loader and replaces repo state.
+
+`statusError` (status could not be read; disables Commit / Amend) is covered
+in `status-unavailable`.

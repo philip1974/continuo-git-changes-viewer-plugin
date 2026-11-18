@@ -40,6 +40,11 @@ interface CommitEditorProps {
   readonly stagedCount: number;
   readonly repoRoot: string | null;
   readonly amend?: boolean;
+  /**
+   * 最近一次 refresh 没拿到可信的 status(git-store 的 statusError):暂存区里有什么未知,Commit 与 Amend
+   * 都禁用——Amend 不看暂存数(can-amend),否则会把面板没显示的暂存内容一并提交。
+   */
+  readonly statusUnavailable?: boolean;
   readonly commit?: CommitFn;
   readonly readSubject?: ReadSubjectFn;
   readonly readHeadMessage?: ReadSubjectFn;
@@ -75,6 +80,7 @@ export function CommitEditor({
   stagedCount,
   repoRoot,
   amend = false,
+  statusUnavailable = false,
   commit = gitCommit as CommitFn,
   readSubject = readLastCommitSubject as ReadSubjectFn,
   readHeadMessage = defaultReadHeadMessage as ReadSubjectFn,
@@ -96,6 +102,7 @@ export function CommitEditor({
       ? canAmend(commitMessage, stagedCount, headHasCommit === true)
       : canCommit(commitMessage, stagedCount)) &&
     !committing &&
+    !statusUnavailable &&
     repoRoot !== null &&
     app !== undefined;
 
@@ -275,7 +282,11 @@ export function CommitEditor({
       ) : null}
       <div className="cgv-commit-actions">
         <span className="cgv-commit-hint">
-          {stagedCount === 0 ? 'No staged changes' : `${stagedCount} file(s) staged`}
+          {statusUnavailable
+            ? 'Status unavailable'
+            : stagedCount === 0
+              ? 'No staged changes'
+              : `${stagedCount} file(s) staged`}
         </span>
         <button
           type="button"

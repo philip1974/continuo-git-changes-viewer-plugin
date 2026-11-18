@@ -305,6 +305,7 @@ export function GitViewerPanel({
         stagedCount={stagedCount}
         repoRoot={state.repoRoot}
         amend={state.amend}
+        statusUnavailable={state.statusError !== null}
       />
       <div className="cgv-body">
         <FileList
@@ -333,6 +334,11 @@ export function GitViewerPanel({
       {state.restriction ? (
         <div className="cgv-banner cgv-banner--warn cgv-restricted" role="alert">
           <span>{state.restriction}</span>
+        </div>
+      ) : state.statusError !== null ? (
+        // 不可关闭:只有下一次成功的 refresh 才清除(与 restriction 同样的呈现方式)
+        <div className="cgv-banner cgv-banner--error" role="alert">
+          <span>{`Could not read the repository status: ${state.statusError}. Commit and Amend are disabled until a refresh succeeds.`}</span>
         </div>
       ) : state.banner ? (
         <div className={`cgv-banner cgv-banner--${state.banner.kind}`}>

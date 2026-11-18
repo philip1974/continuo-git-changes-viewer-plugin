@@ -23,7 +23,7 @@ import { installRepoSafetyGuard, isKnownSafeConfigKey, isUnsafeConfigEntry, prob
 import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
 import { stageFile } from '../../git/stage-file';
-import { parsePorcelainStatus, scanStatus, UnsafeIndexError } from '../../git/status-scanner';
+import { parsePorcelainStatus, scanStatus, StatusUnavailableError, UnsafeIndexError } from '../../git/status-scanner';
 import type { CoPluginApp, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 import { keyPatterns, overlappingKeys, REVIEWED_OVERLAP } from '../repo-safety/key-overlap';
 
@@ -215,7 +215,11 @@ function dirty(dir = repo, file = 'f.txt'): void {
 async function runEverything(app: CoPluginApp): Promise<void> {
   dirty();
   appendFileSync(join(repo, 'g.txt'), 'more\n');
-  const changes = await scanStatus(app, repo);
+  // 受限仓库里守卫拒绝 status(scanStatus 抛 StatusUnavailableError,不再返回空列表):其余命令照常尝试
+  const changes = await scanStatus(app, repo).catch((err: unknown) => {
+    if (err instanceof StatusUnavailableError) return [];
+    throw err;
+  });
   await readStatusHash(app, repo).catch(() => '');
   await fetchDiff(app, repo, changes[0] ?? { path: 'f.txt', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' });
   await readHeadMessage(app, repo);
@@ -2246,3 +2250,32 @@ describe('the Staged section shows what is in the index, not what is in the work
   });
 });
 
+describe('a status that cannot be read is an error, not "no changes" (real git)', () => {
+  it('R63 corrupt index with staged content behind it: `git status` exits non-zero → scanStatus rejects with StatusUnavailableError naming git\'s message (it used to resolve to an empty list); after the index is restored the scan lists the staged file again', async () => {
+    writeFileSync(join(repo, 'staged.txt'), 'will be committed\n');
+    git(repo, 'add', 'staged.txt');
+    const index = join(repo, '.git', 'index');
+    const good = readFileSync(index);
+    writeFileSync(index, 'not an index');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const err = await scanStatus(app, repo).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(StatusUnavailableError);
+    expect((err as StatusUnavailableError).message).toMatch(/^git status failed \((error|fatal): .*index/);
+    expect((err as StatusUnavailableError).partial).toEqual([]);
+
+    writeFileSync(index, good);
+    expect((await scanStatus(app, repo)).map((c) => [c.path, c.statusX])).toEqual([['staged.txt', 'A']]);
+  });
+
+  it('R63b a restricted repository: the guard refuses status, and scanStatus surfaces the refusal instead of an empty list', async () => {
+    git(repo, 'config', 'core.fsmonitor', marker('fsmonitor'));
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const err = await scanStatus(app, repo).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(StatusUnavailableError);
+    expect((err as StatusUnavailableError).message).toContain('Git commands are disabled for this repository');
+    expect(marks()).toEqual([]);
+  });
+});

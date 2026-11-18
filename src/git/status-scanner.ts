@@ -132,12 +132,44 @@ export function parsePorcelainStatus(
   return changes;
 }
 
+/**
+ * `git status` 没有给出完整、可信的列表:非零退出(index 损坏、被守卫拒绝 ...)、超时,或输出被宿主的
+ * 输出上限截断。此前这些情况静默返回空 / 残缺列表——面板看起来像"没有改动",而 Amend 不看暂存数,
+ * 仍可提交用户看不到的暂存内容。调用方(main.ts)据此显示错误并禁用 Commit / Amend。
+ * `partial`:输出被截断时已完整读到的那部分记录(仅供显示);失败 / 超时时为空。
+ */
+export class StatusUnavailableError extends Error {
+  constructor(
+    message: string,
+    readonly partial: readonly FileChange[] = [],
+  ) {
+    super(message);
+    this.name = 'StatusUnavailableError';
+  }
+}
+
+const MAX_FAILURE_DETAIL = 200;
+
+function failureDetail(result: { exitCode: number | null; stderr: string; timedOut: boolean }): string {
+  if (result.timedOut) return 'timed out';
+  const line = result.stderr.split('\n').find((l) => l.trim() !== '')?.trim();
+  if (!line) return `exit ${result.exitCode ?? 'unknown'}`;
+  return line.length > MAX_FAILURE_DETAIL ? `${line.slice(0, MAX_FAILURE_DETAIL)}…` : line;
+}
+
+/**
+ * 完整的 status 列表。拿不到完整列表时抛错,绝不返回空列表冒充"没有改动":
+ * - UnsafeIndexError:index 是伪造的(见上);
+ * - StatusUnavailableError:命令失败 / 超时 / 输出被截断。
+ */
 export async function scanStatus(
   app: Pick<CoPluginApp, 'shell'>,
   repoRoot: string,
 ): Promise<FileChange[]> {
   const status = await gitExec(app, repoRoot, ['status', '--porcelain=v1', '-z']);
-  if (status.exitCode !== 0) return [];
+  if (status.exitCode !== 0 || status.timedOut) {
+    throw new StatusUnavailableError(`git status failed (${failureDetail(status)})`);
+  }
   // 输出被宿主的输出上限截断时,最后一条记录可能只有半截(`-z` 下每条以 NUL 结尾):只解析完整记录。
   const stdout = status.truncated
     ? status.stdout.slice(0, status.stdout.lastIndexOf('\0') + 1)
@@ -145,5 +177,9 @@ export async function scanStatus(
   const forged = forgedPaths(stdout);
   if (forged.length > 0) throw new UnsafeIndexError(forged);
   const numstat = await loadNumstat(app, repoRoot);
-  return parsePorcelainStatus(stdout, numstat);
+  const changes = parsePorcelainStatus(stdout, numstat);
+  if (status.truncated) {
+    throw new StatusUnavailableError('git status output was too large; the list of changes is incomplete', changes);
+  }
+  return changes;
 }

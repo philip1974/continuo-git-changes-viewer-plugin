@@ -2,7 +2,7 @@
 import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { scanStatus, type FileChange } from '../../git/status-scanner';
+import { scanStatus, StatusUnavailableError, type FileChange } from '../../git/status-scanner';
 import { DiffView, MAX_DIFF_LINES } from '../../panel/DiffView';
 import { FileList, MAX_SECTION_ROWS } from '../../panel/FileList';
 import type { PreviewDrawerAction } from '../../panel/PreviewDrawer';
@@ -136,6 +136,9 @@ describe('status output truncated by the host output limit', () => {
       .mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, signal: null, timedOut: false, truncated: false });
     const app = { shell: { exec } } as unknown as CoPluginApp;
 
-    expect((await scanStatus(app, '/repo')).map((c) => c.path)).toEqual(['a.txt', 'b.txt']);
+    // 截断的列表不完整:scanStatus 以 StatusUnavailableError 报告,已完整读到的记录在 partial 里(status-unavailable S3 / S9)
+    const err = await scanStatus(app, '/repo').then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(StatusUnavailableError);
+    expect((err as StatusUnavailableError).partial.map((c) => c.path)).toEqual(['a.txt', 'b.txt']);
   });
 });

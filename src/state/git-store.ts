@@ -16,6 +16,11 @@ export interface GitStoreLoadResult {
   readonly changes: FileChange[];
   /** 受限仓库(本地 config 含可执行项)时的提示;此时 repoRoot 为 null,不运行任何 git。 */
   readonly restriction?: string | null;
+  /**
+   * `git status` 没有给出完整、可信的列表(失败 / 超时 / 输出被截断)时的原因。面板显示它,并禁用
+   * Commit / Amend——否则会提交面板里看不到的暂存内容。
+   */
+  readonly statusError?: string | null;
 }
 
 export interface SelectedRef {
@@ -43,6 +48,8 @@ export interface GitViewerState {
   commitMessage: string;
   amend: boolean;
   restriction: string | null;
+  /** 最近一次 refresh 没拿到可信的 status(原因);下一次成功的 refresh 清除。非 null 时禁用 Commit / Amend。 */
+  statusError: string | null;
   refresh(): Promise<void>;
   selectFile(path: string, mode: DiffMode): void;
   loadDiff(path: string, mode: DiffMode): Promise<void>;
@@ -132,6 +139,7 @@ const emptyState = {
   commitMessage: '',
   amend: false,
   restriction: null,
+  statusError: null,
 } satisfies Pick<
   GitViewerState,
   | 'repoRoot'
@@ -143,6 +151,7 @@ const emptyState = {
   | 'commitMessage'
   | 'amend'
   | 'restriction'
+  | 'statusError'
 >;
 
 export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState> {
@@ -185,21 +194,15 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
           diffCache: nextDiffCache,
           isLoading: false,
           restriction: loaded.restriction ?? null,
+          statusError: loaded.statusError ?? null,
         });
         if (nextSelected) void get().loadDiff(nextSelected.path, nextSelected.mode);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         deps.onError?.('error', message);
-        set({
-          isLoading: false,
-          banner: deps.onError
-            ? null
-            : {
-                kind: 'error',
-                message,
-                dismissable: true,
-              },
-        });
+        // refresh 本身失败:当前状态未知(列表是上一次的)。statusError 让面板持续显示原因并禁用
+        // Commit / Amend,直到下一次 refresh 成功;不再另设可关闭的 banner(同一条信息)。
+        set({ isLoading: false, statusError: message });
       }
     },
     selectFile(path, mode) {
@@ -240,6 +243,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         commitMessage: '',
         amend: false,
         restriction: null,
+        statusError: null,
       });
     },
     setBanner(banner) {

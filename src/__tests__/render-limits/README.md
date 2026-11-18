@@ -22,4 +22,6 @@ both are capped; nothing is dropped from the underlying data.
   'no-staged-blob'`: submodule entry, unresolved conflict) shows "No staged
   file content to show (…)" instead of "(empty file)".
 - L6: a status output truncated by the host output limit loses only its last,
-  possibly partial record — it is never parsed into a bogus entry.
+  possibly partial record — it is never parsed into a bogus entry. The scan
+  reports the list as incomplete (`StatusUnavailableError.partial` carries the
+  complete records; see `status-unavailable`).

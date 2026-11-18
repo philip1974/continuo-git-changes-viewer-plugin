@@ -28,3 +28,7 @@ numstat binary detection.
   next to inoperable ones.
 
 What an inoperable row means in the panel: `inoperable-entries`.
+
+When `git status` fails, times out or its output is truncated, `scanStatus`
+rejects with `StatusUnavailableError` instead of returning an empty or partial
+list: `status-unavailable`.

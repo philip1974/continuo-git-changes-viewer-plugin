@@ -284,3 +284,12 @@ version, read with `git cat-file blob :0:<path>`.
 - R62: the R50 names plus `0:x`, `2:x`, `0:0:x` next to `x`, staged as new
   files and then edited → each staged view is that file's own index blob
   (`:0:x` alone would read `x` for the file named `0:x`).
+
+Unreadable status (`status-unavailable`):
+
+- R63: a corrupt `.git/index` hiding staged content → `git status` exits
+  non-zero and `scanStatus` rejects with `StatusUnavailableError` (`git status
+  failed (… index …)`); it used to resolve to an empty list. With the index
+  restored the staged file is listed again.
+- R63b: in a restricted repository the guard's refusal of `status` surfaces
+  the same way (and nothing runs).

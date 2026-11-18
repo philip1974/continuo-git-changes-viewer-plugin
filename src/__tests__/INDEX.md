@@ -310,6 +310,10 @@
 
 - [`status-scanner-xy.spec.ts`](./status-scanner-xy/status-scanner-xy.spec.ts)
 
+## [Status Unavailable](./status-unavailable/README.md)
+
+- [`status-unavailable.spec.tsx`](./status-unavailable/status-unavailable.spec.tsx)
+
 ## [Store Load Toast](./storeload-toast/README.md)
 
 - [`storeload-toast.spec.ts`](./storeload-toast/storeload-toast.spec.ts)

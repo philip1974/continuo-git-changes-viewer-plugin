@@ -8,7 +8,7 @@ import {
 import { registerCommands } from './commands';
 import { detectRepo } from './git/repo-detect';
 import { installRepoSafetyGuard } from './git/repo-safety';
-import { scanStatus, UnsafeIndexError } from './git/status-scanner';
+import { scanStatus, StatusUnavailableError, UnsafeIndexError } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
 import { SettingsBus } from './lib/settings-bus';
 import { AutoRefreshTimer } from './state/auto-refresh-timer';
@@ -125,6 +125,11 @@ export default class GitChangesViewerPlugin extends Plugin {
         try {
           return { repoRoot: repo.root, changes: await scanStatus(this.app, repo.root) };
         } catch (err) {
+          if (err instanceof StatusUnavailableError) {
+            // status 失败 / 超时 / 被截断:列表不可信。仓库本身没有问题(不受限),但面板要说明原因并禁用
+            // Commit / Amend(见 git-store 的 statusError);截断时仍显示已读到的那部分。
+            return { repoRoot: repo.root, changes: [...err.partial], statusError: err.message };
+          }
           if (!(err instanceof UnsafeIndexError)) throw err;
           // 伪造的 index:与其它受限情形同样处理——不显示列表,并让守卫拒绝此后的一切 git 调用
           // (否则 commit 会把面板没显示的条目写进 tree)。下一次 refresh 重新判断。
