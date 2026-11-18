@@ -2,7 +2,7 @@
 import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CommitEditor, REPO_CHANGED_MESSAGE } from '../../panel/CommitEditor';
+import { CommitEditor, DIFF_REFRESHING_MESSAGE, REPO_CHANGED_MESSAGE } from '../../panel/CommitEditor';
 import type { RepoHooks } from '../../git/repo-hooks';
 import type { CommitResult } from '../../git/git-commit';
 import type { CoPluginApp } from '../../sdk/types';
@@ -311,6 +311,28 @@ describe('CommitEditor', () => {
       expect(commit).not.toHaveBeenCalled();
       await vi.waitFor(() => expect(screen.queryByRole('button', { name: 'Commit and run hooks' })).toBeNull());
       expect(store.getState().commitMessage).toBe('subject');
+    });
+
+    it('T35 while the Staged diff on screen is an old one whose replacement is still being read, nothing is committed (an equal fingerprint says the list is current, not that this content is); a Changes diff being refreshed does not hold a commit back', async () => {
+      const { app, notifications } = appWithShell();
+      const commit = vi.fn(async () => ({ ok: true as const }));
+      const readFingerprint = vi.fn(async () => 'fp');
+      const { store } = renderEditor({ app, commit, readFingerprint, message: 'subject' });
+      store.setState({ diffRefreshingKey: 'staged:src/a.ts' });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
+      await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: DIFF_REFRESHING_MESSAGE }));
+      expect(DIFF_REFRESHING_MESSAGE).toBe(
+        'The staged diff on screen is still being refreshed. Nothing was committed — wait for it to finish, review it and commit again.',
+      );
+      expect(commit).not.toHaveBeenCalled();
+      expect(readFingerprint).not.toHaveBeenCalled();
+      expect(store.getState().commitMessage).toBe('subject');
+      await vi.waitFor(() => expect(screen.getByText('Commit')).toBeTruthy());
+
+      store.setState({ diffRefreshingKey: 'changed:src/a.ts' });
+      fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
+      await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
     });
 
     it('T34 without notifications the same text goes to the dismissable warning banner', async () => {

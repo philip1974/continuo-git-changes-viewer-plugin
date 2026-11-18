@@ -68,6 +68,9 @@ export const AMEND_HEAD_CHANGED_MESSAGE =
 export const AMEND_NON_UTF8_MESSAGE =
   'The last commit message contains bytes that are not valid UTF-8. They are shown as \uFFFD, and amending will save the message as shown here.';
 
+export const DIFF_REFRESHING_MESSAGE =
+  'The staged diff on screen is still being refreshed. Nothing was committed — wait for it to finish, review it and commit again.';
+
 function showWarning(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
   if (typeof app.notifications?.show === 'function') {
     app.notifications.show({ kind: 'warning', message });
@@ -209,6 +212,12 @@ export function CommitEditor({
       // 读一次当前指纹,与 store 里和列表一起读出的那份(statusFingerprint)比较:不同、或读不到 → 不提交,
       // 刷新面板并说明,由用户重新确认。Amend 同样(指纹含 HEAD:被改写的是用户看到的那个提交)。
       // 残余:读指纹与 `git commit` 读 index 之间仍有一个很短的窗口(两次进程启动之间),见 README。
+      // 屏幕上 Staged 区的 diff 是刷新之前读的、新的还没到(git-store 的 diffRefreshingKey):指纹对得上只说明
+      // 列表是当前的,不说明屏幕上这份内容是。等它读完。
+      if (store.getState().diffRefreshingKey?.startsWith('staged:')) {
+        showWarning(app, store, DIFF_REFRESHING_MESSAGE);
+        return;
+      }
       let current: string | null;
       try {
         current = await readFingerprint(app, repoRoot);

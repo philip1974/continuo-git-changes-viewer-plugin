@@ -29,6 +29,8 @@ import {
 import type { FileChange } from '../git/status-scanner';
 import type { SectionKind } from '../git/can-stage-hunk';
 
+export const DIFF_REFRESHING_NOTE = 'Refreshing diff…';
+
 type AutoRefreshTimerController = Pick<AutoRefreshTimer, 'start' | 'stop'>;
 
 interface GitViewerPanelProps {
@@ -169,8 +171,11 @@ export function GitViewerPanel({
       if (!currentRoot) return;
       const nextHash = await readStatusHash(app, currentRoot);
       if (cancelled) return;
-      const { statusFingerprint, selected: shown, diffCache } = store.getState();
+      const { statusFingerprint, selected: shown, diffCache, diffRefreshingKey } = store.getState();
       if (nextHash === statusFingerprint) {
+        // 显示的是旧结果、新的正在读(diffRefreshingKey):它的标记当然是旧的——不为此再 refresh。
+        // 那会作废在途的读取;读取慢于刷新间隔时,新结果永远到不了。
+        if (diffRefreshingKey !== null) return;
         // Staged 区的 diff 不读工作树、不带标记:isWorktreeDiffStale 对它直接是 false
         const shownDiff = shown ? diffCache.get(cacheKey(shown.path, shown.mode)) : undefined;
         if (!(await isWorktreeDiffStale(app, currentRoot, shownDiff))) return;
@@ -332,6 +337,13 @@ export function GitViewerPanel({
     <section className="cgv-panel">
       <header className="cgv-header">
         <span className="cgv-title">Git Changes</span>
+        {/* 屏幕上的 diff 是刷新之前读的、新的还没到(git-store 的 diffRefreshingKey)。标记放在头部而不是 diff 区里:
+            diff 区是滚动容器,往里加 / 减一行会让正在看的位置跳动。 */}
+        {selectedRef !== null && state.diffRefreshingKey === cacheKey(selectedRef.path, selectedRef.mode) ? (
+          <span className="cgv-header-note" role="status">
+            {DIFF_REFRESHING_NOTE}
+          </span>
+        ) : null}
         <button
           type="button"
           className="cgv-refresh-btn"

@@ -44,6 +44,12 @@ Changes / untracked file with the one its shown diff was read under
 - T19: same fingerprint but the selected Changes file's stamp changed → the
   tick refreshes; unchanged stamp → no refresh.
 - T20: with a Staged selection the working tree is not looked at.
+- T26: while the diff on screen is an old one being re-read
+  (`diffRefreshingKey`, `git-store` T17), its outdated stamp does not trigger
+  another refresh — that would cancel the read in flight on every tick.
+- T27: the header shows "Refreshing diff…" exactly while the selected row
+  shows such an old diff. It sits in the header, not in the diff area: adding
+  and removing a line inside the scroll container would make the view jump.
 
 One baseline. Since v0.2.0 the panel kept its own "last fingerprint" and,
 every time polling started, overwrote it with the current fingerprint without

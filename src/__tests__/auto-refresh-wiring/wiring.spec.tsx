@@ -3,7 +3,7 @@ import React from 'react';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGitStore } from '../../state/git-store';
-import { GitViewerPanel } from '../../panel/GitViewerPanel';
+import { DIFF_REFRESHING_NOTE, GitViewerPanel } from '../../panel/GitViewerPanel';
 import type {
   CoPluginApp,
   Disposable,
@@ -423,6 +423,32 @@ describe('GitViewerPanel auto-refresh wiring', () => {
       lstat.mockResolvedValue(stat(200));
       await onTick();
       expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('T26 while the diff on screen is the old one and its replacement is being read (diffRefreshingKey), its outdated stamp does not trigger yet another refresh — that would cancel the read in flight every tick; once the new diff is in, the stamp check is back', async () => {
+      const { lstat, refresh, onTick, store } = await harnessWithShownDiff('changed');
+      lstat.mockResolvedValue(stat(200));
+      store.setState({ diffRefreshingKey: 'changed:src/a.ts' });
+      await onTick();
+      await onTick();
+      expect(refresh).not.toHaveBeenCalled();
+
+      store.setState({ diffRefreshingKey: null });
+      await onTick();
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('T27 the header says "Refreshing diff…" exactly while the selected row shows an old diff; the diff itself stays on screen', async () => {
+      const { store } = await harnessWithShownDiff('changed');
+      expect(screen.queryByRole('status')).toBeNull();
+      store.setState({ diffRefreshingKey: 'changed:src/a.ts' });
+      await waitFor(() => expect(screen.getByRole('status').textContent).toBe(DIFF_REFRESHING_NOTE));
+      expect(DIFF_REFRESHING_NOTE).toBe('Refreshing diff…');
+      expect(screen.getByRole('status').closest('.cgv-header')).toBeTruthy();
+      expect(screen.queryByText('Loading diff…')).toBeNull();
+      // 标记属于别的行(选中项已换):不显示
+      store.setState({ diffRefreshingKey: 'staged:other.ts' });
+      await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
     });
 
     it('T20 a Staged selection is covered by the fingerprint alone: the working tree is not looked at', async () => {

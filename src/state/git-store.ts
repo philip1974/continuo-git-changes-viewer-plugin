@@ -48,6 +48,11 @@ export interface GitViewerState {
   changes: FileChange[];
   selected: SelectedRef | null;
   diffCache: Map<string, DiffResult>;
+  /**
+   * 非 null:diffCache 里这个键的那份是**上一次** refresh 之前读的(旧的),新的正在读——见 refresh。
+   * 面板照常显示旧的那份并标注 "Refreshing…";新结果到达时替换并清除本标记。
+   */
+  diffRefreshingKey: string | null;
   isLoading: boolean;
   banner: BannerState | null;
   commitMessage: string;
@@ -163,6 +168,7 @@ const emptyState = {
   changes: [],
   selected: null,
   diffCache: new Map<string, DiffResult>(),
+  diffRefreshingKey: null,
   isLoading: false,
   banner: null,
   commitMessage: '',
@@ -177,6 +183,7 @@ const emptyState = {
   | 'changes'
   | 'selected'
   | 'diffCache'
+  | 'diffRefreshingKey'
   | 'isLoading'
   | 'banner'
   | 'commitMessage'
@@ -211,9 +218,23 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         // 缓存里的 diff 是上一次 status 时读的:已暂存的文件再次修改并 `git add`(XY 仍是 `M `)之后,
         // 留着非选中文件的缓存,点回去显示的是旧版本,而 Commit 提交的是新版本。refresh 之后只有当前
         // 选中的那份会被重新读取(下面的 loadDiff),其余的等用户点到时再读(selectFile 总是重读)。
+        //
+        // 选中的那一份:留着旧结果继续显示,直到新结果到达(stale-while-revalidate),并用 diffRefreshingKey
+        // 标明它是旧的。此前这一份也清掉:每次 refresh 面板都退回 "Loading diff…";仓库持续变化、diff 读取
+        // 又慢于刷新间隔时,每次 refresh 都作废上一次在途的读取,面板永远停在 "Loading diff…"。
+        // 只有选中项没变(同一路径、同一区)才保留;旧结果显示期间不能提交 Staged 区的内容(见 CommitEditor)。
         const prev = get();
         const nextSelected = reconcileSelected(prev.selected, loaded.changes);
         const nextDiffCache = new Map<string, DiffResult>();
+        let staleKey: string | null = null;
+        if (nextSelected && prev.selected && nextSelected.path === prev.selected.path && nextSelected.mode === prev.selected.mode) {
+          const key = cacheKey(nextSelected.path, nextSelected.mode);
+          const shown = prev.diffCache.get(key);
+          if (shown) {
+            nextDiffCache.set(key, shown);
+            staleKey = key;
+          }
+        }
         loading.clear();
 
         set({
@@ -221,6 +242,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
           changes: loaded.changes,
           selected: nextSelected,
           diffCache: nextDiffCache,
+          diffRefreshingKey: staleKey,
           isLoading: false,
           restriction: loaded.restriction ?? null,
           statusError: loaded.statusError ?? null,
@@ -243,15 +265,17 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
       const diffCache = new Map(get().diffCache);
       diffCache.delete(cacheKey(path, mode));
       loading.delete(cacheKey(path, mode));
-      set({ selected: { path, mode }, diffCache });
+      // 换了选中项(或重点同一行):旧结果不再显示,标记随之清除
+      set({ selected: { path, mode }, diffCache, diffRefreshingKey: null });
       void get().loadDiff(path, mode);
     },
     loadDiff(path, mode) {
-      const { repoRoot, changes, diffCache } = get();
+      const { repoRoot, changes, diffCache, diffRefreshingKey } = get();
       const fetchDiff = deps.fetchDiff;
       if (!repoRoot || !fetchDiff) return Promise.resolve();
       const key = cacheKey(path, mode);
-      if (diffCache.has(key)) return Promise.resolve(); // cache hit
+      // cache hit——除非缓存的那份是标明"旧的"(正在重读,或该重读了)
+      if (diffCache.has(key) && diffRefreshingKey !== key) return Promise.resolve();
       const pending = loading.get(key);
       if (pending) return pending.promise;
       const change = findChange(changes, path, mode);
@@ -266,9 +290,15 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
           if (!current()) return;
           const next = new Map(get().diffCache);
           next.set(key, result);
-          set({ diffCache: next });
+          set({ diffCache: next, ...(get().diffRefreshingKey === key ? { diffRefreshingKey: null } : {}) });
         } catch (err) {
           if (!current()) return;
+          // 重读失败:旧结果不能再冒充当前内容——拿掉(面板回到 "Loading diff…",并显示下面的错误)
+          if (get().diffRefreshingKey === key) {
+            const next = new Map(get().diffCache);
+            next.delete(key);
+            set({ diffCache: next, diffRefreshingKey: null });
+          }
           set({
             banner: {
               kind: 'error',
@@ -290,6 +320,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         changes: [],
         selected: null,
         diffCache: new Map(),
+        diffRefreshingKey: null,
         isLoading: false,
         banner: null,
         commitMessage: '',

@@ -27,6 +27,10 @@ Residual: the window between reading the fingerprint and git reading the index
 - T33: with repository hooks the check runs after the user confirmed them —
   last thing before `git commit`.
 - T34: without host notifications the warning is the dismissable banner.
+- T35: while the Staged diff on screen is an old one whose replacement is
+  still being read (`git-store` T17), nothing is committed and a warning asks
+  to wait — an equal fingerprint says the list is current, not that this
+  content is. A Changes diff being refreshed does not hold a commit back.
 
 Real panel + real git: `repo-safety-real-git` P2–P3.
 

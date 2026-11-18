@@ -46,6 +46,15 @@
   font-size: 13px;
 }
 
+/* 头部靠右、紧挨 Refresh 按钮的小字说明(显示的 diff 正在重读) */
+.cgv-header-note {
+  margin-left: auto;
+  color: var(--text-fg);
+  font-size: 11px;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+
 .cgv-refresh-btn {
   padding: 4px 10px;
   border: 1px solid var(--border-line);

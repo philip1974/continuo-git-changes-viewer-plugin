@@ -2980,8 +2980,12 @@ describe('the panel shows what a commit would take, without a manual Refresh (re
       const { selected, diffCache } = store.getState();
       return selected ? diffCache.get(`${selected.mode}:${selected.path}`) : undefined;
     };
-    // refresh 之后选中项的 diff 是异步重读的:等它到位
-    const settle = () => vi.waitFor(() => expect(shownDiff()).toBeDefined(), { timeout: 4000, interval: 10 });
+    // refresh 之后选中项的 diff 是异步重读的:等它到位(重读期间旧的那份还在,带"正在刷新"标记)
+    const settle = () =>
+      vi.waitFor(() => {
+        expect(shownDiff()).toBeDefined();
+        expect(store.getState().diffRefreshingKey).toBeNull();
+      }, { timeout: 4000, interval: 10 });
     const shown = () => {
       const diff = shownDiff();
       return diff?.ok ? diff.modified : undefined;

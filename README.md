@@ -89,6 +89,10 @@ same check runs before an amend. A very short window remains between that
 check and git reading the index for the commit (two process starts); a change
 landing exactly there is committed without having been shown.
 
+After a refresh the diff you are looking at stays on screen until the new one
+has been read; the header shows "Refreshing diff…" meanwhile, and a commit
+clicked while a Staged diff is in that state is held back.
+
 ### Amend
 
 The commit editor can amend the last commit. Enable "Amend last commit" to load

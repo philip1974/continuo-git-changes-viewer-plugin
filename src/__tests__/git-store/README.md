@@ -47,3 +47,29 @@ fingerprint, which the next comparison reports as a change.
 - T16: refresh stores the fingerprint that came with the list (null when the
   load had none); a superseded refresh does not overwrite a newer one;
   `clear()` resets it.
+
+The diff on screen stays until its replacement arrives. A refresh used to
+empty the whole diff cache, the selected row's entry included, so every
+refresh put "Loading diff…" on screen; with a repository that keeps changing
+and diff reads slower than the refresh interval, each refresh cancelled the
+read before it, and the panel never showed a diff again (10 refreshes, 0
+diffs landed). Now the selected row's diff is kept across a refresh — only
+when the selection is still the same row in the same section — and
+`diffRefreshingKey` names it as old while the new read is in flight. Entries
+of other rows are still dropped. The panel header shows "Refreshing diff…"
+meanwhile (`auto-refresh-wiring` T27), the tick does not refresh again because
+of the old diff's stamp (T26), and nothing is committed while the old diff is
+a Staged one (`commit-editor-component` T35).
+
+- T17: after a refresh the selected diff is still there and marked; a new read
+  has started; its result replaces the old one and clears the mark.
+- T18: ten refreshes, each faster than the diff read: the last diff that
+  arrived stays on screen (marked) throughout; superseded reads do not land;
+  the final read does.
+- T19: only the diff on screen is kept — not other rows' diffs, and nothing
+  when the refresh itself moves the selection (row gone, or now in the other
+  section, even if that section's diff was cached).
+- T20: a failed re-read removes the old diff (it must not pose as current) and
+  reports the error; clicking the row drops the old diff and the mark at once.
+- T21: asking for the marked diff joins the read in flight; `clear()` resets
+  the mark.

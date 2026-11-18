@@ -340,4 +340,147 @@ describe('git viewer store', () => {
       expect(store.getState().statusFingerprint).toBeNull();
     });
   });
+  // 选中的那份 diff:refresh 之后留着旧结果显示,直到新结果到达
+  describe('the diff on screen stays until its replacement arrives (stale-while-revalidate)', () => {
+    const row = (path: string, x: 'M' | ' ' = 'M') => ({ path, status: 'M' as const, statusX: x, statusY: (x === 'M' ? ' ' : 'M') as ' ' | 'M', kind: 'text' as const });
+    const diffOf = (modified: string) => ({ ok: true as const, path: 'a.ts', original: '', modified, unifiedDiff: '', isUntracked: false });
+    function gate<T>() {
+      let resolve!: (value: T) => void;
+      let reject!: (err: unknown) => void;
+      const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+      return { promise, resolve, reject };
+    }
+    const shownA = (store: ReturnType<typeof createGitStore>) => {
+      const diff = store.getState().diffCache.get('staged:a.ts');
+      return diff?.ok ? diff.modified : undefined;
+    };
+    // 每次 fetchDiff 返回一个由用例控制何时完成的读取
+    function setup(changes: Array<ReturnType<typeof row> | { path: string; status: 'M'; statusX: 'M'; statusY: 'M'; kind: 'text' }> = [row('a.ts'), row('b.ts')]) {
+      const reads: Array<ReturnType<typeof gate<ReturnType<typeof diffOf>>>> = [];
+      const fetchDiff = vi.fn(() => {
+        const g = gate<ReturnType<typeof diffOf>>();
+        reads.push(g);
+        return g.promise;
+      });
+      const state = { changes };
+      const store = createGitStore({ load: async () => ({ repoRoot: '/repo', changes: state.changes }), fetchDiff });
+      return { store, reads, fetchDiff, state };
+    }
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    async function shownV1() {
+      const h = setup();
+      await h.store.getState().refresh();
+      h.store.getState().selectFile('a.ts', 'staged');
+      h.reads[h.reads.length - 1]!.resolve(diffOf('v1'));
+      await flush();
+      expect(shownA(h.store)).toBe('v1');
+      expect(h.store.getState().diffRefreshingKey).toBeNull();
+      return h;
+    }
+
+    it('T17 after a refresh the selected diff is still there, marked as being refreshed, and a new read has started; when it arrives it replaces the old one and the mark is cleared', async () => {
+      const { store, reads, fetchDiff } = await shownV1();
+      const before = fetchDiff.mock.calls.length;
+
+      await store.getState().refresh();
+      expect(shownA(store)).toBe('v1');
+      expect(store.getState().diffRefreshingKey).toBe('staged:a.ts');
+      expect(fetchDiff).toHaveBeenCalledTimes(before + 1);
+
+      reads[reads.length - 1]!.resolve(diffOf('v2'));
+      await flush();
+      expect(shownA(store)).toBe('v2');
+      expect(store.getState().diffRefreshingKey).toBeNull();
+    });
+
+    it('T18 the repository keeps changing and every diff read is slower than the next refresh: the panel never falls back to "Loading diff…" — the last diff that did arrive stays on screen, marked — and the read that finally completes lands', async () => {
+      const { store, reads } = await shownV1();
+      for (let i = 0; i < 10; i++) {
+        await store.getState().refresh();
+        // 这次 refresh 发起的读取还没回来,下一次 refresh 就来了
+        expect(shownA(store)).toBe('v1');
+        expect(store.getState().diffRefreshingKey).toBe('staged:a.ts');
+      }
+      // 被作废的旧读取晚到:不落盘
+      reads[reads.length - 2]!.resolve(diffOf('superseded'));
+      await flush();
+      expect(shownA(store)).toBe('v1');
+      reads[reads.length - 1]!.resolve(diffOf('v11'));
+      await flush();
+      expect(shownA(store)).toBe('v11');
+      expect(store.getState().diffRefreshingKey).toBeNull();
+    });
+
+    it('T19 only the diff on screen is kept: diffs of other rows are dropped by the refresh as before, and nothing is kept when the selection itself changes (the row vanished, or moved to the other section)', async () => {
+      const h = await shownV1();
+      h.store.getState().selectFile('b.ts', 'staged');
+      h.reads[h.reads.length - 1]!.resolve({ ...diffOf('b v1'), path: 'b.ts' });
+      await flush();
+      h.store.getState().selectFile('a.ts', 'staged');
+      h.reads[h.reads.length - 1]!.resolve(diffOf('v1'));
+      await flush();
+      expect([...h.store.getState().diffCache.keys()].sort()).toEqual(['staged:a.ts', 'staged:b.ts']);
+      await h.store.getState().refresh();
+      expect([...h.store.getState().diffCache.keys()]).toEqual(['staged:a.ts']);
+      h.reads[h.reads.length - 1]!.resolve(diffOf('v2'));
+      await flush();
+
+      // a.ts 不再是已暂存的(终端里 unstage 了):选中改到 Changes 区,旧的 staged diff 不留
+      h.state.changes = [row('a.ts', ' '), row('b.ts')];
+      await h.store.getState().refresh();
+      expect(h.store.getState().selected).toEqual({ path: 'a.ts', mode: 'changed' });
+      expect(h.store.getState().diffCache.size).toBe(0);
+      expect(h.store.getState().diffRefreshingKey).toBeNull();
+
+      // 同上,但那一行的另一区(Changes)在这次 refresh 之前刚看过、缓存里有:选中项是被 refresh 改过去的,
+      // 那份缓存不是"屏幕上正显示的",同样不留
+      const mm = { path: 'a.ts', status: 'M' as const, statusX: 'M' as const, statusY: 'M' as const, kind: 'text' as const };
+      const g = setup([mm]);
+      await g.store.getState().refresh();
+      for (const mode of ['changed', 'staged'] as const) {
+        g.store.getState().selectFile('a.ts', mode);
+        g.reads[g.reads.length - 1]!.resolve(diffOf(`${mode} v1`));
+        await flush();
+      }
+      expect([...g.store.getState().diffCache.keys()].sort()).toEqual(['changed:a.ts', 'staged:a.ts']);
+      g.state.changes = [row('a.ts', ' ')];
+      await g.store.getState().refresh();
+      expect(g.store.getState().selected).toEqual({ path: 'a.ts', mode: 'changed' });
+      expect(g.store.getState().diffCache.size).toBe(0);
+      expect(g.store.getState().diffRefreshingKey).toBeNull();
+    });
+
+    it('T20 a re-read that fails does not leave the old diff posing as current: it is removed, the mark cleared and the error shown; a click on the row (which always re-reads) also drops the old diff and the mark at once', async () => {
+      const { store, reads } = await shownV1();
+      await store.getState().refresh();
+      reads[reads.length - 1]!.reject(new Error('git diff failed'));
+      await flush();
+      expect(shownA(store)).toBeUndefined();
+      expect(store.getState().diffRefreshingKey).toBeNull();
+      expect(store.getState().banner).toMatchObject({ kind: 'error', message: 'Failed to load diff for a.ts: git diff failed' });
+
+      const second = await shownV1();
+      await second.store.getState().refresh();
+      expect(second.store.getState().diffRefreshingKey).toBe('staged:a.ts');
+      second.store.getState().selectFile('a.ts', 'staged');
+      expect(shownA(second.store)).toBeUndefined();
+      expect(second.store.getState().diffRefreshingKey).toBeNull();
+    });
+
+    it('T21 while the mark is set, asking for that diff again joins the read in flight instead of treating the old one as a cache hit or starting another; clear() resets the mark', async () => {
+      const { store, reads, fetchDiff } = await shownV1();
+      await store.getState().refresh();
+      const calls = fetchDiff.mock.calls.length;
+      const joined = store.getState().loadDiff('a.ts', 'staged');
+      expect(fetchDiff).toHaveBeenCalledTimes(calls);
+      reads[reads.length - 1]!.resolve(diffOf('v2'));
+      await joined;
+      expect(shownA(store)).toBe('v2');
+
+      await store.getState().refresh();
+      expect(store.getState().diffRefreshingKey).toBe('staged:a.ts');
+      store.getState().clear();
+      expect(store.getState().diffRefreshingKey).toBeNull();
+    });
+  });
 });
