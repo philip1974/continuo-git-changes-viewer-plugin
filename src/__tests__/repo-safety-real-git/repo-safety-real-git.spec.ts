@@ -7,7 +7,7 @@ import { chmodSync, existsSync, readFileSync, renameSync, mkdtempSync, readdirSy
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { fetchDiff, MAX_FILE_BYTES } from '../../git/diff-fetcher';
+import { fetchDiff, FILE_READ_TIMEOUT_MS, MAX_FILE_BYTES } from '../../git/diff-fetcher';
 import { discardFile } from '../../git/discard-file';
 import { discardHunk } from '../../git/discard-hunk';
 import { DISABLED_HOOKS_PATH, gitExec, KNOWN_HOOK_EVENTS } from '../../git/exec';
@@ -59,9 +59,16 @@ function realApp(): CoPluginApp {
       const err = capped();
       child.stdout.on('data', out.push);
       child.stderr.on('data', err.push);
-      child.on('close', (code, signal) =>
-        resolve({ stdout: out.text(), stderr: err.text(), exitCode: code, signal, timedOut: false, truncated }),
-      );
+      // 宿主:到 timeoutMs 终止进程并置 timedOut(不传时宿主默认 30 s;这里不传就不设,测试自身有超时)
+      let timedOut = false;
+      const timer = opts.timeoutMs === undefined ? null : setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+      }, opts.timeoutMs);
+      child.on('close', (code, signal) => {
+        if (timer) clearTimeout(timer);
+        resolve({ stdout: out.text(), stderr: err.text(), exitCode: code, signal, timedOut, truncated });
+      });
       // 子进程不读 stdin 就退出时写端会报 EPIPE(与被测行为无关),忽略
       child.stdin.on('error', () => {});
       child.stdin.end(opts.input ?? '');
@@ -2278,4 +2285,24 @@ describe('a status that cannot be read is an error, not "no changes" (real git)'
     expect((err as StatusUnavailableError).message).toContain('Git commands are disabled for this repository');
     expect(marks()).toEqual([]);
   });
+});
+
+describe('whole-file reads are time-limited (real processes)', () => {
+  it('R64 a read that never finishes (the path turned into a FIFO after the file-type check): cat is terminated after FILE_READ_TIMEOUT_MS instead of the host default of 30 s, and the result is flagged like an oversized file', async () => {
+    execFileSync('mkfifo', [join(repo, 'pipe.log')]);
+    const app = realApp();
+    // 类型检查与读取之间的时间窗:lstat 时还是普通文件
+    const raced = {
+      ...app,
+      fs: { ...app.fs, lstat: async (p: string) => ({ ...(await app.fs.lstat(p)), isFile: true }) },
+    } as unknown as CoPluginApp;
+
+    const started = Date.now();
+    const d = await fetchDiff(raced, repo, { path: 'pipe.log', status: 'U', statusX: '?', statusY: '?', kind: 'text' });
+    const elapsed = Date.now() - started;
+
+    expect(d).toMatchObject({ ok: true, modified: '', isUntracked: true, modifiedTruncated: true, modifiedTimedOut: true });
+    expect(elapsed).toBeGreaterThanOrEqual(FILE_READ_TIMEOUT_MS - 100);
+    expect(elapsed).toBeLessThan(FILE_READ_TIMEOUT_MS + 5_000);
+  }, 20_000);
 });

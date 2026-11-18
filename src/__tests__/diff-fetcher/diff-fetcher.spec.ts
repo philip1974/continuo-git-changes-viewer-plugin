@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchDiff, MAX_FILE_BYTES } from '../../git/diff-fetcher';
+import { fetchDiff, FILE_READ_TIMEOUT_MS, MAX_FILE_BYTES } from '../../git/diff-fetcher';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { buildGitArgs } from '../../git/exec';
 
@@ -78,7 +78,7 @@ describe('tracked diff fetcher', () => {
 
   // 按命令返回不同结果的 exec 替身
   function appWith(byCommand: (cmd: string, args: readonly string[]) => Partial<PluginShellExecResult>) {
-    const exec = vi.fn(async (cmd: string, args: readonly string[], _opts?: { maxOutputBytes?: number }) => result(byCommand(cmd, args)));
+    const exec = vi.fn(async (cmd: string, args: readonly string[], _opts?: { maxOutputBytes?: number; timeoutMs?: number }) => result(byCommand(cmd, args)));
     const lstat = vi.fn().mockResolvedValue({ size: 1, mtimeMs: 0, isFile: true, isDirectory: false, isSymlink: false });
     return { app: { shell: { exec }, fs: { lstat } } as unknown as CoPluginApp, exec };
   }
@@ -155,5 +155,45 @@ describe('tracked diff fetcher', () => {
     await expect(fetchDiff(none.app, '/repo', { path: 'sub', status: 'A', statusX: 'A', statusY: ' ', kind: 'text' }, 'staged')).resolves.toMatchObject({
       ok: true, modified: '', withheld: 'no-staged-blob',
     });
+  });
+
+  it('T8 the three whole-file reads (HEAD blob, index blob, working-tree cat) carry a short explicit timeout; the unified diff keeps the host default', async () => {
+    expect(FILE_READ_TIMEOUT_MS).toBe(5_000);
+    const { app, exec } = appWith(() => ({ stdout: 'x\n' }));
+    const change = { path: 'a.txt', status: 'M', statusX: 'M', statusY: 'M', kind: 'text' } as const;
+    await fetchDiff(app, '/repo', change, 'changed');
+    await fetchDiff(app, '/repo', change, 'staged');
+
+    const what = (cmd: string, args: readonly string[]) => (cmd === 'cat' ? 'cat' : isHeadRead(cmd, args) ? 'head' : isIndexRead(cmd, args) ? 'index' : 'diff');
+    const timeouts = exec.mock.calls.map(([cmd, args, opts]) => [what(cmd, args), opts?.timeoutMs]);
+    expect(timeouts.sort()).toEqual([
+      ['cat', FILE_READ_TIMEOUT_MS],
+      ['diff', undefined],
+      ['diff', undefined],
+      ['head', FILE_READ_TIMEOUT_MS],
+      ['head', FILE_READ_TIMEOUT_MS],
+      ['index', FILE_READ_TIMEOUT_MS],
+    ]);
+  });
+
+  it('T9 a whole-file read that times out is treated like an oversized one: the part that was read, flagged modifiedTruncated + modifiedTimedOut (working tree and index alike); a HEAD read that times out does not fail the diff', async () => {
+    const killed = { stdout: 'read so far', exitCode: null, signal: 'SIGTERM', timedOut: true };
+    const wt = appWith((cmd) => (cmd === 'cat' ? killed : { stdout: '' }));
+    await expect(fetchDiff(wt.app, '/repo', { path: 'slow.bin', status: 'U', statusX: '?', statusY: '?', kind: 'text' })).resolves.toEqual({
+      ok: true, path: 'slow.bin', original: '', modified: 'read so far', unifiedDiff: '', isUntracked: true, modifiedTruncated: true, modifiedTimedOut: true,
+    });
+
+    const idx = appWith((cmd, args) => (isIndexRead(cmd, args) ? killed : { stdout: '' }));
+    const staged = await fetchDiff(idx.app, '/repo', { path: 'slow.bin', status: 'A', statusX: 'A', statusY: ' ', kind: 'text' }, 'staged');
+    expect(staged).toMatchObject({ ok: true, modified: 'read so far', modifiedTruncated: true, modifiedTimedOut: true });
+    expect(staged).not.toHaveProperty('withheld');
+
+    const head = appWith((cmd, args) => (isHeadRead(cmd, args) ? killed : cmd === 'cat' ? { stdout: 'wt' } : { stdout: 'diff --git a/a b/a\n' }));
+    const d = await fetchDiff(head.app, '/repo', { path: 'a', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' });
+    expect(d).toEqual({ ok: true, path: 'a', original: 'read so far', modified: 'wt', unifiedDiff: 'diff --git a/a b/a\n', isUntracked: false });
+
+    // 只是超过大小上限(未超时):不带 modifiedTimedOut
+    const big = appWith((cmd) => (cmd === 'cat' ? { stdout: 'first part', truncated: true } : { stdout: '' }));
+    expect(await fetchDiff(big.app, '/repo', { path: 'big.bin', status: 'U', statusX: '?', statusY: '?', kind: 'text' })).not.toHaveProperty('modifiedTimedOut');
   });
 });

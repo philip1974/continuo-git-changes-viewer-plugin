@@ -1,4 +1,4 @@
-import type { CoPluginApp } from '../sdk/types';
+import type { CoPluginApp, PluginShellExecResult } from '../sdk/types';
 import { gitExec } from './exec';
 import { isNotFoundError } from './fs-errors';
 import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
@@ -19,8 +19,10 @@ export type DiffResult =
       isUntracked: boolean;
       /** 新版全文未读取(modified 为 "")的原因;正常读取时不带此字段。 */
       withheld?: WithheldReason;
-      /** 新版文件超过 MAX_FILE_BYTES:modified 只是开头的那一部分。 */
+      /** 新版文件超过 MAX_FILE_BYTES,或读取超时:modified 只是开头的那一部分。 */
       modifiedTruncated?: true;
+      /** modifiedTruncated 的原因是读取超时(FILE_READ_TIMEOUT_MS),不是大小。 */
+      modifiedTimedOut?: true;
     }
   | {
       ok: false;
@@ -45,6 +47,14 @@ export type WithheldReason = 'symlink' | 'unverified' | 'not-regular' | 'no-stag
 // 提示。这里显式设 1 MiB:超出时只取开头部分并标记 modifiedTruncated,面板显示 "File too large" 说明。
 // unified diff 不在此列:它被截断时整体降级为 "Diff too large" 占位(见 fetchDiff),渲染另有行数上限。
 export const MAX_FILE_BYTES = 1024 * 1024;
+
+// 同一类读取的超时。宿主在输出超过上限后只是丢弃多余的输出,不关闭管道、不杀进程(Continuo
+// shell.service:写满后切成丢弃式读取,进程照常跑完);不传 timeoutMs 时用宿主默认的 30 s。一个数 GB 的
+// 文件、或卡住的文件系统,会让 cat / cat-file 在后台一直读到那时——自动刷新还会反复发起。这里显式设
+// 5 s:到时宿主终止整棵进程树(timedOut),已读到的部分照常使用,按"过大"同样处理并说明。
+export const FILE_READ_TIMEOUT_MS = 5_000;
+
+const FILE_READ_LIMITS = { maxOutputBytes: MAX_FILE_BYTES, timeoutMs: FILE_READ_TIMEOUT_MS } as const;
 
 type DiffApp = Pick<CoPluginApp, 'shell'> & Partial<Pick<CoPluginApp, 'fs'>>;
 
@@ -71,9 +81,9 @@ async function gitShowHead(
   // `:`、以 `-` 开头都按字面解析(real-git R50);不是 blob(目录、gitlink)时报错而不是列出 tree。
   // 不做 textconv / filter 转换(那需要 --textconv / --filters)。
   // exit 128 if HEAD doesn't contain the path (new / renamed-to file)
-  // 超过 MAX_FILE_BYTES 时只拿到开头部分:original 只用来区分"HEAD 里没有这个文件",显示内容来自 unified diff。
-  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `HEAD:${path}`], { maxOutputBytes: MAX_FILE_BYTES });
-  return r.exitCode === 0 ? r.stdout : '';
+  // 超过 MAX_FILE_BYTES 或读取超时只拿到开头部分:original 只用来区分"HEAD 里没有这个文件",显示内容来自 unified diff。
+  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `HEAD:${path}`], FILE_READ_LIMITS);
+  return r.exitCode === 0 || r.timedOut ? r.stdout : '';
 }
 
 // 读工作树全文(安全):`cat` 会跟随符号链接。来历不明的目录里,被跟踪/未跟踪的路径(或其父目录)
@@ -118,12 +128,26 @@ async function checkReadable(
   return results.includes('not-regular') ? 'not-regular' : null;
 }
 
-type FileRead = { readonly content: string; readonly withheld?: WithheldReason; readonly truncated?: boolean };
+type FileRead = {
+  readonly content: string;
+  readonly withheld?: WithheldReason;
+  readonly truncated?: boolean;
+  readonly timedOut?: boolean;
+};
 
 const readFlags = (wt: FileRead) => ({
   ...(wt.withheld ? { withheld: wt.withheld } : {}),
   ...(wt.truncated ? { modifiedTruncated: true as const } : {}),
+  ...(wt.timedOut ? { modifiedTimedOut: true as const } : {}),
 });
+
+// 整文件读取的结果 → 内容。超过大小上限(truncated:宿主丢弃了多余的输出,进程通常仍以 0 退出)与超时
+// (timedOut:宿主终止了进程,没有退出码)都只拿到开头的一部分,照常使用并标记;其余失败返回 null。
+function partialOrWhole(r: PluginShellExecResult): FileRead | null {
+  if (r.timedOut) return { content: r.stdout, truncated: true, timedOut: true };
+  if (r.truncated) return { content: r.stdout, truncated: true };
+  return r.exitCode === 0 ? { content: r.stdout } : null;
+}
 
 async function readWorktreeFile(
   app: DiffApp,
@@ -133,10 +157,8 @@ async function readWorktreeFile(
   const withheld = await checkReadable(app, repoRoot, path);
   if (withheld !== null) return { content: '', withheld };
   // `--`:文件名可以以 `-` 开头(`-n`、`--help`),不能被 cat 当成选项
-  const r = await app.shell.exec('cat', ['--', path], { cwd: repoRoot, maxOutputBytes: MAX_FILE_BYTES });
-  // 被截断时 cat 可能因写端关闭而以非 0 / 信号结束:已读到的开头部分照常使用
-  if (r.truncated) return { content: r.stdout, truncated: true };
-  return { content: r.exitCode === 0 ? r.stdout : '' };
+  const r = await app.shell.exec('cat', ['--', path], { cwd: repoRoot, ...FILE_READ_LIMITS });
+  return partialOrWhole(r) ?? { content: '' };
 }
 
 // 读 index 里的版本(Staged 区显示的"将要提交的内容")。此前 staged 模式也读工作树:`git add n.txt` 之后
@@ -151,9 +173,8 @@ async function readIndexBlob(
   repoRoot: string,
   path: string,
 ): Promise<FileRead> {
-  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `:0:${path}`], { maxOutputBytes: MAX_FILE_BYTES });
-  if (r.truncated) return { content: r.stdout, truncated: true };
-  return r.exitCode === 0 ? { content: r.stdout } : { content: '', withheld: 'no-staged-blob' };
+  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `:0:${path}`], FILE_READ_LIMITS);
+  return partialOrWhole(r) ?? { content: '', withheld: 'no-staged-blob' };
 }
 
 export async function fetchDiff(

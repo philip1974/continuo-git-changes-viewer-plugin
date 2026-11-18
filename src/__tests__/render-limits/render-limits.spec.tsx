@@ -75,7 +75,7 @@ describe('diff rendering is capped', () => {
 
 describe('whole-file view of a new / untracked file is capped', () => {
   const untracked: FileChange = { path: 'huge.log', status: 'U', statusX: '?', statusY: '?', kind: 'text' };
-  const renderNew = (extra: { modifiedTruncated?: true; modified?: string; withheld?: 'no-staged-blob' }) =>
+  const renderNew = (extra: { modifiedTruncated?: true; modifiedTimedOut?: true; modified?: string; withheld?: 'no-staged-blob' }) =>
     render(
       <DiffView
         store={createGitStore()}
@@ -95,6 +95,14 @@ describe('whole-file view of a new / untracked file is capped', () => {
   it('L8 a file within the limit shows no notice', () => {
     renderNew({});
     expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('L10 a read that timed out shows the part that was read with a notice that says so (not "the first 1 MB")', () => {
+    const { container } = renderNew({ modifiedTruncated: true, modifiedTimedOut: true });
+    expect(container.querySelector('.cgv-new-file')!.textContent).toBe('line 1\nline 2\n');
+    expect(screen.getByRole('note').textContent).toBe(
+      'Reading this file took too long — showing only the part that was read. Open the file in an editor to see the rest.',
+    );
   });
 
   it('L9 a staged new entry without a staged blob (submodule, unresolved conflict) shows a notice instead of "(empty file)"', () => {

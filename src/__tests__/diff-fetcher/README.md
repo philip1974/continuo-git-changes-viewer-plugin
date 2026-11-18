@@ -28,6 +28,19 @@ no hint that it was cut is neither usable nor honest.
 - T5: a HEAD blob over the limit does not fail the diff; `original` is just
   the part that was read (it is only used to tell "no HEAD version" apart).
 
+Time limit. Past the output limit the host only discards the extra output: it
+does not close the pipe or stop the process, which runs to completion — or to
+the host's default timeout of 30 s. The three whole-file reads therefore also
+pass `timeoutMs: FILE_READ_TIMEOUT_MS` (5 s). A read that times out is handled
+like an oversized one: what was read is used and flagged.
+
+- T8: HEAD blob, index blob and working-tree `cat` carry the 5 s timeout; the
+  unified diff does not.
+- T9: a timed-out read of the new side → the part that was read, flagged
+  `modifiedTruncated` and `modifiedTimedOut` (the panel says "Reading this
+  file took too long", `render-limits` L10); a timed-out HEAD read does not
+  fail the diff.
+
 Which version the new side is. In the Changes section (`changed` mode)
 `modified` is the working-tree file. In the Staged section (`staged` mode) it
 is the version in the index — what a commit would record — read with `git
@@ -44,4 +57,5 @@ showed "(empty file)".) The stage number is explicit because git reads
   `withheld: 'no-staged-blob'` (the panel shows a notice, `render-limits` L9).
 
 Real-git coverage: `repo-safety-real-git` R50–R51c (names, non-blobs,
-symbolic links), R57–R58 (large files) and R61–R62 (staged content).
+symbolic links), R57–R58 (large files), R61–R62 (staged content) and R64 (read
+timeout).

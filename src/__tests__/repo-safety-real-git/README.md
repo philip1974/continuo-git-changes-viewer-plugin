@@ -293,3 +293,10 @@ Unreadable status (`status-unavailable`):
   restored the staged file is listed again.
 - R63b: in a restricted repository the guard's refusal of `status` surfaces
   the same way (and nothing runs).
+
+Read timeout (`diff-fetcher` T8–T9):
+
+- R64: the path is a FIFO by the time `cat` opens it (file-type check raced) →
+  the read is terminated after `FILE_READ_TIMEOUT_MS` (5 s) rather than the
+  host default of 30 s, and the result carries `modifiedTruncated` +
+  `modifiedTimedOut`.

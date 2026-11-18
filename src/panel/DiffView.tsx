@@ -31,13 +31,23 @@ interface DiffViewProps {
   readonly dispatchDrawer?: Dispatch<PreviewDrawerAction>;
 }
 
-function NewFileView({ content, truncated }: { readonly content: string; readonly truncated?: boolean }) {
+function NewFileView({
+  content,
+  truncated,
+  timedOut,
+}: {
+  readonly content: string;
+  readonly truncated?: boolean;
+  readonly timedOut?: boolean;
+}) {
   return (
     <>
       <pre className="cgv-new-file">{content || '(empty file)'}</pre>
       {truncated ? (
         <div className="cgv-truncated-note" role="note">
-          {`File too large — showing the first ${MAX_FILE_BYTES / (1024 * 1024)} MB. Open the file in an editor to see the rest.`}
+          {timedOut
+            ? 'Reading this file took too long — showing only the part that was read. Open the file in an editor to see the rest.'
+            : `File too large — showing the first ${MAX_FILE_BYTES / (1024 * 1024)} MB. Open the file in an editor to see the rest.`}
         </div>
       ) : null}
     </>
@@ -390,7 +400,7 @@ export function DiffView({
     }
     return (
       <main className="cgv-diff">
-        <NewFileView content={diff.modified} truncated={diff.modifiedTruncated} />
+        <NewFileView content={diff.modified} truncated={diff.modifiedTruncated} timedOut={diff.modifiedTimedOut} />
       </main>
     );
   }
