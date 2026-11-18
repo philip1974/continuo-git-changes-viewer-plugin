@@ -21,7 +21,9 @@ import { cacheKey, createGitStore } from '../../state/git-store';
 configure({ asyncUtilTimeout: 10_000 });
 vi.setConfig({ testTimeout: 30_000 });
 
-const ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+// GIT_OPTIONAL_LOCKS=0:用例里轮询的 `git status`(等提交落盘)默认会顺手拿 index.lock 刷新 index,与面板
+// 正在跑的 `git commit` 抢锁——实测 2.56.1 下 P4 偶发 "index.lock: File exists"。测试侧的读取与插件一样不拿可选锁。
+const ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0' };
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, env: ENV, encoding: 'utf8' });
 
