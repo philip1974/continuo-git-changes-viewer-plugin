@@ -198,3 +198,9 @@ few sections only as wildcards (`http.<url>.*`, `credential.<url>.*`,
 as reviewed. Those sections only act during network transport, mail sending or
 when an alias / pager is invoked, none of which this plugin does. Details:
 [`doc/git-config-classification.md`](doc/git-config-classification.md).
+
+Error messages and notices that carry git output or text from the repository
+(stderr, `core.hooksPath`, hook names) are shown in a visible, single-line,
+bounded form: control characters, bidirectional controls and zero-width
+characters appear as `<U+XXXX>`, line breaks become spaces, and long text is
+cut. File names in the file list are shown as they are.

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { visibleText } from '../lib/visible-text';
 
 export type DrawerAction = 'stage' | 'unstage' | 'discard' | 'discard-file';
 
@@ -179,7 +180,7 @@ export function PreviewDrawer({
           <strong>WARNING: This will permanently delete the unstaged change.</strong>
           <span> Use <code>git stash</code> first if uncertain.</span>
         </div>
-        {isError ? <span className="cgv-preview-error">{state.error}</span> : null}
+        {isError ? <span className="cgv-preview-error">{visibleText(state.error)}</span> : null}
         {body ? <div className="cgv-preview-body">{body}</div> : null}
         {!body && patch ? <pre className="cgv-preview-patch">{patch}</pre> : null}
         <div className="cgv-confirm-row">
@@ -228,7 +229,7 @@ export function PreviewDrawer({
             : `${verbText} ${noun}: ${state.filePath}`}
         </strong>
         {state.kind === 'error' ? (
-          <span className="cgv-preview-error">{state.error}</span>
+          <span className="cgv-preview-error">{visibleText(state.error)}</span>
         ) : null}
       </header>
       {body ? <div className="cgv-preview-body">{body}</div> : null}

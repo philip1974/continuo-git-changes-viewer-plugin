@@ -10,6 +10,7 @@ import { joinRepoPath } from '../git/path-utils';
 import { stageHunk } from '../git/stage-hunk';
 import { unstageHunk } from '../git/unstage-hunk';
 import type { CoPluginApp } from '../sdk/types';
+import { visibleText } from '../lib/visible-text';
 import type { FileChange } from '../git/status-scanner';
 import type { GitViewerState } from '../state/git-store';
 import { COMMIT_IN_PROGRESS_MESSAGE, COMMIT_IN_PROGRESS_TITLE } from './FileList';
@@ -262,7 +263,7 @@ export function DiffView({
     if (diff.reason === 'too-large') {
       return <TooLargePlaceholder exactCommand={diff.exactCommand} />;
     }
-    return <main className="cgv-diff-empty">{diff.message ?? 'git diff failed'}</main>;
+    return <main className="cgv-diff-empty">{visibleText(diff.message ?? 'git diff failed')}</main>;
   }
 
   const onJumpLine = async (line: number) => {
@@ -348,7 +349,7 @@ export function DiffView({
 
   const showError = (message: string) => {
     if (typeof app?.notifications?.show === 'function') {
-      app.notifications.show({ kind: 'error', message });
+      app.notifications.show({ kind: 'error', message: visibleText(message) });
       return;
     }
     store.getState().setBanner({
@@ -417,7 +418,7 @@ export function DiffView({
         if (drawer.action === 'discard' && typeof app?.notifications?.show === 'function') {
           app.notifications.show({
             kind: 'info',
-            message: `Hunk discarded from ${drawer.filePath}`,
+            message: visibleText(`Hunk discarded from ${drawer.filePath}`),
           });
         }
         await store.getState().refresh();

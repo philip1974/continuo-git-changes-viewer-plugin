@@ -9,6 +9,7 @@ import { stageHunk } from '../git/stage-hunk';
 import { unstageFile } from '../git/unstage-file';
 import { unstageHunk } from '../git/unstage-hunk';
 import type { SettingsBus } from '../lib/settings-bus';
+import { visibleText } from '../lib/visible-text';
 import {
   type AutoRefreshIntervalSec,
   readAutoRefreshIntervalSec,
@@ -245,7 +246,7 @@ export function GitViewerPanel({
 
   const showError = (message: string) => {
     if (typeof app?.notifications?.show === 'function') {
-      app.notifications.show({ kind: 'error', message });
+      app.notifications.show({ kind: 'error', message: visibleText(message) });
       return;
     }
     store.getState().setBanner({ kind: 'error', message, dismissable: true });
@@ -253,7 +254,7 @@ export function GitViewerPanel({
 
   const showInfo = (message: string) => {
     if (typeof app?.notifications?.show === 'function') {
-      app.notifications.show({ kind: 'info', message });
+      app.notifications.show({ kind: 'info', message: visibleText(message) });
       return;
     }
     store.getState().setBanner({ kind: 'info', message, dismissable: true });
@@ -432,16 +433,16 @@ export function GitViewerPanel({
       />
       {state.restriction ? (
         <div className="cgv-banner cgv-banner--warn cgv-restricted" role="alert">
-          <span>{state.restriction}</span>
+          <span>{visibleText(state.restriction)}</span>
         </div>
       ) : state.statusError !== null ? (
         // 不可关闭:只有下一次成功的 refresh 才清除(与 restriction 同样的呈现方式)
         <div className="cgv-banner cgv-banner--error" role="alert">
-          <span>{`Could not read the repository status: ${state.statusError}. Commit and Amend are disabled until a refresh succeeds.`}</span>
+          <span>{`Could not read the repository status: ${visibleText(state.statusError)}. Commit and Amend are disabled until a refresh succeeds.`}</span>
         </div>
       ) : state.banner ? (
         <div className={`cgv-banner cgv-banner--${state.banner.kind}`}>
-          <span>{state.banner.message}</span>
+          <span>{visibleText(state.banner.message)}</span>
           {state.banner.dismissable ? (
             <button type="button" onClick={() => store.getState().dismissBanner()}>
               Dismiss

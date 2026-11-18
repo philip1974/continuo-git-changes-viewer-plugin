@@ -345,6 +345,10 @@
 
 - [`untracked-diff.spec.ts`](./untracked-diff/untracked-diff.spec.ts)
 
+## [visible-text](./visible-text/README.md)
+
+- [`visible-text.spec.tsx`](./visible-text/visible-text.spec.tsx)
+
 ## [worktree-entry](./worktree-entry/README.md)
 
 - [`worktree-entry.spec.ts`](./worktree-entry/worktree-entry.spec.ts)

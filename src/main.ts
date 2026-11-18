@@ -12,6 +12,7 @@ import { readStatusHash } from './git/status-hash';
 import { scanStatus, StatusUnavailableError, UnsafeIndexError } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
 import { SettingsBus } from './lib/settings-bus';
+import { visibleText } from './lib/visible-text';
 import { AutoRefreshTimer } from './state/auto-refresh-timer';
 import { createGitStore } from './state/git-store';
 import { GitViewerPanel } from './panel/GitViewerPanel';
@@ -69,7 +70,7 @@ export default class GitChangesViewerPlugin extends Plugin {
   ): void {
     if (typeof this.app.notifications?.show === 'function') {
       this.app.notifications.show(
-        code === undefined ? { kind, message } : { kind, message, code },
+        code === undefined ? { kind, message: visibleText(message) } : { kind, message: visibleText(message), code },
       );
       return;
     }

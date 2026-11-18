@@ -19,6 +19,7 @@ import {
   type RepoHooks,
 } from '../git/repo-hooks';
 import { readStatusHash } from '../git/status-hash';
+import { visibleText } from '../lib/visible-text';
 import type { CoPluginApp } from '../sdk/types';
 import { cacheKey, type GitViewerState } from '../state/git-store';
 import type { DiffResult } from '../git/diff-fetcher';
@@ -151,7 +152,7 @@ function shownReplaced(shown: ShownSnapshot, now: GitViewerState): boolean {
 
 function showWarning(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
   if (typeof app.notifications?.show === 'function') {
-    app.notifications.show({ kind: 'warning', message });
+    app.notifications.show({ kind: 'warning', message: visibleText(message) });
     return;
   }
   store.getState().setBanner({ kind: 'warn', message, dismissable: true });
@@ -159,7 +160,7 @@ function showWarning(app: CoPluginApp, store: StoreApi<GitViewerState>, message:
 
 function showInfo(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
   if (typeof app.notifications?.show === 'function') {
-    app.notifications.show({ kind: 'info', message });
+    app.notifications.show({ kind: 'info', message: visibleText(message) });
     return;
   }
   store.getState().setBanner({ kind: 'info', message, dismissable: true });
@@ -167,7 +168,7 @@ function showInfo(app: CoPluginApp, store: StoreApi<GitViewerState>, message: st
 
 function showError(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
   if (typeof app.notifications?.show === 'function') {
-    app.notifications.show({ kind: 'error', message });
+    app.notifications.show({ kind: 'error', message: visibleText(message) });
     return;
   }
   store.getState().setBanner({ kind: 'error', message, dismissable: true });
@@ -464,7 +465,7 @@ export function CommitEditor({
       </div>
       {hooksPrompt ? (
         <div className="cgv-hooks-confirm" role="alert">
-          <span className="cgv-hooks-warning">{describeRepoHooks(hooksPrompt.hooks)}</span>
+          <span className="cgv-hooks-warning">{visibleText(describeRepoHooks(hooksPrompt.hooks))}</span>
           <div className="cgv-hooks-actions">
             <button
               type="button"
