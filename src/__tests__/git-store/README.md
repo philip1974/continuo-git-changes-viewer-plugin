@@ -7,3 +7,18 @@ The diff cache never outlives the status it was read under:
   staged again keeps the status `M `, and its cached diff would show the old
   version while a commit takes the new one.
 - T8: selecting a row always fetches its diff again.
+
+Overlapping refreshes and diff reads (a manual Refresh, the refresh after a
+file operation and the auto-refresh tick can be in flight together): only the
+most recently started one lands.
+
+- T9: a slow earlier refresh that succeeds late does not clear the failure a
+  later refresh reported (Commit stays disabled).
+- T10: the same when the later one throws; and an earlier refresh failing late
+  does not put an error over a later success.
+- T11: `isLoading` follows the latest refresh.
+- T12: a diff read superseded by a newer click on the same row neither
+  replaces the newer content nor raises a banner when it fails late.
+- T13: a diff read started before a refresh does not land after it.
+- T14: asking for a diff that is already being read joins that read.
+- T15: `clear()` retires in-flight refreshes and diff reads as well.

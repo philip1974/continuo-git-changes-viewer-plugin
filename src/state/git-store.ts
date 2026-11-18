@@ -169,14 +169,24 @@ const emptyState = {
 >;
 
 export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState> {
+  // 手动 Refresh、文件操作之后的 refresh、自动刷新的 tick(含 status 出错后的重试)可以同时在途。
+  // 只让最近一次发起的 refresh 落盘:慢的旧 refresh 晚到时,既不能用旧列表盖掉新的,也不能把新的那次报告的
+  // statusError 清掉(那会在旧列表上放开 Commit)。
+  let refreshSeq = 0;
+  // 在途的 diff 读取,按缓存键。同一键再次请求时并入在途的那次;selectFile / refresh / clear 把在途的作废
+  // (从表里拿掉)——作废的读取晚到时不写缓存、不报错:它读的是更早的状态。
+  const loading = new Map<string, { promise: Promise<void> }>();
+
   return createStore<GitViewerState>((set, get) => ({
     ...emptyState,
     async refresh() {
+      const seq = ++refreshSeq;
       set({ isLoading: true });
       try {
         const loaded = deps.load
           ? await deps.load()
           : { repoRoot: null, changes: [] };
+        if (seq !== refreshSeq) return;
 
         // 选择跨 refresh 保留(v0.3.0:每个 tick 重置选择会让整个面板跳动);diff 缓存不保留。
         // 缓存里的 diff 是上一次 status 时读的:已暂存的文件再次修改并 `git add`(XY 仍是 `M `)之后,
@@ -185,6 +195,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         const prev = get();
         const nextSelected = reconcileSelected(prev.selected, loaded.changes);
         const nextDiffCache = new Map<string, DiffResult>();
+        loading.clear();
 
         set({
           repoRoot: loaded.repoRoot,
@@ -197,6 +208,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         });
         if (nextSelected) void get().loadDiff(nextSelected.path, nextSelected.mode);
       } catch (err) {
+        if (seq !== refreshSeq) return;
         const message = err instanceof Error ? err.message : String(err);
         deps.onError?.('error', message);
         // refresh 本身失败:当前状态未知(列表是上一次的)。statusError 让面板持续显示原因并禁用
@@ -210,32 +222,49 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
       // 未选中工作树文件)。显示的内容不早于这次点击。
       const diffCache = new Map(get().diffCache);
       diffCache.delete(cacheKey(path, mode));
+      loading.delete(cacheKey(path, mode));
       set({ selected: { path, mode }, diffCache });
       void get().loadDiff(path, mode);
     },
-    async loadDiff(path, mode) {
+    loadDiff(path, mode) {
       const { repoRoot, changes, diffCache } = get();
-      if (!repoRoot || !deps.fetchDiff) return;
+      const fetchDiff = deps.fetchDiff;
+      if (!repoRoot || !fetchDiff) return Promise.resolve();
       const key = cacheKey(path, mode);
-      if (diffCache.has(key)) return; // cache hit
+      if (diffCache.has(key)) return Promise.resolve(); // cache hit
+      const pending = loading.get(key);
+      if (pending) return pending.promise;
       const change = findChange(changes, path, mode);
-      if (!change || change.inoperable) return;
-      try {
-        const result = await deps.fetchDiff(repoRoot, change, mode);
-        const next = new Map(get().diffCache);
-        next.set(key, result);
-        set({ diffCache: next });
-      } catch (err) {
-        set({
-          banner: {
-            kind: 'error',
-            message: `Failed to load diff for ${path}: ${err instanceof Error ? err.message : String(err)}`,
-            dismissable: true,
-          },
-        });
-      }
+      if (!change || change.inoperable) return Promise.resolve();
+
+      const entry = { promise: Promise.resolve() };
+      const current = () => loading.get(key) === entry;
+      loading.set(key, entry);
+      entry.promise = (async () => {
+        try {
+          const result = await fetchDiff(repoRoot, change, mode);
+          if (!current()) return;
+          const next = new Map(get().diffCache);
+          next.set(key, result);
+          set({ diffCache: next });
+        } catch (err) {
+          if (!current()) return;
+          set({
+            banner: {
+              kind: 'error',
+              message: `Failed to load diff for ${path}: ${err instanceof Error ? err.message : String(err)}`,
+              dismissable: true,
+            },
+          });
+        } finally {
+          if (current()) loading.delete(key);
+        }
+      })();
+      return entry.promise;
     },
     clear() {
+      refreshSeq += 1;
+      loading.clear();
       set({
         repoRoot: null,
         changes: [],
