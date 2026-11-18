@@ -66,6 +66,10 @@
 
 - [`commit-shell.spec.ts`](./commit-shell/commit-shell.spec.ts)
 
+## [Copy Command](./copy-command/README.md)
+
+- [`copy-command.spec.tsx`](./copy-command/copy-command.spec.tsx)
+
 ## [Diff Fetcher](./diff-fetcher/README.md)
 
 - [`diff-fetcher.spec.ts`](./diff-fetcher/diff-fetcher.spec.ts)

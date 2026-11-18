@@ -52,14 +52,24 @@ const WITHHELD_NOTICE = {
   'no-staged-blob': 'No staged file content to show (submodule entry or unresolved merge conflict)',
 } as const;
 
-function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string }) {
+// exactCommand 里的路径已按 shell 规则转义(diff-fetcher / shell-quote);为 null 表示路径含控制字符、
+// 没有可安全粘贴的命令:不显示命令,Copy 禁用并说明原因。
+function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string | null }) {
   return (
     <div className="cgv-placeholder">
       <strong>Diff too large</strong>
-      <code>{exactCommand}</code>
+      {exactCommand !== null ? <code>{exactCommand}</code> : null}
       <button
         type="button"
-        onClick={() => void navigator.clipboard?.writeText(exactCommand)}
+        disabled={exactCommand === null}
+        title={
+          exactCommand === null
+            ? 'No command to copy: this file name contains control characters and cannot be pasted into a terminal safely'
+            : undefined
+        }
+        onClick={() => {
+          if (exactCommand !== null) void navigator.clipboard?.writeText(exactCommand);
+        }}
       >
         Copy
       </button>

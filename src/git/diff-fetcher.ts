@@ -2,6 +2,7 @@ import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
 import { isNotFoundError } from './fs-errors';
 import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
+import { shellQuotePath } from './shell-quote';
 import type { FileChange } from './status-scanner';
 
 // v0.1.3 hotfix: MergeView 必须接收两个全文（不是 filter unified diff +/-）。
@@ -25,7 +26,8 @@ export type DiffResult =
       ok: false;
       reason: 'too-large' | 'git-error';
       path: string;
-      exactCommand: string;
+      /** 供用户复制到终端的等价命令(路径已按 shell 规则转义);路径含控制字符时为 null。 */
+      exactCommand: string | null;
       message?: string;
     };
 
@@ -48,14 +50,14 @@ type DiffApp = Pick<CoPluginApp, 'shell'> & Partial<Pick<CoPluginApp, 'fs'>>;
 
 export type DiffMode = 'changed' | 'staged';
 
-function trackedCommand(path: string, mode: DiffMode): string {
+// "Diff too large" 占位里供用户复制的命令。路径按 shell 规则转义(见 shell-quote);含控制字符的路径没有
+// 可安全粘贴的形式 → null(占位里的 Copy 按钮禁用)。
+function trackedCommand(path: string, mode: DiffMode): string | null {
+  const quoted = shellQuotePath(path);
+  if (quoted === null) return null;
   return mode === 'staged'
-    ? `git diff --cached -- ${path}`
-    : `git diff -- ${path}`;
-}
-
-function untrackedCommand(path: string): string {
-  return `git diff --no-index --binary --no-color /dev/null ${path}`;
+    ? `git diff --cached -- ${quoted}`
+    : `git diff -- ${quoted}`;
 }
 
 async function gitShowHead(
@@ -236,6 +238,3 @@ export async function fetchDiff(
     ...readFlags(wt),
   };
 }
-
-// Untracked helper kept for backward compat in spec; not used in runtime.
-export { untrackedCommand };
