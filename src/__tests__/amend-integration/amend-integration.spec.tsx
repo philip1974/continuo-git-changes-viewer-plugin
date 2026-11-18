@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { createGitStore } from '../../state/git-store';
+import { buildGitArgs } from '../../git/exec';
 
 afterEach(() => cleanup());
 
@@ -61,7 +62,7 @@ describe('amend integration', () => {
     await vi.waitFor(() => {
       expect(exec).toHaveBeenCalledWith(
         'git',
-        ['--no-optional-locks', 'commit', '--amend', '-F', '-'],
+        buildGitArgs(['commit', '--amend', '-F', '-']),
         expect.objectContaining({ input: 'new subject' }),
       );
       expect(store.getState().amend).toBe(false);

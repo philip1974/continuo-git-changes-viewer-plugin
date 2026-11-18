@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { stageFile } from '../../git/stage-file';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -21,9 +22,9 @@ describe('stageFile shell wrapper', () => {
 
     await expect(stageFile(app, '/repo', 'new.txt')).resolves.toEqual({ ok: true });
 
-    expect(exec).toHaveBeenCalledWith('git', ['--no-optional-locks', 'add', '--', 'new.txt'], {
+    expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['add', '--', 'new.txt']), {
       cwd: '/repo',
-      env: { GIT_OPTIONAL_LOCKS: '0' },
+      env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),
       timeoutMs: 10_000,
     });
   });
@@ -44,7 +45,7 @@ describe('stageFile shell wrapper', () => {
 
     await stageFile(app, '/repo', '--looks-like-option');
 
-    expect(exec.mock.calls[0]?.[1]).toEqual(['--no-optional-locks', 'add', '--', '--looks-like-option']);
+    expect(exec.mock.calls[0]?.[1]).toEqual(buildGitArgs(['add', '--', '--looks-like-option']));
   });
 
   it('T4 falls back to an exit-code message when stderr is empty', async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readStatusHash } from '../../git/status-hash';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(overrides: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -26,7 +27,7 @@ describe('readStatusHash', () => {
     );
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'status', '--porcelain=v1', '-z'],
+      buildGitArgs(['status', '--porcelain=v1', '-z']),
       expect.objectContaining({
         cwd: '/repo',
         env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),

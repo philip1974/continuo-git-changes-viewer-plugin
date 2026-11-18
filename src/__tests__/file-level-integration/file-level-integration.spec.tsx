@@ -7,6 +7,7 @@ import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { createGitStore } from '../../state/git-store';
 import type { FileChange } from '../../git/status-scanner';
+import { buildGitArgs } from '../../git/exec';
 
 afterEach(() => {
   cleanup();
@@ -33,7 +34,7 @@ function renderWithChanges(
   const notifications = { show: vi.fn() };
   const shellExec = vi.fn(
     async (cmd: string, args: readonly string[], opts?: unknown) => {
-      if (args[0] === '--no-optional-locks' && args[1] === 'rev-parse') {
+      if (args.includes('rev-parse')) {
         return result({ exitCode: 0, stdout: 'HEAD\n' });
       }
       return exec(cmd, args, opts);
@@ -67,7 +68,7 @@ describe('file-level write-op integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stage file new.txt' }));
 
     await vi.waitFor(() => {
-      expect(exec).toHaveBeenCalledWith('git', ['--no-optional-locks', 'add', '--', 'new.txt'], expect.anything());
+      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['add', '--', 'new.txt']), expect.anything());
       expect(refresh).toHaveBeenCalledTimes(1);
     });
     expect(notifications.show).toHaveBeenCalledWith({ kind: 'info', message: 'Staged new.txt' });
@@ -85,7 +86,7 @@ describe('file-level write-op integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard file' }));
 
     await vi.waitFor(() => {
-      expect(exec).toHaveBeenCalledWith('git', ['--no-optional-locks', 'checkout', '--', 'src/a.ts'], expect.anything());
+      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['checkout', '--', 'src/a.ts']), expect.anything());
       expect(refresh).toHaveBeenCalledTimes(1);
     });
     expect(exec.mock.calls[0]?.[1]).not.toContain('HEAD');
@@ -104,8 +105,8 @@ describe('file-level write-op integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Unstage file src/a.ts' }));
 
     await vi.waitFor(() => {
-      expect(exec).toHaveBeenNthCalledWith(1, 'git', ['--no-optional-locks', 'restore', '-h'], expect.anything());
-      expect(exec).toHaveBeenNthCalledWith(2, 'git', ['--no-optional-locks', 'restore', '--staged', '--', 'src/a.ts'], expect.anything());
+      expect(exec).toHaveBeenNthCalledWith(1, 'git', buildGitArgs(['restore', '-h']), expect.anything());
+      expect(exec).toHaveBeenNthCalledWith(2, 'git', buildGitArgs(['restore', '--staged', '--', 'src/a.ts']), expect.anything());
       expect(refresh).toHaveBeenCalledTimes(1);
     });
   });

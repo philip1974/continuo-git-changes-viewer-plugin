@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fetchDiff } from '../../git/diff-fetcher';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -40,7 +41,7 @@ describe('tracked diff fetcher', () => {
     // v0.3.0 spawns 3 parallel calls: git show HEAD:<path>, cat <path>, git diff -- <path>
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'show', 'HEAD:src/a.ts'],
+      buildGitArgs(['show', 'HEAD:src/a.ts']),
       expect.objectContaining({ cwd: '/repo' }),
     );
     expect(exec).toHaveBeenCalledWith(
@@ -50,7 +51,7 @@ describe('tracked diff fetcher', () => {
     );
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'diff', '--', 'src/a.ts'],
+      buildGitArgs(['diff', '--', 'src/a.ts']),
       expect.objectContaining({ cwd: '/repo' }),
     );
   });

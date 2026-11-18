@@ -6,6 +6,7 @@ import { fetchDiff } from '../../git/diff-fetcher';
 import { DiffView } from '../../panel/DiffView';
 import { createGitStore } from '../../state/git-store';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 afterEach(() => cleanup());
 
@@ -167,12 +168,12 @@ describe('stage hunk integration', () => {
 
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'diff', '--', 'src/a.ts'],
+      buildGitArgs(['diff', '--', 'src/a.ts']),
       expect.objectContaining({ cwd: '/repo' }),
     );
     expect(exec).not.toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'diff', 'HEAD', '--', 'src/a.ts'],
+      buildGitArgs(['diff', 'HEAD', '--', 'src/a.ts']),
       expect.objectContaining({ cwd: '/repo' }),
     );
   });

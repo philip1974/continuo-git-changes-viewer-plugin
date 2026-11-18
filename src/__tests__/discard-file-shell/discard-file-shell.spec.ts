@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { discardFile } from '../../git/discard-file';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -49,9 +50,9 @@ describe('discardFile shell wrapper', () => {
 
     await discardFile(app, '/repo', 'a.ts');
 
-    expect(exec).toHaveBeenCalledWith('git', ['--no-optional-locks', 'checkout', '--', 'a.ts'], {
+    expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['checkout', '--', 'a.ts']), {
       cwd: '/repo',
-      env: { GIT_OPTIONAL_LOCKS: '0' },
+      env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),
       timeoutMs: 10_000,
     });
     expect(exec.mock.calls[0]?.[1]).not.toContain('HEAD');

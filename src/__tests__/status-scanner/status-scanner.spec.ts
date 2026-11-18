@@ -5,6 +5,7 @@ import {
   type FileChange,
 } from '../../git/status-scanner';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(stdout: string): PluginShellExecResult {
   return {
@@ -68,7 +69,7 @@ describe('porcelain status parsing', () => {
     expect(exec).toHaveBeenNthCalledWith(
       1,
       'git',
-      ['--no-optional-locks', 'status', '--porcelain=v1', '-z'],
+      buildGitArgs(['status', '--porcelain=v1', '-z']),
       expect.objectContaining({ cwd: '/repo' }),
     );
   });

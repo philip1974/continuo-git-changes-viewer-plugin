@@ -225,6 +225,18 @@
 
 - [`repo-detect.spec.ts`](./repo-detect/repo-detect.spec.ts)
 
+## [Repo Safety (restricted repositories)](./repo-safety/README.md)
+
+- [`repo-safety.spec.ts`](./repo-safety/repo-safety.spec.ts)
+
+## [Repo Safety — real git integration](./repo-safety-real-git/README.md)
+
+- [`repo-safety-real-git.spec.ts`](./repo-safety-real-git/repo-safety-real-git.spec.ts)
+
+## [Restricted Repository (panel behavior)](./restricted-repo-panel/README.md)
+
+- [`restricted-repo-panel.spec.tsx`](./restricted-repo-panel/restricted-repo-panel.spec.tsx)
+
 ## [Ribbon Register](./ribbon-register/README.md)
 
 - [`ribbon-register.spec.ts`](./ribbon-register/ribbon-register.spec.ts)

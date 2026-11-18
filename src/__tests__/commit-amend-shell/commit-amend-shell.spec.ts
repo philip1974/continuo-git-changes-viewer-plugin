@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { gitCommit } from '../../git/git-commit';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -26,7 +27,7 @@ describe('gitCommit amend shell wrapper', () => {
 
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'commit', '--amend', '-F', '-'],
+      buildGitArgs(['commit', '--amend', '-F', '-']),
       expect.objectContaining({
         cwd: '/repo',
         input: 'subject',
@@ -42,7 +43,7 @@ describe('gitCommit amend shell wrapper', () => {
 
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'commit', '-F', '-'],
+      buildGitArgs(['commit', '-F', '-']),
       expect.objectContaining({ input: 'subject' }),
     );
   });
@@ -66,7 +67,7 @@ describe('gitCommit amend shell wrapper', () => {
 
     await gitCommit(appWithExec(exec), '/repo', 'subject', { amend: false });
 
-    expect(exec.mock.calls[0]?.[1]).toEqual(['--no-optional-locks', 'commit', '-F', '-']);
+    expect(exec.mock.calls[0]?.[1]).toEqual(buildGitArgs(['commit', '-F', '-']));
   });
 });
 

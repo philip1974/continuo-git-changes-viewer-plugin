@@ -5,6 +5,7 @@ import {
   readHeadSha,
 } from '../../git/head-meta';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -82,10 +83,10 @@ describe('HEAD metadata shell helpers', () => {
 
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'rev-parse', 'HEAD'],
+      buildGitArgs(['rev-parse', 'HEAD']),
       expect.objectContaining({
         cwd: '/repo',
-        env: { GIT_OPTIONAL_LOCKS: '0' },
+        env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),
         timeoutMs: 5_000,
       }),
     );

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetRestoreCache, unstageFile } from '../../git/unstage-file';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -26,14 +27,14 @@ describe('unstageFile shell wrapper', () => {
 
     await expect(unstageFile(app, '/repo', 'a.ts')).resolves.toEqual({ ok: true });
 
-    expect(exec).toHaveBeenNthCalledWith(1, 'git', ['--no-optional-locks', 'restore', '-h'], {
+    expect(exec).toHaveBeenNthCalledWith(1, 'git', buildGitArgs(['restore', '-h']), {
       cwd: '/repo',
-      env: { GIT_OPTIONAL_LOCKS: '0' },
+      env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),
       timeoutMs: 5_000,
     });
-    expect(exec).toHaveBeenNthCalledWith(2, 'git', ['--no-optional-locks', 'restore', '--staged', '--', 'a.ts'], {
+    expect(exec).toHaveBeenNthCalledWith(2, 'git', buildGitArgs(['restore', '--staged', '--', 'a.ts']), {
       cwd: '/repo',
-      env: { GIT_OPTIONAL_LOCKS: '0' },
+      env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),
       timeoutMs: 10_000,
     });
   });
@@ -47,9 +48,9 @@ describe('unstageFile shell wrapper', () => {
 
     await expect(unstageFile(app, '/repo', 'a.ts')).resolves.toEqual({ ok: true });
 
-    expect(exec).toHaveBeenNthCalledWith(2, 'git', ['--no-optional-locks', 'reset', 'HEAD', '--', 'a.ts'], {
+    expect(exec).toHaveBeenNthCalledWith(2, 'git', buildGitArgs(['reset', 'HEAD', '--', 'a.ts']), {
       cwd: '/repo',
-      env: { GIT_OPTIONAL_LOCKS: '0' },
+      env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),
       timeoutMs: 10_000,
     });
   });
@@ -65,7 +66,7 @@ describe('unstageFile shell wrapper', () => {
     await unstageFile(app, '/repo', 'b.ts');
 
     expect(exec.mock.calls.filter((call) => (call[1] as string[]).includes('-h'))).toHaveLength(1);
-    expect(exec).toHaveBeenLastCalledWith('git', ['--no-optional-locks', 'restore', '--staged', '--', 'b.ts'], expect.anything());
+    expect(exec).toHaveBeenLastCalledWith('git', buildGitArgs(['restore', '--staged', '--', 'b.ts']), expect.anything());
   });
 
   it('T8 reset helper clears the restore capability cache', async () => {
@@ -82,6 +83,6 @@ describe('unstageFile shell wrapper', () => {
     await unstageFile(app, '/repo', 'b.ts');
 
     expect(exec.mock.calls.filter((call) => (call[1] as string[]).includes('-h'))).toHaveLength(2);
-    expect(exec).toHaveBeenLastCalledWith('git', ['--no-optional-locks', 'reset', 'HEAD', '--', 'b.ts'], expect.anything());
+    expect(exec).toHaveBeenLastCalledWith('git', buildGitArgs(['reset', 'HEAD', '--', 'b.ts']), expect.anything());
   });
 });
