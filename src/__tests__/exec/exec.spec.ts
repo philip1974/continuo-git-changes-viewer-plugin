@@ -37,7 +37,12 @@ const GLOBALS = [
   '-c',
   'gc.auto=0',
 ];
-const NO_NETWORK = ['-c', 'protocol.allow=never', '-c', 'core.hooksPath=/dev/null'];
+const NO_NETWORK = [
+  '-c', 'protocol.allow=never',
+  '-c', 'core.hooksPath=/dev/null',
+  '-c', 'status.renames=true',
+  '-c', 'diff.renames=true',
+];
 const ENV = {
   GIT_OPTIONAL_LOCKS: '0',
   GIT_TERMINAL_PROMPT: '0',

@@ -218,16 +218,21 @@ describe('diff symlink guard (fail-closed)', () => {
     });
   });
 
-  it('T8 paths escaping the repo root are never read', async () => {
+  it('T8 paths escaping the repo root (or pointing into the git directory) are never read and no process is spawned for them', async () => {
     const exec = vi.fn().mockResolvedValue(ok(SECRET));
     const lstat = vi.fn().mockResolvedValue({ size: 1, mtimeMs: 0, isFile: true, isDirectory: false, isSymlink: false });
     const app = { shell: { exec }, fs: { lstat } } as unknown as CoPluginApp;
 
-    for (const path of ['../outside/secret.txt', 'a/../../outside/secret.txt', '/etc/passwd']) {
+    for (const path of ['../outside/secret.txt', 'a/../../outside/secret.txt', '/etc/passwd', '.git/config', 'sub/.GIT/config']) {
       const diff = await fetchDiff(app, '/repo', untracked(path));
-      expect(diff).toMatchObject({ ok: true, modified: '', withheld: 'unverified' });
+      expect(diff).toMatchObject({ ok: false, reason: 'git-error', message: expect.stringContaining('not inside this repository') });
+      const tracked = await fetchDiff(app, '/repo', { ...untracked(path), status: 'M', statusX: ' ', statusY: 'M' });
+      expect(tracked).toMatchObject({ ok: false, reason: 'git-error' });
+      const renamed = await fetchDiff(app, '/repo', { path: 'ok.txt', oldPath: path, status: 'R', statusX: 'R', statusY: ' ', kind: 'text' });
+      expect(renamed).toMatchObject({ ok: false, reason: 'git-error' });
     }
-    expect(catCalls(exec)).toEqual([]);
+    expect(exec).not.toHaveBeenCalled();
+    expect(lstat).not.toHaveBeenCalled();
   });
 
   it('T8b lstat is asked about the path and every parent below the repo root', async () => {

@@ -129,3 +129,15 @@ Literal paths (also affects ordinary repositories):
 - R40: `[id].tsx` no longer matches `i.tsx` (stage, diff, staged diff).
 - R41: no side effects elsewhere — untracked directory staging, hunk apply,
   head meta, safety probes; a pre-commit hook still uses glob pathspecs.
+
+Paths reported by git:
+
+- R42: a forged `.git/index` listing `../outside.txt`, an absolute path and
+  `.git/hooks/planted` → git lists them as changes and `git checkout --
+  .git/hooks/planted` writes into the git directory; the plugin drops those
+  entries, and stage / unstage / discard / diff for such paths are refused
+  without spawning any process.
+- R43: `status.renames=copies` makes git emit copy records; with the plugin's
+  pinned rename detection the list is the same whatever the repository
+  configures (`copies`, `false`), and with the pins stripped the copy record is
+  still parsed without producing a bogus entry.

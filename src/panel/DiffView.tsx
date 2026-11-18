@@ -211,6 +211,14 @@ export function DiffView({
 
     const selectedPath = state.selected?.path ?? change.path;
     const absPath = joinRepoPath(repoRoot, selectedPath);
+    if (absPath === null) {
+      state.setBanner({
+        kind: 'error',
+        message: `Invalid path: ${selectedPath} (not inside this repository)`,
+        dismissable: true,
+      });
+      return;
+    }
     let result;
     try {
       result = await editor.openFile(absPath, { line });

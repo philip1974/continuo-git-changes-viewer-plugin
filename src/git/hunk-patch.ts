@@ -1,3 +1,5 @@
+import { isSafeRepoRelativePath } from './path-utils';
+
 export interface HunkInput {
   readonly filePath: string;
   readonly hunkHeader: string;
@@ -5,7 +7,7 @@ export interface HunkInput {
 }
 
 export function isPathSafeForPatch(path: string): boolean {
-  return !/[\n\r\t"\\]/.test(path);
+  return !/[\n\r\t"\\]/.test(path) && isSafeRepoRelativePath(path);
 }
 
 export function buildHunkPatch(input: HunkInput): string {

@@ -64,11 +64,21 @@ export const PINNED_CONFIG: ReadonlyArray<readonly [key: string, value: string]>
   ['gc.auto', '0'],
 ];
 
-export const GIT_GLOBAL_ARGS: readonly string[] = [
-  '--no-optional-locks',
-  '--no-pager',
-  ...PINNED_CONFIG.flatMap(([key, value]) => ['-c', `${key}=${value}`]),
+// 只影响"插件要解析的输出"的固定配置:除 commit 外的每次调用都加。commit 不加——它的输出插件不解析,
+// 而 `-c` 会经 GIT_CONFIG_PARAMETERS 传给用户 hooks,不该无谓地改变 hooks 里 git 命令的行为。
+export const PINNED_OUTPUT_CONFIG: ReadonlyArray<readonly [key: string, value: string]> = [
+  // status / diff 的重命名检测固定为 git 默认值。仓库设 `status.renames=copies` 时 porcelain 会输出
+  // 复制记录(`C  新\0原\0`),设 false 则重命名显示成一删一增——文件列表不应随仓库 config 变形。
+  ['status.renames', 'true'],
+  ['diff.renames', 'true'],
 ];
+
+const pins = (config: ReadonlyArray<readonly [string, string]>): string[] =>
+  config.flatMap(([key, value]) => ['-c', `${key}=${value}`]);
+
+export const GIT_GLOBAL_ARGS: readonly string[] = ['--no-optional-locks', '--no-pager', ...pins(PINNED_CONFIG)];
+
+const OUTPUT_ARGS: readonly string[] = pins(PINNED_OUTPUT_CONFIG);
 
 const NO_NETWORK_ARGS: readonly string[] = ['-c', 'protocol.allow=never'];
 
@@ -149,7 +159,7 @@ export function buildGitArgs(args: readonly string[], opts: GitHardeningOptions 
   const globals = [
     ...GIT_GLOBAL_ARGS,
     ...(networkAllowed(args, opts) ? [] : NO_NETWORK_ARGS),
-    ...(runsHooks(args) ? [] : NO_HOOKS_ARGS),
+    ...(runsHooks(args) ? [] : [...NO_HOOKS_ARGS, ...OUTPUT_ARGS]),
   ];
   if (subcommand === undefined) return globals;
   const extra = SUBCOMMAND_HARDENING[subcommand] ?? [];

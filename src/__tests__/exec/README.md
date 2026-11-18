@@ -17,6 +17,10 @@ invocation against executable settings in an untrusted repository config:
   `restore`, `reset`, `checkout`) otherwise run `post-index-change` /
   `post-checkout` hooks planted in an untrusted `.git/hooks`. `commit` keeps
   hooks (see `commit-hooks-confirm`).
+- Output pins (`PINNED_OUTPUT_CONFIG`, every command except `commit`, whose
+  output is not parsed and whose `-c` values reach hooks): `status.renames=true`,
+  `diff.renames=true` — the file list must not change shape with repository
+  config (`copies` adds copy records, `false` splits renames).
 - Per subcommand: `diff` → `--no-ext-diff --no-textconv --ignore-submodules=dirty
   --submodule=short`; `show` / `log` → `--no-ext-diff --no-textconv
   --no-show-signature --submodule=short`; `status` → `--ignore-submodules=dirty`

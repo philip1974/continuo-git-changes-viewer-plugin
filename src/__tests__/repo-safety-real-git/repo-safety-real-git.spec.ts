@@ -1,6 +1,7 @@
 // 真实 git 集成:构造含恶意 .git/config 的临时仓库,每个可执行配置指向一个"写标记文件"的脚本,
 // 断言插件的 git 调用不再触发任何标记;同时验证普通仓库功能与用户 hooks 不受影响。
 import { spawn, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { chmodSync, existsSync, readFileSync, renameSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1243,5 +1244,101 @@ describe('paths are passed to git literally, never as pathspec patterns (real gi
     git(repo, 'config', 'user.email', 't@t');
     expect(await gitCommit(app, repo, 'literal', { hooksConfirmed: true })).toMatchObject({ ok: true });
     expect(readFileSync(join(markDir, 'globbed'), 'utf8').split('\n').filter(Boolean).sort()).toEqual(['dir/u.txt', 'f.txt']);
+  });
+});
+
+describe('paths reported by git are not trusted: forged index entries and copy records (real git)', () => {
+  // 手写一个 v2 index(`git update-index` 会拒绝这些路径,但读 index 时 git 不校验):每个条目都指向 f.txt 的 blob。
+  function forgeIndex(paths: readonly string[]): void {
+    const sha = Buffer.from(git(repo, 'rev-parse', 'HEAD:f.txt').trim(), 'hex');
+    const entries = [...paths].sort().map((p) => {
+      const name = Buffer.from(p);
+      const head = Buffer.alloc(62);
+      head.writeUInt32BE(0o100644, 24);
+      sha.copy(head, 40);
+      head.writeUInt16BE(name.length, 60);
+      const len = 62 + name.length;
+      return Buffer.concat([head, name, Buffer.alloc(8 - (len % 8))]);
+    });
+    const header = Buffer.alloc(12);
+    header.write('DIRC');
+    header.writeUInt32BE(2, 4);
+    header.writeUInt32BE(entries.length, 8);
+    const body = Buffer.concat([header, ...entries]);
+    writeFileSync(join(repo, '.git', 'index'), Buffer.concat([body, createHash('sha1').update(body).digest()]));
+  }
+
+  it('R42 forged index listing ../outside, an absolute path and .git/hooks/x: git reports them and `checkout --` writes into the git directory; the plugin drops the entries and refuses to act on such paths', async () => {
+    const outside = join(realpathSync(base), 'outside.txt');
+    writeFileSync(outside, 'OUTSIDE-SECRET\n');
+    forgeIndex(['f.txt', 'g.txt', '../outside.txt', outside, '.git/hooks/planted', '.GIT/hooks/planted2']);
+
+    // 证明 fixture:git 自己把这些条目当成正常变更列出;discard(checkout --)把 blob 写进 .git/hooks
+    const raw = git(repo, 'status', '--porcelain=v1', '-z').split('\0').filter(Boolean);
+    expect(raw).toEqual(expect.arrayContaining(['AM ../outside.txt', `AM ${outside}`, 'AD .git/hooks/planted']));
+    const loose = await gitExec(realApp(), repo, ['checkout', '--', '.git/hooks/planted']);
+    expect(loose.exitCode).toBe(0);
+    expect(existsSync(join(repo, '.git', 'hooks', 'planted'))).toBe(true);
+    rmSync(join(repo, '.git', 'hooks', 'planted'));
+
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('trusted');
+    const spawnedCommands: string[] = [];
+    const spy = {
+      ...app,
+      shell: {
+        exec: (cmd: string, args: readonly string[], opts?: PluginShellExecOptions) => {
+          spawnedCommands.push([cmd, ...args].join(' '));
+          return app.shell.exec(cmd, args, opts);
+        },
+      },
+    } as unknown as CoPluginApp;
+
+    const changes = await scanStatus(spy, repo);
+    expect(changes.map((c) => c.path)).toEqual(['g.txt']); // g.txt 的条目指向 f.txt 的 blob,是唯一合法的变更
+    spawnedCommands.length = 0;
+
+    for (const path of ['../outside.txt', outside, '.git/hooks/planted', '.GIT/hooks/planted2']) {
+      expect((await discardFile(spy, repo, path)).ok).toBe(false);
+      expect((await stageFile(spy, repo, path)).ok).toBe(false);
+      expect((await unstageFile(spy, repo, path)).ok).toBe(false);
+      const change = { path, status: 'A', statusX: 'A', statusY: 'M', kind: 'text' } as const;
+      for (const mode of ['changed', 'staged'] as const) {
+        const d = await fetchDiff(spy, repo, change, mode);
+        expect(d.ok).toBe(false);
+        expect(JSON.stringify(d)).not.toContain('OUTSIDE-SECRET');
+      }
+    }
+    expect(spawnedCommands).toEqual([]);
+    expect(readdirSync(join(repo, '.git', 'hooks')).filter((n) => n.startsWith('planted'))).toEqual([]);
+    expect(readFileSync(outside, 'utf8')).toBe('OUTSIDE-SECRET\n');
+  });
+
+  it('R43 status.renames=copies: git emits copy records (`C  new\\0orig\\0`); the plugin pins rename detection so the list does not depend on repository config, and still parses copies correctly if they appear', async () => {
+    writeFileSync(join(repo, 'a.txt'), 'one\ntwo\nthree\nfour\nfive\n');
+    git(repo, 'add', 'a.txt');
+    git(repo, 'commit', '-qm', 'a');
+    writeFileSync(join(repo, 'copy.txt'), 'one\ntwo\nthree\nfour\nfive\n');
+    appendFileSync(join(repo, 'a.txt'), 'six\n');
+    git(repo, 'add', '.');
+    git(repo, 'mv', 'g.txt', 'g2.txt');
+    git(repo, 'config', 'status.renames', 'copies');
+    git(repo, 'config', 'diff.renames', 'copies');
+
+    // 证明 fixture
+    expect(git(repo, 'status', '--porcelain=v1', '-z').split('\0')).toEqual(expect.arrayContaining(['C  copy.txt', 'a.txt']));
+
+    const summary = (cs: Awaited<ReturnType<typeof scanStatus>>) => cs.map((c) => `${c.statusX}${c.statusY} ${c.status} ${c.path}${c.oldPath ? ` <- ${c.oldPath}` : ''}`);
+    const expected = ['M  M a.txt', 'A  A copy.txt', 'R  R g2.txt <- g.txt'];
+    expect(summary(await scanStatus(realApp(), repo))).toEqual(expected);
+    // 去掉固定参数(= 仓库 config 生效,git 输出 C 记录):解析仍不产生伪条目
+    const unpinned = summary(await scanStatus(tamperedApp({ dropPins: ['status.renames', 'diff.renames'] }), repo));
+    expect(unpinned).toEqual(['M  M a.txt', 'C  A copy.txt', 'R  R g2.txt <- g.txt']);
+
+    // 仓库把重命名检测关掉也不影响列表
+    git(repo, 'config', 'status.renames', 'false');
+    git(repo, 'config', 'diff.renames', 'false');
+    expect(summary(await scanStatus(realApp(), repo))).toEqual(expected);
   });
 });

@@ -1,5 +1,6 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
+import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
 
 export interface FileOpResult {
   readonly ok: boolean;
@@ -11,6 +12,7 @@ export async function stageFile(
   repoRoot: string,
   path: string,
 ): Promise<FileOpResult> {
+  if (!isSafeRepoRelativePath(path)) return { ok: false, error: UNSAFE_PATH_ERROR };
   const result = await gitExec(app, repoRoot, ['add', '--', path], {
     timeoutMs: 10_000,
   });

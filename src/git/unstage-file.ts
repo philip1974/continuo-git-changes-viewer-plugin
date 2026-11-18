@@ -1,5 +1,6 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
+import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
 import type { FileOpResult } from './stage-file';
 
 let restoreSupported: boolean | null = null;
@@ -26,6 +27,7 @@ export async function unstageFile(
   repoRoot: string,
   path: string,
 ): Promise<FileOpResult> {
+  if (!isSafeRepoRelativePath(path)) return { ok: false, error: UNSAFE_PATH_ERROR };
   const useRestore = await supportsRestore(app, repoRoot);
   const args = useRestore
     ? ['restore', '--staged', '--', path]

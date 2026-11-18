@@ -20,5 +20,7 @@ scope error, any failure other than an explicit ENOENT). The git unified diff
 - T5: host scope error on lstat (message-only IPC error) — content withheld, `cat` is never run.
 - T6: file access unavailable (`app.fs` missing) — content withheld.
 - T7: explicit ENOENT from lstat is not a link — falls through to the normal (empty) read.
-- T8: paths that escape the repo root (`..` segment / absolute) are never read.
+- T8: paths that escape the repo root (`..` segment / absolute) or point into a
+  `.git` directory are never read: `fetchDiff` fails without spawning anything
+  (see `path-utils`).
 - T9: the panel shows a notice instead of file content when content was withheld.

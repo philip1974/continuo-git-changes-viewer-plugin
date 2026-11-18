@@ -47,6 +47,43 @@ describe('porcelain status parsing', () => {
     ]);
   });
 
+  it('T5 copy records (status.renames=copies) also carry an original path: it is consumed, never turned into an entry of its own', () => {
+    const parsed = parsePorcelainStatus('C  copy.txt\0/etc/passwd\0 M a.txt\0CM c2.txt\0src.txt\0 C wt-copy.txt\0a.txt\0');
+
+    expect(parsed).toEqual<FileChange[]>([
+      { path: 'a.txt', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' },
+      { path: 'c2.txt', status: 'A', statusX: 'C', statusY: 'M', kind: 'text' },
+      { path: 'wt-copy.txt', status: 'A', statusX: ' ', statusY: 'C', kind: 'text' },
+    ]);
+    // 原路径合法时:复制按新增显示,不带 oldPath(原文件仍在)
+    expect(parsePorcelainStatus('C  copy.txt\0a.txt\0')).toEqual<FileChange[]>([
+      { path: 'copy.txt', status: 'A', statusX: 'C', statusY: ' ', kind: 'text' },
+    ]);
+  });
+
+  it('T6 entries whose path (or rename source) is absolute, escapes the repository or points into a git directory are dropped', () => {
+    const parsed = parsePorcelainStatus(
+      [
+        'AM ../outside.txt',
+        'AM /etc/passwd',
+        'AD .git/hooks/pre-commit',
+        ' M .GIT/config',
+        ' M a/../../b',
+        'R  ok-new.txt', '../old-outside.txt',
+        'R  .git/x', 'ok-old.txt',
+        ' M fine.txt',
+        '?? dir/',
+        'R  new.txt', 'old.txt',
+      ].join('\0') + '\0',
+    );
+
+    expect(parsed.map((c) => [c.path, c.oldPath])).toEqual([
+      ['fine.txt', undefined],
+      ['dir/', undefined],
+      ['new.txt', 'old.txt'],
+    ]);
+  });
+
   it('T3 marks binary files from numstat map', () => {
     const parsed = parsePorcelainStatus(' M image.png\0', new Map([
       ['image.png', { isBinary: true, add: null, del: null }],

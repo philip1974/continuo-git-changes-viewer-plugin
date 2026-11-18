@@ -1,6 +1,7 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
 import { isNotFoundError } from './fs-errors';
+import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
 import type { FileChange } from './status-scanner';
 
 // v0.1.3 hotfix: MergeView 必须接收两个全文（不是 filter unified diff +/-）。
@@ -110,6 +111,17 @@ export async function fetchDiff(
   mode: DiffMode = 'changed',
 ): Promise<DiffResult> {
   const untracked = change.status === 'U';
+
+  // status 解析已丢弃这类条目(见 path-utils);这里是同一检查在读取入口的再次把关,不起任何进程。
+  if (!isSafeRepoRelativePath(change.path) || (change.oldPath !== undefined && !isSafeRepoRelativePath(change.oldPath))) {
+    return {
+      ok: false,
+      reason: 'git-error',
+      path: change.path,
+      exactCommand: trackedCommand(change.path, mode),
+      message: UNSAFE_PATH_ERROR,
+    };
+  }
 
   // Untracked: 没 HEAD 版；只显示 WT 全文（DiffView 走 NewFileView 分支）
   if (untracked) {
