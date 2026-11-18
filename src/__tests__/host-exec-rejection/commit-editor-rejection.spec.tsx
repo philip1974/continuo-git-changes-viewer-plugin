@@ -157,6 +157,19 @@ describe('checking whether there is a last commit is refused', () => {
     expect(unhandled).toEqual([]);
   });
 
+  it('H9 after the refused check, a commit goes through: HEAD now certainly has a commit — the checkbox is enabled and its title no longer says the check failed', async () => {
+    const { notifications } = renderEditor({ hasHeadCommit: reject, message: 'first' });
+    await settle();
+    const before = screen.getByRole('checkbox', { name: 'Amend last commit' }) as HTMLInputElement;
+    expect(before.title).toContain('Could not check for a last commit');
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
+    await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'info', message: 'Committed: subject' }));
+    const box = screen.getByRole('checkbox', { name: 'Amend last commit' }) as HTMLInputElement;
+    expect(box.disabled).toBe(false);
+    expect(box.title).toBe('');
+    expect(unhandled).toEqual([]);
+  });
+
   it('H8 already in Amend mode when the check is refused: the Amend button is disabled (null HEAD state opens nothing), but the checkbox can still be unchecked to get the draft back', async () => {
     const commit = vi.fn(async () => ({ ok: true as const }));
     const { store } = renderEditor({ amend: true, message: 'head subject', hasHeadCommit: reject, commit });

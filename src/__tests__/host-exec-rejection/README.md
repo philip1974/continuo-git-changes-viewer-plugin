@@ -34,6 +34,9 @@ Checking whether there is a last commit (on mount):
 - H8: Amend already on when the check is refused → the Amend button is
   disabled; the checkbox can still be unchecked (draft back), and cannot be
   checked again.
+- H9: a commit goes through after the refused check → HEAD certainly has a
+  commit: the checkbox is enabled and its tooltip no longer says the check
+  failed.
 
 Other entry points checked for the same gap: Stage / Unstage
 (`GitViewerPanel` `runFileAction`), the file and hunk drawers

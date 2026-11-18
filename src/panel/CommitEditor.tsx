@@ -469,7 +469,9 @@ export function CommitEditor({
       store.getState().setCommitMessage('');
       store.getState().setAmend(false);
       await store.getState().refresh();
+      // 刚提交成功:HEAD 确知有提交——此前"检查失败"的说明(复选框 title)也随之作废
       setHeadHasCommit(true);
+      setHeadCheckError(null);
       if (amend) {
         if (noOp) {
           showWarning(app, store, 'HEAD unchanged');
