@@ -34,3 +34,7 @@ plugin's git helpers.
   2.45) the plugin's `show` is still refused (`transport 'file' not allowed`);
   removing `GIT_ALLOW_PROTOCOL` too lets the fetch run the uploadpack (proves
   `-c protocol.allow=never` alone is bypassed).
+- R15: `repo/.git` is a gitfile pointing at a git directory whose name has a
+  trailing space / trailing tab / leading space (git keeps all but the newline)
+  and contains planted hooks → `detectRepoHooks` reports present (plain and
+  host-scoped fs); git really runs that directory's pre-commit.

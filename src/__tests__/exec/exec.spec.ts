@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildGitArgs, buildGitEnv, gitExec, registerGitGuard } from '../../git/exec';
+import { buildGitArgs, buildGitEnv, gitExec, registerGitGuard, stripTrailingNewline } from '../../git/exec';
 import type { CoPluginApp } from '../../sdk/types';
 
 function makeApp() {
@@ -146,5 +146,16 @@ describe('gitExec hardened shell wrapper', () => {
       expect(buildGitEnv(sub, { GIT_ALLOW_PROTOCOL: 'file:ssh:ext' })).toMatchObject({ GIT_ALLOW_PROTOCOL: '' });
     }
     expect(buildGitEnv(['commit', '-F', '-'])).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
+  });
+});
+
+describe('stripTrailingNewline (path-valued git output)', () => {
+  it('T10 removes exactly one trailing LF / CRLF and keeps every other whitespace', () => {
+    expect(stripTrailingNewline('/r/gd \n')).toBe('/r/gd ');
+    expect(stripTrailingNewline('/r/gd\t\r\n')).toBe('/r/gd\t');
+    expect(stripTrailingNewline(' .git\n')).toBe(' .git');
+    expect(stripTrailingNewline('.git')).toBe('.git');
+    expect(stripTrailingNewline('\n')).toBe('');
+    expect(stripTrailingNewline('a\n\n')).toBe('a\n');
   });
 });

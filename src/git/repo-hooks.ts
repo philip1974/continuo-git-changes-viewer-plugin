@@ -1,5 +1,5 @@
 import type { CoPluginApp } from '../sdk/types';
-import { gitExec } from './exec';
+import { gitExec, stripTrailingNewline } from './exec';
 import { parseScopedConfigList, PROBE_ARGS } from './repo-safety';
 
 // 提交前的 hooks 检测(安全):commit 是唯一不禁用 hooks 的子命令(见 exec.ts),用户自己仓库的
@@ -58,7 +58,10 @@ export async function detectRepoHooks(
   const commonDir = await gitExec(app, repoRoot, ['rev-parse', '--git-common-dir'], {
     timeoutMs: 5_000,
   });
-  const dir = commonDir?.exitCode === 0 ? commonDir.stdout.trim() : '';
+  // 只去掉 git 输出的一个结尾换行,不能 trim:目录名可以带首尾空白(压缩包里 `.git` 为文件
+  // `gitdir: gd `、真实 git 目录为 `gd /`,git 读 gitfile 只去换行),trim 后会 lstat 一个不存在的
+  // `gd/hooks` 而误判为无 hooks。
+  const dir = commonDir?.exitCode === 0 ? stripTrailingNewline(commonDir.stdout) : '';
   if (dir === '') return { kind: 'unknown', reason: 'could not locate the git directory' };
 
   const fs = app.fs;

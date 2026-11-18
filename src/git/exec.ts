@@ -171,3 +171,12 @@ export async function gitExec(
   }
   return gitExecUnguarded(app, cwd, args, opts);
 }
+
+/**
+ * 去掉 git 输出末尾的一个换行(`\n` 或 `\r\n`),保留其余空白。git 输出的**路径**(rev-parse
+ * --git-common-dir / --show-prefix 等)必须用它而不是 trim():目录名可以带首尾空白,trim 会把
+ * `.../gd ` 变成另一个路径。
+ */
+export function stripTrailingNewline(s: string): string {
+  return s.replace(/\r?\n$/, '');
+}

@@ -1,7 +1,7 @@
 // 真实 git 集成:构造含恶意 .git/config 的临时仓库,每个可执行配置指向一个"写标记文件"的脚本,
 // 断言插件的 git 调用不再触发任何标记;同时验证普通仓库功能与用户 hooks 不受影响。
 import { spawn, execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
+import { chmodSync, existsSync, renameSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -503,5 +503,29 @@ describe('repo safety against a real git with a hostile .git/config', () => {
     const leaked = await run(['GIT_NO_LAZY_FETCH', 'GIT_ALLOW_PROTOCOL']);
     expect(leaked.exitCode).toBe(0);
     expect(marks()).toEqual(['uploadpack']);
+  });
+  // 恶意压缩包:repo/.git 为 gitfile,真实 git 目录名带首尾空白。git 读 gitfile 只去换行、保留空格
+  // (`gitdir:` 后紧跟的那一个空格之外的前导空白也保留),rev-parse 输出 `<...>/gd \n`。
+  it.each([
+    ['trailing space', 'gd '],
+    ['trailing tab', 'gd\t'],
+    ['leading space', ' gd'],
+  ])('R15 gitfile pointing at a git dir whose name has %s → hooks there are detected; git really runs them', async (_label, name) => {
+    renameSync(join(repo, '.git'), join(repo, name));
+    writeFileSync(join(repo, '.git'), `gitdir: ${name}\n`);
+    plantHooks(join(repo, name, 'hooks'));
+    // 去掉空白后的同名目录不存在(否则漏判不会表现为 ENOENT)
+    expect(existsSync(join(repo, name.trim()))).toBe(false);
+
+    const expected = { kind: 'present', hooks: [...HOOK_NAMES].sort(), hooksPath: null };
+    expect(await detectRepoHooks(realApp(), repo)).toEqual(expected);
+    expect(await detectRepoHooks(hostScopedApp(repo), repo)).toEqual(expected);
+
+    // 证明 fixture:git 确实使用该目录并执行其中的 pre-commit
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    clearMarks();
+    expect(await gitCommit(realApp(), repo, 'via gitfile')).toMatchObject({ ok: true });
+    expect(marks()).toContain('pre-commit');
   });
 });

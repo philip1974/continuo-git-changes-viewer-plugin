@@ -26,3 +26,4 @@ T1 status argv + env. T2 caller env preserved, hardening values win. T3 diff/sho
 flags. T4 commit keeps hooks working (no network block, no hooksPath override). T5 guard refusal skips spawn.
 T6 throwing guard fails closed. T7 passing guard runs the hardened command. T8 every non-commit subcommand disables hooks.
 T9 `GIT_ALLOW_PROTOCOL` is empty for non-commit calls (caller env cannot re-enable it) and unset for commit.
+T10 `stripTrailingNewline` (used for path-valued git output instead of `trim()`) removes one trailing LF/CRLF only.

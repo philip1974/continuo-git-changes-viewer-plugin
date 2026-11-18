@@ -1,5 +1,5 @@
 import type { CoPluginApp } from '../sdk/types';
-import { gitExec } from './exec';
+import { gitExec, stripTrailingNewline } from './exec';
 
 export type RepoDetectionResult =
   | { ok: true; root: string }
@@ -27,7 +27,8 @@ export async function detectRepo(
     };
   }
 
-  const prefix = r.stdout.trim();
+  // 路径类输出:只去结尾换行,不 trim(目录名可带首尾空白)
+  const prefix = stripTrailingNewline(r.stdout);
   if (prefix === '') return { ok: true, root };
   return { ok: false, reason: 'not-git-root', root, prefix };
 }
