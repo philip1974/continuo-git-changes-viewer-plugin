@@ -67,6 +67,53 @@ describe('unstageFile shell wrapper', () => {
     expect(exec).toHaveBeenLastCalledWith('git', buildGitArgs(['reset', 'HEAD', '--', 'a.ts']), expect.anything());
   });
 
+  const probes = (exec: ReturnType<typeof vi.fn>) => exec.mock.calls.filter((call) => (call[1] as string[]).includes('-h')).length;
+  const lastSub = (exec: ReturnType<typeof vi.fn>) => {
+    const args = exec.mock.calls[exec.mock.calls.length - 1]![1] as string[];
+    return args.slice(args.findIndex((a) => a === 'restore' || a === 'reset'));
+  };
+
+  it.each([
+    ['a timeout', result({ exitCode: null, timedOut: true })],
+    ['a timeout that still reports exit 1', result({ exitCode: 1, timedOut: true })],
+    ['a signal', result({ exitCode: null, signal: 'SIGKILL' })],
+    ['a refusal by the repository guard (128)', result({ exitCode: 128, stderr: 'Git commands are disabled for this repository: x' })],
+    ['an unexpected exit code', result({ exitCode: 2 })],
+  ])('T6c the probe ending in %s says nothing about git: it is not cached — this call uses the reset fallback, the next call probes again and, once the probe answers, restore is used and remembered', async (_label, probe) => {
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce(probe) // 探测:无结论
+      .mockResolvedValueOnce(result({ exitCode: 0 })) // reset 兜底
+      .mockResolvedValueOnce(result({ exitCode: 129 })) // 再次探测:支持
+      .mockResolvedValue(result({ exitCode: 0 }));
+    const app = { shell: { exec } } as unknown as CoPluginApp;
+
+    await unstageFile(app, '/repo', 'a.ts');
+    expect(lastSub(exec)).toEqual(['reset', 'HEAD', '--', 'a.ts']);
+    expect(probes(exec)).toBe(1);
+
+    await unstageFile(app, '/repo', 'b.ts');
+    expect(probes(exec)).toBe(2);
+    expect(lastSub(exec)).toEqual(['restore', '--staged', '--', 'b.ts']);
+
+    await unstageFile(app, '/repo', 'c.ts');
+    expect(probes(exec)).toBe(2);
+    expect(lastSub(exec)).toEqual(['restore', '--staged', '--', 'c.ts']);
+  });
+
+  it('T6d "no such command" (exit 1, the only definite negative) is cached: later calls go straight to reset without probing again', async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce(result({ exitCode: 1, stderr: "git: 'restore' is not a git command. See 'git --help'." }))
+      .mockResolvedValue(result({ exitCode: 0 }));
+    const app = { shell: { exec } } as unknown as CoPluginApp;
+
+    await unstageFile(app, '/repo', 'a.ts');
+    await unstageFile(app, '/repo', 'b.ts');
+    expect(probes(exec)).toBe(1);
+    expect(lastSub(exec)).toEqual(['reset', 'HEAD', '--', 'b.ts']);
+  });
+
   it('T6 uses git reset HEAD when restore support is unavailable', async () => {
     const exec = vi
       .fn()
