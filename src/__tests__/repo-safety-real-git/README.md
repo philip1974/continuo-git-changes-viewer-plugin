@@ -434,7 +434,7 @@ Bytes that are not valid UTF-8 (`hunk-patch-builder` T8, `path-utils` T8,
 
 A file-level action acts on the clicked entry, not on a directory at its path
 (`worktree-entry`, `discard-file-shell` T14–T17, `stage-file-shell` T6–T8,
-`unstage-file-shell` T9–T10; run with git 2.50.1 and 2.56.1):
+`unstage-file-shell` T9–T10; run with git 2.50.1 and 2.56.1; `stage-file-shell` T9):
 
 - R77: Discard. A tracked file replaced by a directory with untracked work in
   it (` D x` — git does not list the untracked file), by a nested repository
@@ -447,6 +447,13 @@ A file-level action acts on the clicked entry, not on a directory at its path
 - R78: Stage. `git add -- x` on the ` D x` row stages `A  x/work.txt` as well;
   `stageFile` refuses. The nested repository is staged as one gitlink entry;
   a deletion below a path that became a file is staged as that deletion.
+- R84: Stage. The directory at `x` holds a `.git` that is not a repository (an
+  empty file, an empty folder, a folder with a garbage HEAD, a gitfile
+  pointing nowhere): `git add -- x` adds `x/work.txt` in every case;
+  `stageFile` refuses and nothing below `x/` reaches the index. Also refused:
+  a real repository in a subdirectory (`x/inner` would become a gitlink). A
+  nested repository without a commit is rejected by git itself. An empty
+  directory, or one with only ignored files, stages `D  x` and nothing else.
 - R79: Unstage. With `D  x` and `AM x/work.txt`, both `restore --staged -- x`
   and `reset HEAD -- x` unstage the child too; `unstageFile` refuses on the
   `x` row, and works on the child row, on ordinary rows, and on `x` once

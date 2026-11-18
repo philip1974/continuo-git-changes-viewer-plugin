@@ -80,40 +80,79 @@ describe('stageFile shell wrapper', () => {
   describe('a tracked row is not staged as a directory', () => {
     const FILE = { size: 1, mtimeMs: 0, isFile: true, isDirectory: false, isSymlink: false };
     const DIR = { ...FILE, isFile: false, isDirectory: true };
+    const FILE_ENTRY = '100644 587be6b4c3f93f93c489c0111bba5596147a26cb 0\tx\0';
     const enoent = () => Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
-    // tree:绝对路径 → stat;不在表里的不存在。lsFiles:`ls-files -s -z -- <path>` 的输出
-    function setup(tree: Record<string, typeof FILE>, lsFiles = '') {
-      const exec = vi.fn(async (_cmd: string, args: readonly string[]) => result(args.includes('ls-files') ? { stdout: lsFiles } : {}));
+    // tree:绝对路径 → stat;不在表里的不存在。lsFiles:`ls-files -s -z -- <path>` 的输出(index 里的记录);
+    // untracked:`ls-files -o --exclude-standard -z -- <path>` 的结果(git add 会加入的未跟踪条目)
+    function setup(tree: Record<string, typeof FILE>, lsFiles = '', untracked: Partial<PluginShellExecResult> = {}) {
+      const exec = vi.fn(async (_cmd: string, args: readonly string[]) =>
+        result(!args.includes('ls-files') ? {} : args.includes('-o') ? untracked : { stdout: lsFiles }));
       const lstat = vi.fn(async (path: string) => tree[path] ?? Promise.reject(enoent()));
       const adds = () => exec.mock.calls.filter(([, args]) => args.includes('add'));
       return { app: { shell: { exec }, fs: { lstat } } as unknown as CoPluginApp, exec, lstat, adds };
     }
 
     it('T6 a plain directory at the path (the row is ` D x`, the file was replaced by a folder) → refused with an explanation; git add is not run', async () => {
-      const { app, adds } = setup({ '/repo/x': DIR }, '100644 587be6b4c3f93f93c489c0111bba5596147a26cb 0\tx\0');
+      const { app, adds, exec } = setup({ '/repo/x': DIR }, FILE_ENTRY, { stdout: 'x/work.txt\0' });
       expect(await stageFile(app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
       expect(adds()).toEqual([]);
+      // 只读的目录查询,路径按字面传
+      expect(exec).toHaveBeenCalledWith(
+        'git',
+        buildGitArgs(['ls-files', '-o', '--exclude-standard', '-z', '--', 'x']),
+        expect.objectContaining({ cwd: '/repo', env: expect.objectContaining({ GIT_LITERAL_PATHSPECS: '1' }) }),
+      );
       expect(DIRECTORY_STAGE_ERROR).toBe(
         'A directory now sits where this file was. Staging this row would also add every untracked file inside that directory. Nothing was staged — stage the files you want from the Untracked section, or use git in a terminal.',
       );
     });
 
-    it('T7 the directory is the entry itself — a submodule entry in the index (` M sub`), or a nested repository (` T x`: there is a .git inside) → staged as before', async () => {
-      const sub = setup({ '/repo/sub': DIR }, '160000 2c943cce73eac743e3686b3486b10af14c86853b 0\tsub\0');
+    it('T7 the directory is the entry itself — a submodule entry in the index (` M sub`), or a nested repository (` T x`: git add would add nothing below it) → staged as before', async () => {
+      // 已是子模块条目:不必再问目录里有什么(子模块工作树里的文件本来就列不出来)
+      const sub = setup({ '/repo/sub': DIR }, '160000 2c943cce73eac743e3686b3486b10af14c86853b 0\tsub\0', { exitCode: 128 });
       expect(await stageFile(sub.app, '/repo', 'sub')).toEqual({ ok: true });
       expect(sub.adds()).toHaveLength(1);
 
-      const nested = setup({ '/repo/x': DIR, '/repo/x/.git': DIR }, '100644 587be6b4c3f93f93c489c0111bba5596147a26cb 0\tx\0');
+      const nested = setup({ '/repo/x': DIR, '/repo/x/.git': DIR }, FILE_ENTRY, { stdout: '' });
       expect(await stageFile(nested.app, '/repo', 'x')).toEqual({ ok: true });
       expect(nested.adds()).toHaveLength(1);
 
-      // 只有路径自己的记录算数:目录之下有子模块条目不算
-      const below = setup({ '/repo/x': DIR }, '160000 2c943cce73eac743e3686b3486b10af14c86853b 0\tx/sub\0');
+      // 只有路径自己的记录算数:目录之下有子模块条目不算(是否放行仍取决于 git add 会不会加入目录里的东西)
+      const below = setup({ '/repo/x': DIR }, '160000 2c943cce73eac743e3686b3486b10af14c86853b 0\tx/sub\0', { stdout: 'x/work.txt\0' });
       expect(await stageFile(below.app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
       // index 查询失败:不能证明它是条目本身 → 拒绝
       const failing = setup({ '/repo/x': DIR });
       failing.exec.mockImplementation(async (_cmd: string, args: readonly string[]) => result(args.includes('ls-files') ? { exitCode: 128 } : {}));
       expect(await stageFile(failing.app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+    });
+
+    it('T9 something called `.git` inside the directory proves nothing (an empty file, an empty folder, a gitfile pointing nowhere — git add still adds everything inside): what counts is whether git add would add anything below the path', async () => {
+      const fake = setup({ '/repo/x': DIR, '/repo/x/.git': FILE }, FILE_ENTRY, { stdout: 'x/work.txt\0' });
+      expect(await stageFile(fake.app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+      expect(fake.adds()).toEqual([]);
+      // `.git` 不再被查看
+      expect(fake.lstat.mock.calls.map(([path]) => path)).toEqual(['/repo/x']);
+
+      // 子目录是嵌套仓库:会多出 x/inner 这个条目
+      const inner = setup({ '/repo/x': DIR }, FILE_ENTRY, { stdout: 'x/inner/\0' });
+      expect(await stageFile(inner.app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+
+      // 查不了 → 拒绝:失败、超时、输出被截断而已读到的完整记录里没有证据
+      for (const failed of [{ exitCode: 128 }, { exitCode: null, timedOut: true }, { stdout: 'x.txt\0x/wo', truncated: true }]) {
+        const unknown = setup({ '/repo/x': DIR }, FILE_ENTRY, failed);
+        expect(await stageFile(unknown.app, '/repo', 'x'), JSON.stringify(failed)).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+        expect(unknown.adds()).toEqual([]);
+      }
+      // 截断之前已经读到一条 → 一样拒绝
+      const cut = setup({ '/repo/x': DIR }, FILE_ENTRY, { stdout: 'x/a\0x/b', truncated: true });
+      expect(await stageFile(cut.app, '/repo', 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+
+      // 只有 `<path>/` 之下的算数:名字只是以同样的字母开头的不算;空目录 / 只有被忽略的文件(没有记录)照常暂存
+      for (const stdout of ['', 'x.txt\0xy/z\0']) {
+        const ok = setup({ '/repo/x': DIR }, FILE_ENTRY, { stdout });
+        expect(await stageFile(ok.app, '/repo', 'x'), JSON.stringify(stdout)).toEqual({ ok: true });
+        expect(ok.adds()).toHaveLength(1);
+      }
     });
 
     it('T8 fail-closed when the path cannot be looked at; a missing file (a deletion), a file below a parent that is no longer a folder, a link and a regular file are staged as before; an untracked row is not looked at (the user clicked that very file or folder)', async () => {

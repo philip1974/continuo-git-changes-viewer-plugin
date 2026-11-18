@@ -1,6 +1,6 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
-import { GITLINK_MODE, readIndexEntries } from './index-entry';
+import { GITLINK_MODE, readIndexEntries, wouldAddEntriesInside } from './index-entry';
 import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
 import { probeWorktreeEntry, UNVERIFIED_PATH_ERROR } from './worktree-entry';
 
@@ -19,29 +19,30 @@ export interface StageFileOptions {
 
 // 已跟踪条目的行(` D x`、` M x` …)执行 `git add -- x`。x 的位置上现在是一个普通目录时,git 把目录里
 // 所有未跟踪的文件一并加入(实测:` D x` → `D  x` + `A  x/work.txt`)——暂存了这一行从未显示过的内容。
-// 只有"这个目录就是条目本身"时才照常执行:index 里它是子模块条目(` M sub`),或目录是一个嵌套仓库
-// (` T x`:git 把它记成一个 gitlink 条目,不进入其中)。未跟踪的行(`?? x/`)不在此列:用户点的就是那个目录。
+// 照常执行的只有两种情形:
+// - index 里这个路径已经是子模块条目(` M sub`):目录就是条目本身;
+// - `git add` 不会加入 `<path>/` 之下的任何东西(见 wouldAddEntriesInside):目录是一个真的嵌套仓库
+//   (` T x`:git 把它记成一个 gitlink 条目,不进入其中),或目录里没有可加入的内容(空目录、只有被忽略的
+//   文件:暂存的只是"x 被删除"这一条)。
+// "目录里有个 `.git`"不算数:它可以是空文件、空目录、指向不存在位置的 gitfile——git 不认它是仓库,照样把目录里
+// 的文件全部加入(实测 git 2.50 / 2.56;此前只要 lstat 到 `.git` 就放行)。是不是仓库由 git 自己判断。
+// 未跟踪的行(`?? x/`)不在此列:用户点的就是那个目录。
 export const DIRECTORY_STAGE_ERROR =
   'A directory now sits where this file was. Staging this row would also add every untracked file inside that directory. ' +
   'Nothing was staged — stage the files you want from the Untracked section, or use git in a terminal.';
 
 const PROBE_TIMEOUT_MS = 5_000;
 
-async function directoryIsTheEntry(
-  app: Pick<CoPluginApp, 'shell'> & Partial<Pick<CoPluginApp, 'fs'>>,
+/** 该路径上现在是目录:`git add -- <path>` 是否只作用于这一个条目。查不了 → false(拒绝)。 */
+async function addStaysOnTheEntry(
+  app: Pick<CoPluginApp, 'shell'>,
   repoRoot: string,
   path: string,
 ): Promise<boolean> {
   const entries = await readIndexEntries(app, repoRoot, path, PROBE_TIMEOUT_MS);
-  if (entries?.some((entry) => entry.mode === GITLINK_MODE)) return true;
-  // 嵌套仓库:目录里有 `.git`(文件或目录)。`.git` 是 isSafeRepoRelativePath 拒绝的段名,这里直接 lstat;
-  // 任何失败(不存在、看不了)都按"不是"处理 → 拒绝。
-  try {
-    await app.fs!.lstat(`${repoRoot.replace(/[\\/]+$/, '')}/${path}/.git`);
-    return true;
-  } catch {
-    return false;
-  }
+  if (entries === null) return false;
+  if (entries.some((entry) => entry.mode === GITLINK_MODE)) return true;
+  return (await wouldAddEntriesInside(app, repoRoot, path, PROBE_TIMEOUT_MS)) === false;
 }
 
 export async function stageFile(
@@ -55,7 +56,7 @@ export async function stageFile(
     // 看不了 → 不暂存(fail-closed)。父级不是目录(parent-not-directory)时 `git add` 只会记下这条路径的删除,照常执行。
     const entry = await probeWorktreeEntry(app, repoRoot, path);
     if (entry.kind === 'unknown') return { ok: false, error: UNVERIFIED_PATH_ERROR };
-    if (entry.kind === 'directory' && !(await directoryIsTheEntry(app, repoRoot, path))) {
+    if (entry.kind === 'directory' && !(await addStaysOnTheEntry(app, repoRoot, path))) {
       return { ok: false, error: DIRECTORY_STAGE_ERROR };
     }
   }

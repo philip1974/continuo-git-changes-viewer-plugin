@@ -63,7 +63,9 @@ Stage would add every untracked file inside — files the list does not show
 while the old entry exists. Unstage would likewise unstage entries staged
 below a directory of the same name. In these cases the action is refused with
 an explanation and nothing is changed; resolve it in a terminal. A submodule or
-nested repository directory is still staged as the single entry it is. The
+nested repository directory is still staged as the single entry it is — whether
+a directory is a repository is git's call (it is asked what `git add` would add
+below the path), not the mere presence of something named `.git` inside. The
 check happens just before the git command; a change in the instant between
 the two is not caught.
 

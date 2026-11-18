@@ -3391,6 +3391,69 @@ describe('a file-level action acts on the entry that was clicked, not on a direc
     expect(await unstageFile(app, repo, 'x')).toEqual({ ok: true });
     expect(git(repo, 'status', '--porcelain')).toBe(' M f.txt\n D x\n');
   });
+
+  it('R84 Stage on a ` D x` row whose directory holds something called `.git` that is not a repository (an empty file, an empty folder, a folder with a garbage HEAD, a gitfile pointing nowhere): git add would still add every file inside — the mere presence of `.git` does not make the directory one entry. stageFile refuses; nothing below x/ ever reaches the index', async () => {
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    writeFileSync(join(repo, 'x'), 'tracked file\n');
+    git(repo, 'add', 'x');
+    git(repo, 'commit', '-qm', 'x');
+    const dirAtX = (fill: () => void) => {
+      rmSync(join(repo, 'x'), { recursive: true, force: true });
+      git(repo, 'reset', '-q', '--hard');
+      rmSync(join(repo, 'x'));
+      mkdirSync(join(repo, 'x'));
+      fill();
+    };
+    const below = () => git(repo, 'ls-files', '-s', '--', 'x/');
+    const work = () => writeFileSync(join(repo, 'x', 'work.txt'), 'unsaved work\n');
+    const invalid: Record<string, () => void> = {
+      'empty file': () => writeFileSync(join(repo, 'x', '.git'), ''),
+      'empty folder': () => mkdirSync(join(repo, 'x', '.git')),
+      'folder with a garbage HEAD': () => { mkdirSync(join(repo, 'x', '.git')); writeFileSync(join(repo, 'x', '.git', 'HEAD'), 'garbage\n'); },
+      'gitfile pointing nowhere': () => writeFileSync(join(repo, 'x', '.git'), 'gitdir: /nonexistent/cgv\n'),
+    };
+    for (const [name, make] of Object.entries(invalid)) {
+      dirAtX(() => { work(); make(); });
+      expect(git(repo, 'status', '--porcelain'), name).toBe(' D x\n');
+      // 为什么:git 自己的行为
+      git(repo, 'add', '--', 'x');
+      expect(below(), name).toMatch(/\tx\/work\.txt\n/);
+      git(repo, 'reset', '-q');
+
+      expect(await stageFile(app, repo, 'x'), name).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+      expect(git(repo, 'status', '--porcelain'), name).toBe(' D x\n');
+      expect(below(), name).toBe('');
+    }
+
+    // 目录里的子目录是一个真仓库:git add 会把它记成 x/inner 这个 gitlink——同样是这一行没显示过的条目
+    dirAtX(() => {
+      mkdirSync(join(repo, 'x', 'inner'));
+      git(join(repo, 'x', 'inner'), 'init', '-q', '-b', 'main');
+      writeFileSync(join(repo, 'x', 'inner', 'f'), 'inner\n');
+      git(join(repo, 'x', 'inner'), 'add', '.');
+      git(join(repo, 'x', 'inner'), 'commit', '-qm', 'inner');
+    });
+    expect(await stageFile(app, repo, 'x')).toEqual({ ok: false, error: DIRECTORY_STAGE_ERROR });
+    expect(below()).toBe('');
+
+    // 没有提交的嵌套仓库:git add 自己拒绝(does not have a commit checked out);同样什么都没进 index
+    dirAtX(() => { git(join(repo, 'x'), 'init', '-q', '-b', 'main'); work(); });
+    const noCommit = await stageFile(app, repo, 'x');
+    expect(noCommit.ok).toBe(false);
+    expect(noCommit.error).toContain('does not have a commit checked out');
+    expect(git(repo, 'ls-files', '-s', '--', 'x', 'x/')).toMatch(/^100644 [0-9a-f]+ 0\tx\n$/);
+
+    // 目录里没有 git add 会加入的东西(空目录;只有被忽略的文件):这一行就是"x 被删除",照常暂存这一条
+    dirAtX(() => {});
+    expect(await stageFile(app, repo, 'x')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain')).toBe('D  x\n');
+    writeFileSync(join(repo, '.git', 'info', 'exclude'), '*.log\n');
+    dirAtX(() => writeFileSync(join(repo, 'x', 'build.log'), 'ignored\n'));
+    expect(await stageFile(app, repo, 'x')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain')).toBe('D  x\n');
+    expect(below()).toBe('');
+  });
 });
 
 describe('the status fingerprint follows HEAD, not only the entries (real git)', () => {
