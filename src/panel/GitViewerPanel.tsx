@@ -15,6 +15,7 @@ import {
 } from '../lib/settings-store';
 import type { CoPluginApp, PanelApi } from '../sdk/types';
 import type { AutoRefreshTimer, AutoRefreshTimerOpts } from '../state/auto-refresh-timer';
+import { RetryBackoff } from '../state/retry-backoff';
 import { cacheKey, selectStaged, type GitViewerState } from '../state/git-store';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
@@ -121,6 +122,7 @@ export function GitViewerPanel({
       }
       if (cancelled || !panelApi.isVisible) return;
 
+      const retry = new RetryBackoff(intervalSec * 1000);
       const opts: AutoRefreshTimerOpts = {
         intervalMs: intervalSec * 1000,
         onTick: async () => {
@@ -130,6 +132,18 @@ export function GitViewerPanel({
           // is an always-fresh property; reading it each tick guarantees we resume
           // exactly when the window comes back, no events needed.
           if (document.visibilityState !== 'visible') return;
+
+          // 上一次 refresh 没拿到可信的 status(statusError):不能再靠"哈希变了才刷新"——一次瞬时失败之后
+          // status 输出往往没变,错误提示和被禁用的 Commit / Amend 会一直留到用户手动 Refresh。此时每个 tick
+          // 都重新完整刷新,直到成功;持续失败时按退避放慢(不在每个 tick 空转一次完整刷新)。
+          if (store.getState().statusError !== null) {
+            if (!retry.due()) return;
+            await store.getState().refresh();
+            if (store.getState().statusError !== null) retry.failed();
+            else retry.reset();
+            return;
+          }
+          retry.reset();
 
           const currentRoot = store.getState().repoRoot;
           if (!currentRoot) return;

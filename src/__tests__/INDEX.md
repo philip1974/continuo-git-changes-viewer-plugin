@@ -16,6 +16,7 @@
 
 ## [Auto Refresh Wiring](./auto-refresh-wiring/README.md)
 
+- [`retry-backoff.spec.ts`](./auto-refresh-wiring/retry-backoff.spec.ts)
 - [`wiring.spec.tsx`](./auto-refresh-wiring/wiring.spec.tsx)
 
 ## [can-amend](./can-amend/README.md)
