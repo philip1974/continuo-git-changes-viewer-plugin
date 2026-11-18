@@ -4,7 +4,7 @@ Audit of every documented git config key (`git help --config`, git 2.50.1:
 954 keys) against the only git commands the plugin runs:
 
 `config --list`, `rev-parse`, `status --porcelain=v1 -z`, `diff` (`--numstat
-HEAD`, `-- <path>`, `--cached -- <path>`), `show HEAD:<path>`, `log -1
+HEAD`, `-- <path>`, `--cached -- <path>`), `cat-file blob HEAD:<path>`, `help --config`, `log -1
 --pretty=…`, `add -- <path>`, `apply [--cached] [--reverse] -`, `restore
 --staged -- <path>` / `reset HEAD -- <path>`, `checkout -- <path>`, `commit
 [--amend] -F -`.

@@ -177,6 +177,15 @@ Config enumeration (see `doc/git-config-classification.md`):
   trusted, and status / diff / every write op / commit / amend start none of
   them; the same `trace2` key in global scope does write (fixture proof).
 
+File names that look like revision syntax:
+
+- R50: files named `a..b` (with a path `a` and a branch `b`), `a...b`,
+  `a@{1}`, `a^{tree}`, `a~1`, `a^`, `:(top)x`, `-x`, `--help`, `ab:c`, `@{u}`,
+  `a b`, `d/e..b` → the original pane is the HEAD blob of exactly that path.
+  `git show HEAD:a..b` (the earlier command) prints branch `b`'s commit log.
+- R51: a path that is a directory in HEAD or absent from it → empty original
+  (`cat-file blob` fails; no tree listing).
+
 Keys the viewer has not reviewed (`repo-safety` K1–K10 with the real `git help
 --config`; also run with git 2.56.1):
 

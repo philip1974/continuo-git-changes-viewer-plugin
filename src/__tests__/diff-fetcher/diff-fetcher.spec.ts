@@ -44,10 +44,11 @@ describe('tracked diff fetcher', () => {
       unifiedDiff: 'diff --git a/a.ts b/a.ts\n',
       isUntracked: false,
     });
-    // v0.3.0 spawns 3 parallel calls: git show HEAD:<path>, cat <path>, git diff -- <path>
+    // v0.3.0 spawns 3 parallel calls: git cat-file blob HEAD:<path>, cat <path>, git diff -- <path>
+    // (cat-file, not show: `git show HEAD:a..b` parses the argument as a revision range)
     expect(exec).toHaveBeenCalledWith(
       'git',
-      buildGitArgs(['show', 'HEAD:src/a.ts']),
+      buildGitArgs(['cat-file', 'blob', 'HEAD:src/a.ts']),
       expect.objectContaining({ cwd: '/repo' }),
     );
     expect(exec).toHaveBeenCalledWith(

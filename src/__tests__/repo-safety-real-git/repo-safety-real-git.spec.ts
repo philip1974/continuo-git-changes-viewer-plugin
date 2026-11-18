@@ -1635,3 +1635,50 @@ describe('config keys the viewer has not reviewed: default-deny for keys the run
     expect(marks()).toEqual([]);
   });
 });
+
+describe('HEAD content of a file whose name looks like revision syntax (real git)', () => {
+  // 冒号后的部分应整体是路径;`git show` 却先把整个参数按 `..` / `...` 拆成修订区间
+  const NAMES = ['a..b', 'a...b', 'a@{1}', 'a^{tree}', 'a~1', 'a^', ':(top)x', '-x', '--help', 'ab:c', '@{u}', 'a b', 'd/e..b'];
+
+  it('R50 the original pane shows the HEAD blob for every such name; `git show HEAD:a..b` (the previous command) prints a commit log instead', async () => {
+    // `HEAD:a..b` 作为区间成立的条件:存在路径 a 与分支 b
+    writeFileSync(join(repo, 'a'), 'plain a\n');
+    mkdirSync(join(repo, 'd'));
+    for (const name of NAMES) writeFileSync(join(repo, name), `HEAD content of [${name}]\n`);
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'LOG-OUTPUT-MARKER');
+    git(repo, 'branch', 'b');
+    for (const name of NAMES) appendFileSync(join(repo, name), 'edited\n');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+
+    // 证明缺陷:修复前的命令对 `a..b` 输出的是分支 b 的提交日志(带补丁),不是这个文件的内容
+    const viaShow = await gitExec(app, repo, ['show', 'HEAD:a..b']);
+    expect(viaShow.stdout).toMatch(/^commit [0-9a-f]{40}\n/);
+    expect(viaShow.stdout).toContain('LOG-OUTPUT-MARKER');
+
+    const changes = await scanStatus(app, repo);
+    expect(changes.map((c) => c.path).sort()).toEqual([...NAMES].sort());
+    for (const change of changes) {
+      const d = await fetchDiff(app, repo, change);
+      expect({ path: change.path, original: d.ok && d.original, modified: d.ok && d.modified }).toEqual({
+        path: change.path,
+        original: `HEAD content of [${change.path}]\n`,
+        modified: `HEAD content of [${change.path}]\nedited\n`,
+      });
+    }
+  });
+
+  it('R51 a path that is not a blob in HEAD (new file, directory, gitlink) yields an empty original, never a tree listing', async () => {
+    mkdirSync(join(repo, 'dir'));
+    writeFileSync(join(repo, 'dir', 'x.txt'), 'x\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'dir');
+    const app = realApp();
+    for (const path of ['dir', 'missing.txt']) {
+      const d = await fetchDiff(app, repo, { path, status: 'M', statusX: ' ', statusY: 'M', kind: 'text' });
+      expect({ path, original: d.ok && d.original }).toEqual({ path, original: '' });
+    }
+  });
+});

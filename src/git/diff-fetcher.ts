@@ -52,8 +52,13 @@ async function gitShowHead(
   repoRoot: string,
   path: string,
 ): Promise<string> {
+  // `cat-file blob`,不是 `show`:`git show HEAD:a..b` 先把整个参数按 `..` / `...` 拆成修订区间
+  // (存在路径 `a` 与分支 `b` 时成立),输出的是提交日志而不是文件内容(实测 git 2.50 / 2.56)。
+  // cat-file 把参数当作单个对象名,`<rev>:<path>` 冒号后整体是路径:文件名含 `..`、`@{`、`^`、`~`、
+  // `:`、以 `-` 开头都按字面解析(real-git R50);不是 blob(目录、gitlink)时报错而不是列出 tree。
+  // 不做 textconv / filter 转换(那需要 --textconv / --filters)。
   // exit 128 if HEAD doesn't contain the path (new / renamed-to file)
-  const r = await gitExec(app, repoRoot, ['show', `HEAD:${path}`]);
+  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `HEAD:${path}`]);
   return r.exitCode === 0 ? r.stdout : '';
 }
 
