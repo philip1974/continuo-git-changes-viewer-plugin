@@ -1,14 +1,14 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec, stripTrailingNewline } from './exec';
 import { isNotFoundError } from './fs-errors';
-import { parseScopedConfigList, PROBE_ARGS } from './repo-safety';
+import { isRepoControlledScope, parseScopedConfigListStrict, PROBE_ARGS } from './repo-safety';
 
 // 提交前的 hooks 检测(安全):commit 是唯一不禁用 hooks 的子命令(见 exec.ts),用户自己仓库的
 // pre-commit 等应照常运行;但打开的若是来历不明的目录,commit 会执行攻击者放置的 hooks。
 // 因此提交前检测"git 将从哪里找 hook、那里有没有 hook",有则要求用户再确认一次。
 //
 // - core.hooksPath:取非 command 作用域的最后一个值(command 作用域是插件自己注入的 /dev/null)。
-//   来自 local / worktree(仓库可控)→ 视为有 hooks(不去列目录:相对路径语义复杂,且 husky 等
+//   来自 global / system 之外的作用域(local / worktree 等,仓库可控)→ 视为有 hooks(不去列目录:相对路径语义复杂,且 husky 等
 //   常见设置本来就意味着有 hooks)。来自 global / system → 用户自己的 hooks 目录,可信,且 git
 //   此时不读 .git/hooks,判为无。
 // - 配置式 hooks(git >= 2.54,`hook.<name>.command` / `.event`,不经 hooks 目录、不受 core.hooksPath 影响):
@@ -35,8 +35,6 @@ export type RepoHooks =
     }
   | { readonly kind: 'unknown'; readonly reason: string };
 
-const LOCAL_SCOPES: ReadonlySet<string> = new Set(['local', 'worktree']);
-
 function isAbsolutePath(p: string): boolean {
   return /^([a-zA-Z]:)?[\\/]/.test(p);
 }
@@ -49,8 +47,10 @@ export async function detectRepoHooks(
   if (!config || config.exitCode !== 0 || config.truncated || config.timedOut) {
     return { kind: 'unknown', reason: 'could not read git config' };
   }
-  const entries = parseScopedConfigList(config.stdout);
-  const configured = entries.filter((e) => LOCAL_SCOPES.has(e.scope) && /^hook\./i.test(e.key));
+  // "仓库可控"的作用域与 repo-safety 同一判断:system / global / command 之外的任何作用域名
+  const entries = parseScopedConfigListStrict(config.stdout);
+  if (entries === null) return { kind: 'unknown', reason: 'could not read git config' };
+  const configured = entries.filter((e) => isRepoControlledScope(e.scope) && /^hook\./i.test(e.key));
   if (configured.length > 0) {
     return { kind: 'present', hooks: [...new Set(configured.map((e) => e.key))].sort(), hooksPath: null };
   }
@@ -59,7 +59,7 @@ export async function detectRepoHooks(
   );
   const effective = hooksPathEntries[hooksPathEntries.length - 1];
   if (effective) {
-    if (LOCAL_SCOPES.has(effective.scope)) {
+    if (isRepoControlledScope(effective.scope)) {
       return { kind: 'present', hooks: [], hooksPath: effective.value ?? '' };
     }
     return { kind: 'none' };

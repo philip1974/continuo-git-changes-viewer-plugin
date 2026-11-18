@@ -16,9 +16,27 @@ restricted verdict at one step skips the later ones.
 
 1. **Config** — `git config --list --show-scope --includes -z` (reads config
    only, executes nothing).
-   - Only `local` / `worktree` scope entries are inspected (including files
-     pulled in via `include.path` / `includeIf`); global/system config is the
-     user's own.
+   - Only three scopes are trusted — `system`, `global` (the user's own files)
+     and `command` (`-c` / `GIT_CONFIG_*`: the plugin's pins and the user's
+     environment). Entries in **any other** scope are inspected as
+     repository-controlled: `local` / `worktree` (including files pulled in
+     via `include.path` / `includeIf`), git's `submodule` / `unknown`, and any
+     name a later git adds. (This used to be a list of *untrusted* scopes —
+     `local`, `worktree` — so a new repository-controlled scope would have
+     been waved through.)
+   - Scope names really printed (real-git R65): upstream git 2.56.1 prints
+     `system` / `global` / `local` / `worktree` / `command`; included files
+     carry the scope of the file that includes them. Apple Git 2.50.1
+     additionally prints `unknown` for the defaults bundled with Xcode
+     (`<Xcode>/usr/share/git-core/gitconfig`: `credential.helper=osxkeychain`,
+     `init.defaultBranch=main`). Both are reviewed keys, so ordinary
+     repositories are unaffected; should that file ever carry a restricted or
+     unreviewed key, every repository on that machine would be restricted
+     (fail-closed).
+   - The output must be a complete `scope NUL record NUL` sequence with
+     lowercase-word scopes and non-empty keys. Anything else (no final NUL, a
+     dangling scope, an empty scope, keys in the scope slot because
+     `--show-scope` was ignored) → restricted, `probe-failed`.
    - Executable keys (filter clean/smudge/process, diff textconv/command,
      diff.external, merge drivers, gpg programs, askpass, gitproxy,
      upload/receive pack, protocol.*.allow, trailer commands, git-lfs
@@ -52,7 +70,7 @@ restricted verdict at one step skips the later ones.
    - **Every other key must be reviewed, or unknown to git** (default-deny).
      The lists above are a blocklist frozen at the git version that was
      audited; each key a later git adds that runs a program (as `hook.*` did)
-     would be a new hole. So for each remaining `local` / `worktree` key:
+     would be a new hole. So for each remaining repository-controlled key:
      1. it is in the reviewed table (`src/git/known-config-keys.ts`: the keys
         of `git help --config` that the audit found safe or neutralized, in
         git's own notation — `branch.<name>.remote`, `alias.*`; a middle
@@ -132,9 +150,15 @@ up to 2.56.1 (from their documentation). `fixtures/` holds both `git help
 key — and every `extensions.*` / `feature.*` name outside the reviewed ones
 (restricted with any git, since git documents those sections as wildcards).
 
-T1 output parsing. T2–T5 executable key classification (T4b diff.submodule). T18–T20 redirect keys (T18b attributesFile / excludesFile).
-T6–T9 config probe and fail-closed. L1–L7 layout probe. S1–S7 symlink scan.
-T10–T15b cache. T15c `restrict()` (a verdict set from outside the probe — the forged-index case — holds until the next fresh check). T16–T17 guard wiring into `gitExec`.
+T1 output parsing (T1b / T1c strict parsing: malformed output → null). T2–T5 executable key classification
+(T3 / T3b: exactly `system` / `global` / `command` are trusted, every other scope name is repository-controlled;
+T4b diff.submodule). T18–T20 redirect keys (T18b attributesFile / excludesFile).
+T6–T9 config probe and fail-closed (T7b Apple Git's `unknown`-scope defaults → trusted, cacheable; T7c restricted /
+redirect / unreviewed key in `unknown` / `submodule` / a made-up scope → restricted; T9b malformed output →
+`probe-failed`). L1–L7 layout probe. S1–S7 symlink scan.
+T10–T15b cache (T13b: repository-controlled entries from a scope other than `local` / `unknown` live outside
+`.git/config` → never cached; `unknown` alone does not prevent caching — it is present in every repository on Apple
+Git and belongs to the Xcode installation). T15c `restrict()` (a verdict set from outside the probe — the forged-index case — holds until the next fresh check). T16–T17 guard wiring into `gitExec`.
 K1 key-list notation. K2 reviewed table (common keys known, no restricted key in it). K3 both fixtures fully
 classified. K4 no extra git call for reviewed keys. K5 documented-but-unreviewed → restricted. K6 private tool
 keys → trusted. K7 `git help --config` unusable → restricted, not cached. K8 only repository scope. K9 restricted

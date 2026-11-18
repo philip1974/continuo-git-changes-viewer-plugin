@@ -6,6 +6,10 @@ writers fire `post-index-change`, checkout/restore fire `post-checkout`).
 `commit` deliberately keeps running the user's hooks (pre-commit etc.), so
 before committing the editor checks whether git would run any:
 
+- "Repository config" below means every scope except `system` / `global` /
+  `command` — the same rule as `repo-safety` (`local`, `worktree`, and any
+  other scope name git prints); malformed `config --list --show-scope` output
+  → unknown (H4c).
 - Any `hook.*` key in `local` / `worktree` config (config-defined hooks, git ≥
   2.54; they ignore `core.hooksPath` and the hooks directory) → hooks present,
   listed by config key. Checked first, so a global `core.hooksPath` cannot hide

@@ -131,7 +131,27 @@ const SAFE_DIFF_SUBMODULE = /^(short|log)$/i;
 // 工作区内,布局探测与符号链接扫描都看不出来。只放行两个格式名,其余取值(含无值)按重定向类受限。
 const REF_STORAGE_FORMAT = /^(files|reftable)$/i;
 
-const UNTRUSTED_SCOPES: ReadonlySet<string> = new Set(['local', 'worktree']);
+// 只信任已知属于用户自己的三个作用域:system / global(用户机器上的配置文件)与 command(`-c`、
+// GIT_CONFIG_COUNT / GIT_CONFIG_PARAMETERS——插件自己的固定参数和用户环境)。其余**任何**作用域名都按
+// 仓库可控处理:local / worktree,以及 git 现有的 submodule / unknown、将来新增的任何名字。此前这里是
+// "不可信名单"(local / worktree),名单之外一律放行——git 新增一个仓库可控的作用域就是一个缺口。
+// 实测(real-git R65)`config --list --show-scope --includes` 实际输出的作用域名:
+//   git 2.56.1(上游):system / global / local / worktree / command(include 进来的文件沿用引入者的作用域);
+//   git 2.50.1(Apple Git):同上,另有 `unknown`——Xcode 自带的 `<Xcode>/usr/share/git-core/gitconfig`
+//   (credential.helper=osxkeychain、init.defaultBranch=main)。这两个键都在已审计表里,普通仓库不受影响;
+//   该文件若出现受限键 / 未审计的键,这台机器上的所有仓库都会受限(fail-closed)。
+const TRUSTED_SCOPES: ReadonlySet<string> = new Set(['system', 'global', 'command']);
+
+/** 作用域不在信任名单里:其中的键按仓库 config 同样的规则判断。 */
+export function isRepoControlledScope(scope: string): boolean {
+  return !TRUSTED_SCOPES.has(scope);
+}
+
+// 探测结论的缓存以 `.git/config` 的 mtime + size 为签名(见 RepoSafetyGuard)。仓库可控的条目若来自别的文件
+// (worktree 作用域的 config.worktree、其它 / 将来的作用域),签名覆盖不到 → 不缓存。`unknown` 例外:
+// 它在 Apple Git 上每个仓库都有(见上),不缓存会让每次 git 调用都重新探测;那个文件属于 Xcode 安装,
+// 不随仓库变化,而每次 Refresh 本来就强制重新探测。
+const SCOPES_COVERED_BY_CACHE_SIGNATURE: ReadonlySet<string> = new Set(['local', 'unknown']);
 
 /** `include.path` / `includeIf.<任意条件>.path`。 */
 function isIncludeKey(key: string): boolean {
@@ -162,6 +182,22 @@ export function parseScopedConfigList(stdout: string): ConfigEntry[] {
   return entries;
 }
 
+// git 的作用域名都是小写单词(config_scope_name)。
+const SCOPE_NAME = /^[a-z]+$/;
+
+/**
+ * 同 parseScopedConfigList,但输出不是完整的 `scope\0record\0` 序列时返回 null:没有结尾的 NUL、段数为奇数、
+ * 作用域为空或不是小写单词(例如 git 没按 --show-scope 输出,键落在了作用域的位置上)、键为空。
+ * 这时无法确定哪个键属于哪个作用域,调用方按探测失败处理(fail-closed)。
+ */
+export function parseScopedConfigListStrict(stdout: string): ConfigEntry[] | null {
+  if (stdout === '') return [];
+  if (!stdout.endsWith('\0')) return null;
+  if (stdout.slice(0, -1).split('\0').length % 2 !== 0) return null;
+  const entries = parseScopedConfigList(stdout);
+  return entries.every((e) => SCOPE_NAME.test(e.scope) && e.key !== '') ? entries : null;
+}
+
 /**
  * 重定向类键:让 git 把工作树解析到别处(core.worktree)、声明没有工作树(core.bare)、让 git 读取
  * 仓库指定的任意文件(core.attributesFile / core.excludesFile),或把引用存到别处(extensions.refStorage)。
@@ -174,7 +210,7 @@ export function parseScopedConfigList(stdout: string): ConfigEntry[] {
  * 键正常都设在 global,出现在仓库作用域很少见,受限的误伤面更小。任何取值都受限(不判断是否指向仓库内)。
  */
 export function isRedirectConfigEntry(entry: ConfigEntry): boolean {
-  if (!UNTRUSTED_SCOPES.has(entry.scope)) return false;
+  if (!isRepoControlledScope(entry.scope)) return false;
   if (/^core\.(worktree|attributesfile|excludesfile)$/i.test(entry.key)) return true;
   if (/^core\.bare$/i.test(entry.key)) {
     return entry.value === null || !GIT_FALSE.test(entry.value.trim());
@@ -186,7 +222,7 @@ export function isRedirectConfigEntry(entry: ConfigEntry): boolean {
 }
 
 export function isUnsafeConfigEntry(entry: ConfigEntry): boolean {
-  if (!UNTRUSTED_SCOPES.has(entry.scope)) return false;
+  if (!isRepoControlledScope(entry.scope)) return false;
   if (isRedirectConfigEntry(entry)) return true;
   if (/^core\.fsmonitor$/i.test(entry.key)) {
     return !GIT_BOOLEAN.test((entry.value ?? '').trim());
@@ -466,15 +502,18 @@ export async function probeRepoSafety(
   if (!r || r.exitCode !== 0 || r.truncated || r.timedOut) {
     return { ...probeFailure('git config', r), cacheable: false };
   }
-  const entries = parseScopedConfigList(r.stdout);
+  const entries = parseScopedConfigListStrict(r.stdout);
+  if (entries === null) {
+    return { ...probeFailure('git config', { stderr: 'unexpected output format' }), cacheable: false };
+  }
   const unsafe = entries.filter(isUnsafeConfigEntry);
   const keys = [...new Set(unsafe.map((e) => e.key))];
-  // include / includeIf(条件可能随分支变化)或 worktree 作用域的文件不在 .git/config 的 mtime 里,
-  // 有这些时不缓存,每次重新探测。
+  // include / includeIf(条件可能随分支变化)或 .git/config 之外的文件(worktree 等作用域)不在
+  // .git/config 的 mtime 里,有这些时不缓存,每次重新探测。
   const cacheable = !entries.some(
     (e) =>
-      UNTRUSTED_SCOPES.has(e.scope) &&
-      (e.scope === 'worktree' || isIncludeKey(e.key)),
+      isRepoControlledScope(e.scope) &&
+      (!SCOPES_COVERED_BY_CACHE_SIGNATURE.has(e.scope) || isIncludeKey(e.key)),
   );
   if (keys.length > 0) {
     return {
@@ -487,7 +526,7 @@ export async function probeRepoSafety(
   }
   const unreviewed = [
     ...new Set(
-      entries.filter((e) => UNTRUSTED_SCOPES.has(e.scope) && !isKnownSafeConfigKey(e.key)).map((e) => e.key),
+      entries.filter((e) => isRepoControlledScope(e.scope) && !isKnownSafeConfigKey(e.key)).map((e) => e.key),
     ),
   ];
   if (unreviewed.length > 0) {

@@ -14,6 +14,12 @@ worktree scope, including included files) make one of those commands start a
 process, use the network, enter another repository, read or write outside the
 workspace, or change output the plugin parses?
 
+"Repository scope" throughout means every config scope except `system`,
+`global` and `command`: `local`, `worktree`, and any other scope name git
+reports (`unknown`, `submodule`, names added later). Only those three are
+trusted by name; see `src/git/repo-safety.ts` (`isRepoControlledScope`) and
+`src/__tests__/repo-safety/README.md`.
+
 Rule of thumb used in `src/git/exec.ts`: neutralize with a fixed command-line
 argument or environment variable wherever git offers one (command scope
 outranks repository config, so nothing depends on a blocklist); use the

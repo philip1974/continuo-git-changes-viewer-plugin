@@ -126,6 +126,17 @@ describe('detectRepoHooks', () => {
     expect(await detectRepoHooks(userOwned.app, '/repo')).toEqual({ kind: 'none' });
   });
 
+  it('H4c scopes other than global / system / command count as repository-controlled: core.hooksPath or hook.* there → present; malformed config output → unknown', async () => {
+    for (const scope of ['unknown', 'submodule', 'remote']) {
+      const path = mockApp({ config: ok(cfg(['global', 'core.hookspath', '~/hooks'], [scope, 'core.hookspath', 'evil'], PLUGIN_OVERRIDE)) });
+      expect(await detectRepoHooks(path.app, '/repo')).toEqual({ kind: 'present', hooks: [], hooksPath: 'evil' });
+      const hook = mockApp({ config: ok(cfg([scope, 'hook.lint.command', 'x'], PLUGIN_OVERRIDE)) });
+      expect(await detectRepoHooks(hook.app, '/repo')).toEqual({ kind: 'present', hooks: ['hook.lint.command'], hooksPath: null });
+    }
+    expect((await detectRepoHooks(mockApp({ config: ok('core.hookspath\nevil\0') }).app, '/repo')).kind).toBe('unknown');
+    expect((await detectRepoHooks(mockApp({ config: ok('\0core.hookspath\nevil\0') }).app, '/repo')).kind).toBe('unknown');
+  });
+
   it('H5 git config / rev-parse failures and missing app.fs fail closed to unknown', async () => {
     expect((await detectRepoHooks(mockApp({ config: fail() }).app, '/repo')).kind).toBe('unknown');
     expect((await detectRepoHooks(mockApp({ config: { ...ok(''), truncated: true } }).app, '/repo')).kind).toBe('unknown');

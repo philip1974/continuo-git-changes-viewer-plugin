@@ -8,9 +8,11 @@ import {
   isKnownSafeConfigKey,
   KNOWN_KEYS_PROBE_ARGS,
   isRedirectConfigEntry,
+  isRepoControlledScope,
   isUnsafeConfigEntry,
   LAYOUT_PROBE_ARGS,
   parseScopedConfigList,
+  parseScopedConfigListStrict,
   probeRepoSafety,
   PROBE_ARGS,
   RepoSafetyGuard,
@@ -103,6 +105,27 @@ describe('parseScopedConfigList', () => {
   });
 });
 
+describe('parseScopedConfigListStrict', () => {
+  it('T1b well-formed output parses exactly like parseScopedConfigList; empty output is an empty list', () => {
+    const out = z(['global', 'filter.lfs.clean', 'git-lfs clean -- %f'], ['local', 'core.fsmonitor'], ['unknown', 'credential.helper', 'osxkeychain']) + 'local\0alias.x\nline1\nline2\0';
+    expect(parseScopedConfigListStrict(out)).toEqual(parseScopedConfigList(out));
+    expect(parseScopedConfigListStrict('')).toEqual([]);
+  });
+
+  it.each([
+    ['no terminating NUL', 'local\0core.bare\nfalse'],
+    ['a scope without a record', 'local\0core.bare\nfalse\0local\0'],
+    ['an empty scope', '\0core.bare\nfalse\0'],
+    ['a scope that is not a lowercase word (output without --show-scope: the key lands in the scope slot)', 'core.bare\nfalse\0user.name\nx\0'],
+    ['a scope with a space', 'lo cal\0core.bare\nfalse\0'],
+    ['an uppercase scope', 'Local\0core.bare\nfalse\0'],
+    ['an empty key', 'local\0\nvalue\0'],
+    ['plain text', 'usage: git config [<options>]\n'],
+  ])('T1c %s → null (the output cannot be trusted to say which scope a key is in)', (_label, stdout) => {
+    expect(parseScopedConfigListStrict(stdout)).toBeNull();
+  });
+});
+
 describe('isUnsafeConfigEntry', () => {
   it.each([
     'filter.x.clean',
@@ -144,11 +167,26 @@ describe('isUnsafeConfigEntry', () => {
     expect(isUnsafeConfigEntry({ scope: 'worktree', key, value: 'x' })).toBe(true);
   });
 
-  it('T3 trusts global/system/command scopes (user-owned config)', () => {
-    for (const scope of ['global', 'system', 'command', 'unknown']) {
+  it('T3 trusts exactly the global / system / command scopes (user-owned config)', () => {
+    for (const scope of ['global', 'system', 'command']) {
+      expect(isRepoControlledScope(scope)).toBe(false);
       expect(isUnsafeConfigEntry({ scope, key: 'filter.lfs.clean', value: 'git-lfs clean' })).toBe(false);
+      expect(isRedirectConfigEntry({ scope, key: 'core.worktree', value: '/x' })).toBe(false);
     }
   });
+
+  // 只信任已知的三个 scope;其余任何名字——local / worktree、git 现有的 submodule / unknown、将来新增的、
+  // 大小写不同的、空的——都按仓库可控处理(此前是"不可信名单":名单之外一律放行)。
+  it.each(['local', 'worktree', 'submodule', 'unknown', 'remote', 'repository', 'Global', 'GLOBAL', 'global ', ' system', 'command\n', ''])(
+    'T3b scope %j is not on the trusted list → its entries are judged like repository config',
+    (scope) => {
+      expect(isRepoControlledScope(scope)).toBe(true);
+      expect(isUnsafeConfigEntry({ scope, key: 'filter.lfs.clean', value: 'git-lfs clean' })).toBe(true);
+      expect(isUnsafeConfigEntry({ scope, key: 'core.fsmonitor', value: '/bin/evil' })).toBe(true);
+      expect(isRedirectConfigEntry({ scope, key: 'core.worktree', value: '/x' })).toBe(true);
+      expect(isUnsafeConfigEntry({ scope, key: 'user.name', value: 'x' })).toBe(false);
+    },
+  );
 
   it('T4 core.fsmonitor: boolean (built-in daemon) is fine, a program path is flagged', () => {
     for (const value of ['true', 'false', 'TRUE', '0', '1', 'yes', 'off', '']) {
@@ -260,6 +298,44 @@ describe('probeRepoSafety', () => {
   it('T7 trusted when no local unsafe key exists and the layout is self-contained', async () => {
     const { app: a } = app(z(['global', 'filter.lfs.clean', 'git-lfs clean'], ['global', 'core.worktree', '/x'], ['local', 'core.bare', 'false']));
     await expect(probeRepoSafety(a, '/repo')).resolves.toEqual({ kind: 'trusted', cacheable: true });
+  });
+
+  // Apple Git(Xcode 自带)把 `<Xcode>/usr/share/git-core/gitconfig` 的两个键报告为 scope `unknown`(实测 2.50.1)
+  const APPLE_DEFAULTS: Array<[string, string, string]> = [['unknown', 'credential.helper', 'osxkeychain'], ['unknown', 'init.defaultbranch', 'main']];
+
+  it('T7b an ordinary repository on Apple Git: its bundled defaults arrive in scope `unknown`; they are reviewed keys → trusted, cacheable, git is not asked about them', async () => {
+    const { app: a, exec } = app(z(...APPLE_DEFAULTS, ['global', 'user.name', 'me'], ['local', 'core.bare', 'false'], ['local', 'remote.origin.url', 'x']));
+    await expect(probeRepoSafety(a, '/repo')).resolves.toEqual({ kind: 'trusted', cacheable: true });
+    expect(exec.mock.calls.filter((c) => isHelpProbe(c[1]))).toEqual([]);
+  });
+
+  it.each(['unknown', 'submodule', 'remote'])(
+    'T7c an executable / redirect / unreviewed key in scope %s (not global, system or command) restricts the repository',
+    async (scope) => {
+      const exe = await probeRepoSafety(app(z([scope, 'filter.x.clean', 'evil'])).app, '/repo');
+      expect(exe).toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: ['filter.x.clean'] });
+      const redirect = await probeRepoSafety(app(z([scope, 'core.worktree', '/etc'])).app, '/repo');
+      expect(redirect).toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: ['core.worktree'] });
+      // HELP_2_56 文档化、但审计表里没有的键(K5 同款)
+      const exec = gitMock(z([scope, 'submodule.x.gitdir', 'y']), undefined, undefined, result({ stdout: HELP_2_56 }));
+      const unreviewed = await probeRepoSafety({ shell: { exec }, fs: fsMock() } as unknown as CoPluginApp, '/repo');
+      expect(unreviewed).toMatchObject({ kind: 'restricted', reason: 'unknown-config', keys: ['submodule.x.gitdir'] });
+    },
+  );
+
+  it.each([
+    ['no terminating NUL', 'local\0core.bare\nfalse'],
+    ['a dangling scope', 'local\0core.bare\nfalse\0local\0'],
+    ['records without scopes (a git that ignored --show-scope)', 'core.bare\nfalse\0filter.x.clean\nevil\0'],
+    ['a scope that is not a lowercase word', 'Local\0core.bare\nfalse\0'],
+    ['an empty scope in front of a harmless key', '\0user.name\nme\0'],
+    ['an empty scope in front of an executable key', '\0filter.x.clean\nevil\0'],
+  ])('T9b fails closed when the config probe output is malformed (%s): restricted, probe-failed, not cached, no further probe', async (_label, stdout) => {
+    const { app: a, exec } = app(stdout);
+    const r = await probeRepoSafety(a, '/repo');
+    expect(r).toMatchObject({ kind: 'restricted', reason: 'probe-failed', cacheable: false });
+    expect(r.kind === 'restricted' && r.message).toContain('the git config safety check failed (unexpected output format)');
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it('T8 restricted with the offending keys listed in the message; the layout probe is not run', async () => {
@@ -768,6 +844,27 @@ describe('RepoSafetyGuard cache', () => {
     await g2.check('/repo');
     await g2.check('/repo');
     expect(configCalls(s2.exec)).toBe(2);
+  });
+
+  it('T13b entries in a scope other than global / system / command / local / unknown live in files .git/config\'s mtime says nothing about → never cached; `unknown` (Apple Git\'s bundled defaults) alone does not prevent caching', async () => {
+    for (const scope of ['worktree', 'submodule', 'remote']) {
+      const { a, exec } = setup(z([scope, 'user.name', 'x']));
+      const guard = new RepoSafetyGuard(a);
+      await guard.check('/repo');
+      await guard.check('/repo');
+      expect({ scope, probes: configCalls(exec) }).toEqual({ scope, probes: 2 });
+    }
+    const apple = setup(z(['unknown', 'credential.helper', 'osxkeychain'], ['local', 'core.bare', 'false']));
+    const guard = new RepoSafetyGuard(apple.a);
+    await guard.check('/repo');
+    await guard.check('/repo');
+    expect(configCalls(apple.exec)).toBe(1);
+
+    const appleInclude = setup(z(['unknown', 'include.path', '/x']));
+    const g2 = new RepoSafetyGuard(appleInclude.a);
+    await g2.check('/repo');
+    await g2.check('/repo');
+    expect(configCalls(appleInclude.exec)).toBe(2);
   });
 
   it('T14 concurrent checks share one in-flight probe', async () => {

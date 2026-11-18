@@ -19,7 +19,7 @@ import { _resetRestoreCache, unstageFile } from '../../git/unstage-file';
 import { unstageHunk } from '../../git/unstage-hunk';
 import { gitCommit, readLastCommitSubject } from '../../git/git-commit';
 import { hasHeadCommit, readHeadMessage, readHeadSha } from '../../git/head-meta';
-import { installRepoSafetyGuard, isKnownSafeConfigKey, isUnsafeConfigEntry, probeRepoSafety } from '../../git/repo-safety';
+import { installRepoSafetyGuard, isKnownSafeConfigKey, isRepoControlledScope, isUnsafeConfigEntry, parseScopedConfigListStrict, PROBE_ARGS, probeRepoSafety } from '../../git/repo-safety';
 import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
 import { stageFile } from '../../git/stage-file';
@@ -2305,4 +2305,103 @@ describe('whole-file reads are time-limited (real processes)', () => {
     expect(elapsed).toBeGreaterThanOrEqual(FILE_READ_TIMEOUT_MS - 100);
     expect(elapsed).toBeLessThan(FILE_READ_TIMEOUT_MS + 5_000);
   }, 20_000);
+});
+
+describe('config scopes: only system / global / command are trusted (real git)', () => {
+  // 用真实的 system / global 配置文件(其它用例用 GIT_CONFIG_NOSYSTEM=1 + GIT_CONFIG_GLOBAL=/dev/null 把它们关掉)
+  function withUserConfig<T>(fn: () => Promise<T>): Promise<T> {
+    const home = join(base, 'home');
+    mkdirSync(join(home, '.config', 'git'), { recursive: true });
+    const prog = marker('user-owned');
+    writeFileSync(join(base, 'system.cfg'), `[filter "sys"]\n\tclean = ${prog}\n[include]\n\tpath = ${join(base, 'system-inc.cfg')}\n`);
+    writeFileSync(join(base, 'system-inc.cfg'), `[diff]\n\texternal = ${prog}\n`);
+    writeFileSync(join(home, '.gitconfig'), `[user]\n\tname = me\n\temail = me@example.com\n[core]\n\tfsmonitor = ${prog}\n[include]\n\tpath = ${join(base, 'global-inc.cfg')}\n`);
+    writeFileSync(join(base, 'global-inc.cfg'), `[filter "lfs"]\n\tclean = ${prog}\n`);
+    writeFileSync(join(home, '.config', 'git', 'config'), `[gpg]\n\tprogram = ${prog}\n`);
+    const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    delete process.env.GIT_CONFIG_NOSYSTEM;
+    delete process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_SYSTEM = join(base, 'system.cfg');
+    process.env.HOME = home;
+    process.env.XDG_CONFIG_HOME = join(home, '.config');
+    return fn().finally(() => {
+      delete process.env.GIT_CONFIG_SYSTEM;
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+  }
+
+  const KNOWN_SCOPES = ['command', 'global', 'local', 'system', 'unknown', 'worktree'];
+
+  it('R65 the scope names the installed git really prints for system / XDG / global / included / local / worktree / command-line / environment config; an ordinary repository with all of them (the user\'s own files full of program-valued keys) stays trusted and usable', () =>
+    withUserConfig(async () => {
+      git(repo, 'config', 'extensions.worktreeConfig', 'true');
+      git(repo, 'config', '--worktree', 'core.sparseCheckout', 'false');
+      writeFileSync(join(repo, '.git', 'local-inc.cfg'), '[branch "main"]\n\tremote = origin\n');
+      git(repo, 'config', 'include.path', 'local-inc.cfg');
+
+      const app = realApp();
+      const r = await app.shell.exec('git', ['-c', 'cmd.line=1', ...PROBE_ARGS], {
+        cwd: repo,
+        env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'env.count', GIT_CONFIG_VALUE_0: '1', GIT_CONFIG_PARAMETERS: "'env.params=1'" },
+      });
+      expect(r.exitCode).toBe(0);
+      const entries = parseScopedConfigListStrict(r.stdout);
+      if (entries === null) throw new Error('malformed config output');
+      const scopeOf = (key: string) => entries.filter((e) => e.key === key).map((e) => e.scope);
+      expect({
+        'filter.sys.clean': scopeOf('filter.sys.clean'),
+        'diff.external': scopeOf('diff.external'),
+        'gpg.program': scopeOf('gpg.program'),
+        'user.name': scopeOf('user.name'),
+        'filter.lfs.clean': scopeOf('filter.lfs.clean'),
+        'core.bare': scopeOf('core.bare'),
+        'branch.main.remote': scopeOf('branch.main.remote'),
+        'core.sparsecheckout': scopeOf('core.sparsecheckout'),
+        'cmd.line': scopeOf('cmd.line'),
+        'env.count': scopeOf('env.count'),
+        'env.params': scopeOf('env.params'),
+      }).toEqual({
+        'filter.sys.clean': ['system'],
+        'diff.external': ['system'], // include 进来的文件沿用引入者的作用域
+        'gpg.program': ['global'], // $XDG_CONFIG_HOME/git/config
+        'user.name': ['global'],
+        'filter.lfs.clean': ['global'],
+        'core.bare': ['local'],
+        'branch.main.remote': ['local'],
+        'core.sparsecheckout': ['worktree'],
+        'cmd.line': ['command'],
+        'env.count': ['command'],
+        'env.params': ['command'],
+      });
+
+      // 这个 git 输出的全部作用域名都是已知的;system / global / command 之外的只有 local / worktree,
+      // 以及 Apple Git 把 Xcode 自带的 gitconfig 报告成的 `unknown`
+      const scopes = [...new Set(entries.map((e) => e.scope))].sort();
+      expect(scopes.filter((scope) => !KNOWN_SCOPES.includes(scope))).toEqual([]);
+      expect(scopes).toEqual(expect.arrayContaining(['command', 'global', 'local', 'system', 'worktree']));
+      expect(scopes.filter(isRepoControlledScope).filter((scope) => scope !== 'unknown')).toEqual(['local', 'worktree']);
+      // `unknown` 里的键(若有)都是已审计的普通键:不会让普通仓库受限
+      const bundled = entries.filter((e) => e.scope === 'unknown');
+      expect(bundled.filter((e) => isUnsafeConfigEntry(e) || !isKnownSafeConfigKey(e.key))).toEqual([]);
+
+      // 用户自己的 system / global 里全是可执行键,仓库照样可信、可用,且这些程序一个都不会被插件启动
+      clearMarks();
+      expect(await probeRepoSafety(app, repo)).toMatchObject({ kind: 'trusted' });
+      installRepoSafetyGuard(app);
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      expect((await scanStatus(app, repo)).map((c) => c.path)).toEqual(['f.txt']);
+      expect((await stageFile(app, repo, 'f.txt')).ok).toBe(true);
+      expect(marks()).toEqual([]);
+    }));
+
+  it('R65b a plain repository under the real system configuration (on Apple Git this includes the bundled `unknown`-scope defaults): trusted and cacheable; the same executable key in the repository restricts it', () =>
+    withUserConfig(async () => {
+      const app = realApp();
+      expect(await probeRepoSafety(app, repo)).toEqual({ kind: 'trusted', cacheable: true });
+      git(repo, 'config', 'filter.x.clean', marker('repo-filter'));
+      expect(await probeRepoSafety(app, repo)).toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: ['filter.x.clean'] });
+    }));
 });

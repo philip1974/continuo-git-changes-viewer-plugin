@@ -300,3 +300,17 @@ Read timeout (`diff-fetcher` T8–T9):
   the read is terminated after `FILE_READ_TIMEOUT_MS` (5 s) rather than the
   host default of 30 s, and the result carries `modifiedTruncated` +
   `modifiedTimedOut`.
+
+Config scopes (`repo-safety` T3–T3b, T7b–T7c; run with git 2.50.1 (Apple) and
+2.56.1):
+
+- R65: with a real system file (+ include), `$XDG_CONFIG_HOME/git/config`,
+  `~/.gitconfig` (+ include), local config (+ include), `config.worktree`,
+  `-c`, `GIT_CONFIG_COUNT` and `GIT_CONFIG_PARAMETERS`, each key is reported in
+  the expected scope (`system` / `global` / `local` / `worktree` / `command`;
+  includes inherit). No other scope name appears except Apple Git's `unknown`
+  (its bundled defaults), whose keys are all reviewed. The user's files are
+  full of program-valued keys; the repository is trusted, status / stage work
+  and none of those programs is started.
+- R65b: a plain repository under the real system configuration → `trusted`,
+  cacheable; the same kind of key in the repository → restricted.
