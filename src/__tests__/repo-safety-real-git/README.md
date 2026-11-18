@@ -102,3 +102,20 @@ may spawn a process inside it):
 - R34: `-c diff.ignoreSubmodules=dirty` is outranked by
   `submodule.<name>.ignore=none` (the nested clean filter runs); the plugin's
   `--ignore-submodules=dirty` flag is not.
+
+Commit and the network (a hook-less Commit shows no confirmation):
+
+- R35: partial-clone config with an `ssh://` promisor remote, `core.sshCommand`
+  and a staged change whose old blob is missing → with `--quiet` and the
+  network block stripped, Commit executes `core.sshCommand`; the plugin's
+  commit and amend run nothing and succeed, and the repository stays trusted
+  (blobless clones are common). Each defense alone also prevents execution
+  (`--quiet` alone succeeds; the block alone leaves git exiting 128 after
+  creating the commit).
+- R36: same with an `http://` promisor remote (local server answering 401) and
+  a local `credential.helper=!cmd` → no request, no helper.
+- R37: a pre-commit hook records its environment: unconfirmed commit →
+  `GIT_ALLOW_PROTOCOL=""`, `GIT_NO_LAZY_FETCH=1`, `protocol.allow=never`;
+  confirmed commit → none of them.
+- R38: after confirmation the transport is reachable again (the user agreed to
+  run repository code); the same commit without confirmation is not.

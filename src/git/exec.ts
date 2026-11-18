@@ -8,7 +8,13 @@ export interface GitExecOptions
   extends Pick<
     PluginShellExecOptions,
     'timeoutMs' | 'maxOutputBytes' | 'env' | 'input'
-  > {}
+  > {
+  /**
+   * 仅对会运行 hooks 的子命令(commit)有意义:用户已在提交前的 hooks 确认框里同意运行仓库 hooks。
+   * 只有这时 commit 才不注入断网参数 / 环境变量(见 buildGitArgs)。
+   */
+  readonly repoHooksConfirmed?: boolean;
+}
 
 // 安全加固(恶意仓库 .git/config 的可执行配置):以下全局选项 / 命令行作用域配置在
 // 每次 git 调用前置。命令行 `-c` 优先级高于仓库 local config,故仓库无法覆盖。
@@ -16,10 +22,13 @@ export interface GitExecOptions
 // - log.showSignature=false:否则 log/show 遇到签名提交执行 gpg.program。
 // - submodule.recurse=false:不递归进子模块(子模块有自己的 config,本插件不检测)。
 // - protocol.allow=never:本插件从不联网;阻断 partial clone 惰性拉取等隐式传输
-//   (传输层会执行 core.sshCommand / remote.*.uploadpack / ext:: 等)。
-//   例外:会运行用户 hooks 的子命令(commit)不加——`-c` 经 GIT_CONFIG_PARAMETERS 传给 hooks,
-//   会让用户 pre-commit 里正常的 clone/fetch 失败。受限仓库(见 repo-safety)根本不会运行 commit。
-// - core.hooksPath=/dev/null(同上,commit 例外):禁用仓库 hooks。不止 commit 会跑 hooks——
+//   (传输层会执行 core.sshCommand / credential.helper / remote.*.uploadpack / ext:: 等)。
+//   唯一例外:用户已确认运行仓库 hooks 的 commit(repoHooksConfirmed)——`-c` 经 GIT_CONFIG_PARAMETERS、
+//   环境变量经进程 env 传给 hooks,会让用户 pre-commit 里正常的 clone / fetch 失败;此时用户已同意
+//   执行仓库代码,断网不再提供额外保护。没有仓库 hooks(不弹确认)的 commit 同样断网:commit 结束时
+//   打印变更摘要要读旧 blob,partial clone 配置 + 缺失对象会触发惰性拉取并执行 core.sshCommand /
+//   credential.helper(实测 git 2.50),而这条路径没有任何确认。
+// - core.hooksPath=/dev/null(commit 例外):禁用仓库 hooks。不止 commit 会跑 hooks——
 //   写 index 的 add / apply --cached / restore --staged / reset 触发 post-index-change,
 //   checkout / restore 触发 post-checkout,改 ref 的命令触发 reference-transaction;恶意目录只需
 //   放一个可执行的 .git/hooks/post-index-change,用户点一次 Stage 就会执行(实测 git 2.50)。
@@ -67,7 +76,7 @@ const NO_NETWORK_ARGS: readonly string[] = ['-c', 'protocol.allow=never'];
 export const DISABLED_HOOKS_PATH = '/dev/null';
 const NO_HOOKS_ARGS: readonly string[] = ['-c', `core.hooksPath=${DISABLED_HOOKS_PATH}`];
 
-/** 会运行仓库 hooks 的子命令:不禁用 hooks、不注入断网配置,hooks 照常工作(提交前另行确认)。 */
+/** 会运行仓库 hooks 的子命令:不禁用 hooks(提交前另行确认);仅在用户确认运行仓库 hooks 后才不断网。 */
 export const HOOK_RUNNING_SUBCOMMANDS: ReadonlySet<string> = new Set(['commit']);
 
 // 子命令级加固,紧跟在子命令名之后插入:
@@ -79,7 +88,12 @@ export const HOOK_RUNNING_SUBCOMMANDS: ReadonlySet<string> = new Set(['commit'])
 //   必须用命令行参数:`-c diff.ignoreSubmodules=dirty` 会被 .gitmodules / 仓库 config 里的
 //   `submodule.<name>.ignore=none` 盖过(实测)。不用 `all`:gitlink 指向的提交变化仍应显示,
 //   而读子仓库 HEAD 是进程内读文件,不起子进程(GIT_TRACE 实测)。
+// - commit:`--quiet`。不加时 commit 结束会打印变更摘要(`N files changed ...`),为此读取旧 blob;
+//   partial clone 里旧 blob 缺失即触发惰性拉取(→ core.sshCommand / credential.helper,实测),
+//   断网后则以 `fatal: unable to read <oid>` 退出 128——提交其实已创建,却报告失败。加 --quiet 后
+//   根本不读旧 blob(实测:不断网也不拉取),"nothing to commit" 等失败信息照常输出;插件不使用该摘要。
 export const SUBCOMMAND_HARDENING: Readonly<Record<string, readonly string[]>> = {
+  commit: ['--quiet'],
   status: ['--ignore-submodules=dirty'],
   diff: ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short'],
   show: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short'],
@@ -87,8 +101,8 @@ export const SUBCOMMAND_HARDENING: Readonly<Record<string, readonly string[]>> =
 };
 
 // GIT_TERMINAL_PROMPT=0:不在终端提示凭据;GIT_EDITOR=':':git 把 ':' 视为"不启动编辑器",
-// 避免执行 core.editor;GIT_NO_LAZY_FETCH=1(git ≥2.45,同上 commit 例外):禁止惰性拉取。
-// GIT_ALLOW_PROTOCOL=''(同上 commit 例外):允许的传输协议为空列表。`-c protocol.allow=never` 不够——
+// 避免执行 core.editor;GIT_NO_LAZY_FETCH=1(git ≥2.45;已确认 hooks 的 commit 例外):禁止惰性拉取。
+// GIT_ALLOW_PROTOCOL=''(同样的例外):允许的传输协议为空列表。`-c protocol.allow=never` 不够——
 // 仓库 config 里的 `protocol.<name>.allow=always` 优先于它;而该环境变量设置后 git 完全不看
 // protocol.*.allow 配置,任何 config 都覆盖不了(实测 git 2.50:partial clone + 仓库设
 // protocol.file.allow=always + remote.origin.uploadpack,去掉 GIT_NO_LAZY_FETCH 时仅靠 -c 会拉取并执行
@@ -108,12 +122,23 @@ function runsHooks(args: readonly string[]): boolean {
   return args[0] !== undefined && HOOK_RUNNING_SUBCOMMANDS.has(args[0]);
 }
 
-export function buildGitArgs(args: readonly string[]): string[] {
+export interface GitHardeningOptions {
+  readonly repoHooksConfirmed?: boolean;
+}
+
+/** 只有"用户已确认运行仓库 hooks 的 commit"保留联网能力(hooks 里可能要 fetch)。 */
+function networkAllowed(args: readonly string[], opts: GitHardeningOptions): boolean {
+  return runsHooks(args) && opts.repoHooksConfirmed === true;
+}
+
+export function buildGitArgs(args: readonly string[], opts: GitHardeningOptions = {}): string[] {
   const [subcommand, ...rest] = args;
-  const globals = runsHooks(args)
-    ? GIT_GLOBAL_ARGS
-    : [...GIT_GLOBAL_ARGS, ...NO_NETWORK_ARGS, ...NO_HOOKS_ARGS];
-  if (subcommand === undefined) return [...globals];
+  const globals = [
+    ...GIT_GLOBAL_ARGS,
+    ...(networkAllowed(args, opts) ? [] : NO_NETWORK_ARGS),
+    ...(runsHooks(args) ? [] : NO_HOOKS_ARGS),
+  ];
+  if (subcommand === undefined) return globals;
   const extra = SUBCOMMAND_HARDENING[subcommand] ?? [];
   return [...globals, subcommand, ...extra, ...rest];
 }
@@ -121,10 +146,13 @@ export function buildGitArgs(args: readonly string[]): string[] {
 export function buildGitEnv(
   args: readonly string[],
   env: Readonly<Record<string, string>> = {},
+  opts: GitHardeningOptions = {},
 ): Record<string, string> {
-  return runsHooks(args)
-    ? { ...env, ...GIT_HARDENING_ENV }
-    : { ...env, ...GIT_HARDENING_ENV, ...NO_NETWORK_ENV };
+  return {
+    ...env,
+    ...GIT_HARDENING_ENV,
+    ...(networkAllowed(args, opts) ? {} : NO_NETWORK_ENV),
+  };
 }
 
 /**
@@ -156,12 +184,13 @@ export async function gitExecUnguarded(
   args: readonly string[],
   opts: GitExecOptions = {},
 ): Promise<PluginShellExecResult> {
-  return app.shell.exec('git', buildGitArgs(args), {
+  const hardening = { repoHooksConfirmed: opts.repoHooksConfirmed };
+  return app.shell.exec('git', buildGitArgs(args, hardening), {
     cwd,
     timeoutMs: opts.timeoutMs,
     maxOutputBytes: opts.maxOutputBytes,
     input: opts.input,
-    env: buildGitEnv(args, opts.env),
+    env: buildGitEnv(args, opts.env, hardening),
   });
 }
 

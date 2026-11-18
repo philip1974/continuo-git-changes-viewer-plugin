@@ -13,6 +13,11 @@ export interface CommitResult {
 
 export interface GitCommitOptions {
   readonly amend?: boolean;
+  /**
+   * 用户已在 hooks 确认框里同意运行仓库 hooks。未确认(检测为无 hooks)的提交在断网状态下运行,
+   * 防止 partial clone 惰性拉取执行仓库 config 里的 core.sshCommand / credential.helper。
+   */
+  readonly hooksConfirmed?: boolean;
 }
 
 export function formatGitCommitError(
@@ -48,6 +53,7 @@ export async function gitCommit(
   const result = await gitExec(app, repoRoot, args, {
     input: message,
     timeoutMs: 120_000,
+    repoHooksConfirmed: options.hooksConfirmed === true,
   });
 
   if (result.exitCode === 0) return { ok: true };

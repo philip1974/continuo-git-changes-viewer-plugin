@@ -206,6 +206,8 @@ describe('CommitEditor hooks confirmation', () => {
     await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
     expect(detect).toHaveBeenCalledWith(expect.anything(), '/repo');
     expect(screen.queryByRole('alert')).toBeNull();
+    // 未经确认的提交不带 hooksConfirmed → 断网运行(见 exec T4)
+    expect(commit).toHaveBeenCalledWith(expect.anything(), '/repo', 'subject', { amend: false });
   });
 
   it('H9 hooks present → shows the hook names and does not commit until confirmed', async () => {
@@ -218,7 +220,7 @@ describe('CommitEditor hooks confirmation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Commit and run hooks' }));
     await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
-    expect(commit).toHaveBeenCalledWith(expect.anything(), '/repo', 'subject', { amend: false });
+    expect(commit).toHaveBeenCalledWith(expect.anything(), '/repo', 'subject', { amend: false, hooksConfirmed: true });
     await vi.waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 
@@ -254,7 +256,7 @@ describe('CommitEditor hooks confirmation', () => {
     expect(commit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Amend and run hooks' }));
     await vi.waitFor(() =>
-      expect(commit).toHaveBeenCalledWith(expect.anything(), '/repo', 'subject', { amend: true }),
+      expect(commit).toHaveBeenCalledWith(expect.anything(), '/repo', 'subject', { amend: true, hooksConfirmed: true }),
     );
   });
 });

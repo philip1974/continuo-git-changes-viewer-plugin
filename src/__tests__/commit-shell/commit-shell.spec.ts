@@ -71,6 +71,19 @@ describe('gitCommit shell wrapper', () => {
     );
   });
 
+  it('T3b only a hooks-confirmed commit is run with the network open; the default commit carries the network block', async () => {
+    const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
+
+    await gitCommit(appWithExec(exec), '/repo', 'subject');
+    await gitCommit(appWithExec(exec), '/repo', 'subject', { amend: true, hooksConfirmed: true });
+
+    expect(exec.mock.calls[0]![1]).toContain('protocol.allow=never');
+    expect(exec.mock.calls[0]![2].env).toMatchObject({ GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: '' });
+    expect(exec.mock.calls[1]![1]).toEqual(buildGitArgs(['commit', '--amend', '-F', '-'], { repoHooksConfirmed: true }));
+    expect(exec.mock.calls[1]![1]).not.toContain('protocol.allow=never');
+    expect(exec.mock.calls[1]![2].env).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
+  });
+
   it('T4 passes the commit message through stdin input', async () => {
     const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
     const message = 'subject\n\nbody line 1\nbody line 2\n';

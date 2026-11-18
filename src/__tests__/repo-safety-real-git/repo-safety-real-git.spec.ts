@@ -1,6 +1,7 @@
 // 真实 git 集成:构造含恶意 .git/config 的临时仓库,每个可执行配置指向一个"写标记文件"的脚本,
 // 断言插件的 git 调用不再触发任何标记;同时验证普通仓库功能与用户 hooks 不受影响。
 import { spawn, execFileSync } from 'node:child_process';
+import { createServer, type Server } from 'node:http';
 import { chmodSync, existsSync, readFileSync, renameSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
@@ -1019,5 +1020,137 @@ describe('nested repositories: no plugin git command may spawn a process inside 
 
     await scanStatus(realApp(), repo);
     expect(marks()).toEqual([]);
+  });
+});
+
+describe('commit never reaches the network unless the user confirmed running repository hooks (real git)', () => {
+  // partial clone 配置 + HEAD 里 f.txt 的 blob 缺失 + 已暂存的修改:commit 结束时打印变更摘要要读旧 blob,
+  // 触发惰性拉取 → 传输层执行仓库 config 指定的程序。无 hooks,所以提交前不会弹确认。
+  // 暂存 f.txt 的又一处修改,并删掉它在 HEAD 里的 blob(= 该对象"尚未从 promisor 远端取回")
+  function stageWithMissingOldBlob(): void {
+    const blob = git(repo, 'rev-parse', 'HEAD:f.txt').trim();
+    appendFileSync(join(repo, 'f.txt'), 'more\n');
+    git(repo, 'add', 'f.txt');
+    rmSync(join(repo, '.git', 'objects', blob.slice(0, 2), blob.slice(2)));
+  }
+  function plantLazyFetchRepo(url: string): void {
+    stageWithMissingOldBlob();
+    git(repo, 'config', 'extensions.partialClone', 'origin');
+    git(repo, 'config', 'remote.origin.promisor', 'true');
+    git(repo, 'config', 'remote.origin.url', url);
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'config', 'user.email', 't@t');
+    clearMarks();
+  }
+  // 两道防线:--quiet(不读旧 blob,根本不触发拉取)与断网(触发了也出不去)。证明 fixture 时两道都去掉。
+  const NETWORK_BLOCK: Tamper = { dropPins: ['protocol.allow'], dropEnv: ['GIT_NO_LAZY_FETCH', 'GIT_ALLOW_PROTOCOL'] };
+  const UNPROTECTED: Tamper = { ...NETWORK_BLOCK, dropArgs: ['--quiet'] };
+  const head = () => git(repo, 'rev-parse', 'HEAD').trim();
+  const touch = (name: string) => `sh -c 'touch "${join(markDir, name)}"; exit 1' x`;
+
+  it('R35 ssh promisor remote + core.sshCommand: without the network block a hook-less Commit executes it; the plugin commit / amend runs nothing, still succeeds, and the repo stays trusted', async () => {
+    plantLazyFetchRepo('ssh://host.invalid/y');
+    git(repo, 'config', 'core.sshCommand', touch('ssh'));
+
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('trusted'); // blobless clone 不受限
+    expect(await detectRepoHooks(app, repo)).toEqual({ kind: 'none' }); // 不会弹确认
+
+    const before = head();
+    expect(await gitCommit(app, repo, 'second')).toMatchObject({ ok: true });
+    expect(head()).not.toBe(before);
+    expect(marks()).toEqual([]);
+
+    appendFileSync(join(repo, 'g.txt'), 'more\n');
+    expect((await stageFile(app, repo, 'g.txt')).ok).toBe(true);
+    const beforeAmend = head();
+    expect(await gitCommit(app, repo, 'amended', { amend: true })).toMatchObject({ ok: true });
+    expect(head()).not.toBe(beforeAmend);
+    expect(marks()).toEqual([]);
+
+    // 证明 fixture:去掉断网参数 / 环境变量后,同样的提交执行了仓库的 core.sshCommand
+    stageWithMissingOldBlob();
+    await gitCommit(tamperedApp(UNPROTECTED), repo, 'third');
+    expect(marks()).toEqual(['ssh']);
+    clearMarks();
+
+    // 各自单独也够:只留断网(去掉 --quiet)→ 不执行,但 git 以"读不到旧 blob"失败(提交其实已创建);
+    // 只留 --quiet(去掉断网)→ 不执行且成功。两者并用 = 上面的插件原样行为。
+    for (const [t, ok] of [[{ dropArgs: ['--quiet'] }, false], [NETWORK_BLOCK, true]] as Array<[Tamper, boolean]>) {
+      stageWithMissingOldBlob();
+      const at = head();
+      expect((await gitCommit(tamperedApp(t), repo, 'again')).ok).toBe(ok);
+      expect(head()).not.toBe(at);
+      expect(marks()).toEqual([]);
+    }
+  });
+
+  it('R36 http promisor remote + local credential.helper=!cmd: same path; the plugin commit never contacts the server nor runs the helper', async () => {
+    let requests = 0;
+    const server: Server = createServer((_req, res) => {
+      requests++;
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="x"' }).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as { port: number };
+      plantLazyFetchRepo(`http://127.0.0.1:${port}/y`);
+      git(repo, 'config', 'credential.helper', `!touch "${join(markDir, 'cred')}"; :`);
+
+      const before = head();
+      expect(await gitCommit(realApp(), repo, 'second')).toMatchObject({ ok: true });
+      expect(head()).not.toBe(before);
+      expect({ requests, marks: marks() }).toEqual({ requests: 0, marks: [] });
+
+      stageWithMissingOldBlob();
+      await gitCommit(tamperedApp(UNPROTECTED), repo, 'third');
+      expect(requests).toBeGreaterThan(0);
+      expect(marks()).toEqual(['cred']);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('R37 hooks see the block only when the user was not asked: an unconfirmed commit hands hooks GIT_ALLOW_PROTOCOL="" / GIT_NO_LAZY_FETCH=1, a confirmed one hands them neither (their own fetches keep working)', async () => {
+    const envFile = join(markDir, 'hook-env');
+    const hook = join(repo, '.git', 'hooks', 'pre-commit');
+    writeFileSync(
+      hook,
+      `#!/bin/sh\nprintf 'allow=[%s] lazy=[%s] params=[%s]\\n' "\${GIT_ALLOW_PROTOCOL-unset}" "\${GIT_NO_LAZY_FETCH-unset}" "$GIT_CONFIG_PARAMETERS" > "${envFile}"\n`,
+    );
+    chmodSync(hook, 0o755);
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'config', 'user.email', 't@t');
+    const app = realApp();
+
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    git(repo, 'add', 'f.txt');
+    expect(await gitCommit(app, repo, 'confirmed', { hooksConfirmed: true })).toMatchObject({ ok: true });
+    const confirmed = readFileSync(envFile, 'utf8');
+    expect(confirmed).toContain('allow=[unset] lazy=[unset]');
+    expect(confirmed).not.toContain('protocol.allow');
+
+    appendFileSync(join(repo, 'f.txt'), 'three\n');
+    git(repo, 'add', 'f.txt');
+    expect(await gitCommit(app, repo, 'unconfirmed')).toMatchObject({ ok: true });
+    const unconfirmed = readFileSync(envFile, 'utf8');
+    expect(unconfirmed).toContain('allow=[] lazy=[1]');
+    expect(unconfirmed).toContain('protocol.allow');
+  });
+
+  it('R38 a confirmed commit in the same lazy-fetch repository does reach the transport (documented: the user agreed to run repository code)', async () => {
+    plantLazyFetchRepo('ssh://host.invalid/y');
+    git(repo, 'config', 'core.sshCommand', touch('ssh'));
+    plantHooks();
+    expect((await detectRepoHooks(realApp(), repo)).kind).toBe('present');
+    // 确认后只是不再断网;--quiet 仍在,插件自己的提交不触发拉取。这里用去掉 --quiet 来代表
+    // "hooks 里的 git 命令读到缺失对象"——那时传输层会被执行,属于用户已同意的仓库代码范围。
+    await gitCommit(tamperedApp({ dropArgs: ['--quiet'] }), repo, 'second', { hooksConfirmed: true });
+    expect(marks()).toContain('ssh');
+    clearMarks();
+    stageWithMissingOldBlob();
+    await gitCommit(tamperedApp({ dropArgs: ['--quiet'] }), repo, 'third');
+    expect(marks()).not.toContain('ssh');
   });
 });

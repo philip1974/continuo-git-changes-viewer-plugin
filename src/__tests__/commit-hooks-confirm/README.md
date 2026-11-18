@@ -24,8 +24,14 @@ before committing the editor checks whether git would run any:
 
 When hooks are present or unknown, clicking Commit / Amend shows an inline
 warning naming the hooks and does not commit; "Commit and run hooks" commits,
-"Cancel" dismisses. Without hooks, Commit behaves exactly as before. Each
+"Cancel" dismisses. Without hooks, Commit goes ahead without a prompt. Each
 commit attempt re-detects.
 
+Only the confirmed commit is passed `hooksConfirmed` and runs with the network
+open (the user agreed to run repository code, and hooks may fetch). A commit
+that was not confirmed runs with the network blocked (`exec` T4, real-git
+R35–R38), so a partial-clone repository cannot make a hook-less Commit execute
+`core.sshCommand` / `credential.helper` through a lazy fetch.
+
 H1-H7, H13-H15 detection (mocked shell/fs). H8-H12 CommitEditor prompt
-behavior. Real-git coverage lives in `repo-safety-real-git` (R7-R13).
+behavior (H8 / H9 / H12 also pin which commits carry `hooksConfirmed`). Real-git coverage lives in `repo-safety-real-git` (R7-R13).

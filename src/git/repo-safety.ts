@@ -42,9 +42,12 @@ import { isNotFoundError } from './fs-errors';
 // - core.pager / pager.*:全局 `--no-pager`。
 // - core.editor / sequence.editor:env GIT_EDITOR=':'。
 // - diff.external:另加 `--no-ext-diff`(本列表仍检测,双保险)。
-// - core.sshCommand / credential.* / core.askPass 以外的传输类:只在联网时执行,而读命令已
-//   `-c protocol.allow=never` + GIT_NO_LAZY_FETCH=1 + GIT_ALLOW_PROTOCOL= 断网;per-repo sshCommand / credential.helper
-//   是常见的合法配置,检测会误伤。
+// - core.sshCommand / credential.* / url.* / http.* / remote.*.url 等传输类:只在联网时执行,而每次调用
+//   (含未经 hooks 确认的 commit——提交摘要读缺失 blob 也会触发 partial clone 惰性拉取)都以
+//   `-c protocol.allow=never` + GIT_NO_LAZY_FETCH=1 + GIT_ALLOW_PROTOCOL= 断网;per-repo sshCommand /
+//   credential.helper 是常见的合法配置,检测会误伤。
+// - extensions.partialClone / remote.*.promisor / remote.*.partialCloneFilter:blobless / treeless clone 在
+//   大仓库里很常见,不列入受限键;靠上面的断网保证不拉取(缺失对象的 diff 显示 git 的报错)。
 // - core.hooksPath / .git/hooks:不在此受限检测。hooks 并非只在 commit 时运行——写 index 的
 //   add / apply --cached / restore / reset 会触发 post-index-change,checkout / restore 触发
 //   post-checkout。中和方式:除 commit 外每次调用都 `-c core.hooksPath=/dev/null`(见 exec.ts),
@@ -58,8 +61,9 @@ import { isNotFoundError } from './fs-errors';
 // - commit.template:插件用 `commit -F -`,不读模板。
 // - core.symlinks / core.fileMode:工作树里的符号链接只显示链接目标路径,不跟随。
 // - core.sparseCheckout / index.sparse / core.splitIndex / status.showUntrackedFiles:只影响工作树内的呈现。
-// - gc.auto 等:status / diff / add 不触发 gc;commit 之后的 auto gc 只在提交时发生,其 pre-auto-gc hook
-//   位于 hooks 目录,由 repo-hooks 的提交前确认覆盖。gc.recentObjectsHook 按文档会执行命令,列入执行类键。
+// - gc.* / maintenance.*:status / diff / add 不触发 gc;commit 之后的自动维护已由
+//   `-c maintenance.auto=false -c gc.auto=0` 关闭(见 exec.ts)。gc.recentObjectsHook 按文档会执行命令,
+//   仍列入执行类键(双保险)。
 // - safe.directory:git 只在受保护作用域(system / global / command)认它,local 无效。
 // - core.repositoryFormatVersion 异常值 / 未知 extensions:git 直接拒绝该仓库,所有命令失败(布局探测随之受限)。
 const UNSAFE_KEY_PATTERNS: readonly RegExp[] = [

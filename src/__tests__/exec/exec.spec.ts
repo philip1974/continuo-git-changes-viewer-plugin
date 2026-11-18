@@ -104,16 +104,28 @@ describe('gitExec hardened shell wrapper', () => {
     expect(buildGitArgs(['diff'])).toContain('--ignore-submodules=dirty');
   });
 
-  it('T4 commit (runs user hooks) keeps hardening but does not inject the network block', async () => {
+  it('T4 commit keeps repository hooks enabled but is cut off from the network unless the user confirmed running repository hooks', async () => {
     const { app, exec } = makeApp();
 
     await gitExec(app, '/repo', ['commit', '-F', '-'], { input: 'msg' });
+    await gitExec(app, '/repo', ['commit', '--amend', '-F', '-'], { input: 'msg', repoHooksConfirmed: true });
 
     const [, args, opts] = exec.mock.calls[0]!;
-    expect(args).toEqual([...GLOBALS, 'commit', '-F', '-']);
-    expect(args).not.toContain('protocol.allow=never');
+    expect(args).toEqual([...GLOBALS, '-c', 'protocol.allow=never', 'commit', '--quiet', '-F', '-']);
     expect(args.some((a: string) => a.startsWith('core.hooksPath'))).toBe(false);
-    expect(opts.env).toEqual({ GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: ':' });
+    expect(opts.env).toEqual(ENV);
+
+    const [, confirmedArgs, confirmedOpts] = exec.mock.calls[1]!;
+    expect(confirmedArgs).toEqual([...GLOBALS, 'commit', '--quiet', '--amend', '-F', '-']);
+    expect(confirmedOpts.env).toEqual({ GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: ':' });
+    expect(confirmedOpts).not.toHaveProperty('repoHooksConfirmed');
+  });
+
+  it('T4b repoHooksConfirmed never opens the network or enables hooks for any other subcommand', () => {
+    for (const sub of [['status'], ['diff'], ['add', '--', 'a'], ['show', 'HEAD:a'], ['checkout', '--', 'a']]) {
+      expect(buildGitArgs(sub, { repoHooksConfirmed: true })).toEqual(buildGitArgs(sub));
+      expect(buildGitEnv(sub, {}, { repoHooksConfirmed: true })).toEqual(ENV);
+    }
   });
 
   it('T8 every non-commit subcommand (index / worktree writers included) disables repository hooks', () => {
@@ -165,11 +177,14 @@ describe('gitExec hardened shell wrapper', () => {
     expect(exec).toHaveBeenCalledWith('git', [...GLOBALS, ...NO_NETWORK, 'rev-parse', 'HEAD'], expect.anything());
   });
 
-  it('T9 non-commit calls set GIT_ALLOW_PROTOCOL to an empty list (beats repo protocol.<name>.allow); caller env cannot re-enable it; commit leaves it unset', () => {
+  it('T9 GIT_ALLOW_PROTOCOL is an empty list (beats repo protocol.<name>.allow) and the caller env cannot re-enable it; only a hooks-confirmed commit leaves it unset', () => {
     for (const sub of [['status'], ['show', 'HEAD:a'], ['diff'], ['add', '--', 'a'], ['rev-parse', 'HEAD']]) {
       expect(buildGitEnv(sub, { GIT_ALLOW_PROTOCOL: 'file:ssh:ext' })).toMatchObject({ GIT_ALLOW_PROTOCOL: '' });
     }
-    expect(buildGitEnv(['commit', '-F', '-'])).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
+    expect(buildGitEnv(['commit', '-F', '-'], { GIT_ALLOW_PROTOCOL: 'ssh' })).toMatchObject({ GIT_ALLOW_PROTOCOL: '', GIT_NO_LAZY_FETCH: '1' });
+    const confirmed = buildGitEnv(['commit', '-F', '-'], {}, { repoHooksConfirmed: true });
+    expect(confirmed).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
+    expect(confirmed).not.toHaveProperty('GIT_NO_LAZY_FETCH');
   });
 });
 

@@ -55,7 +55,9 @@ restricted verdict at one step skips the later ones.
   a warning explaining why and how to recover.
 - Not flagged on purpose: core.pager/editor (neutralized by `--no-pager` and
   `GIT_EDITOR=:`), network-only keys such as core.sshCommand / credential.helper
-  (read commands run with `protocol.allow=never` + `GIT_NO_LAZY_FETCH=1`),
+  and partial-clone settings (every command, including a commit whose hooks
+  were not confirmed, runs with `protocol.allow=never` + `GIT_NO_LAZY_FETCH=1`
+  + `GIT_ALLOW_PROTOCOL=`),
   core.hooksPath (hooks are disabled for everything but commit, which asks for
   confirmation), and keys that merely name an outside file that git parses as
   patterns without echoing it (core.excludesFile, core.attributesFile,

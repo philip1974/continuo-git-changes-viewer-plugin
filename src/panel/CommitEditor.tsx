@@ -167,7 +167,13 @@ export function CommitEditor({
       }
       setHooksPrompt(null);
       const headBefore = amend ? await readHeadSha(app, repoRoot) : null;
-      const result = await commit(app, repoRoot, commitMessage, { amend });
+      const result = await commit(
+        app,
+        repoRoot,
+        commitMessage,
+        // 只有用户在确认框里点了"运行 hooks"才放开联网(见 exec.ts);无 hooks 的提交断网运行
+        hooksConfirmed ? { amend, hooksConfirmed: true } : { amend },
+      );
       if (!result.ok) {
         showError(app, store, result.error || (amend ? 'Amend failed' : 'Commit failed'));
         return;
