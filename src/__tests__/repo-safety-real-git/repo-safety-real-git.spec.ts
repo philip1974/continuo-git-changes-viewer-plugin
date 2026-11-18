@@ -991,7 +991,7 @@ describe('nested repositories: no plugin git command may spawn a process inside 
     expect(spawned(stderr)).toEqual([]);
     expect(marks()).toEqual([]);
 
-    // 证明 fixture:去掉子模块相关加固后,同一组操作会在 sub/ 里起 git(`run_command: cd sub; ...`;其 filter 被执行见 R34)
+    // 证明 fixture:去掉子模块相关加固后,同一组操作会在 sub/ 里起 git(`run_command: cd sub; ...`;其 config 被执行见 R34)
     git(repo, 'reset', '-q', '--hard', 'HEAD~1');
     const bareErr: string[] = [];
     await driveAll(
@@ -1015,8 +1015,9 @@ describe('nested repositories: no plugin git command may spawn a process inside 
     writeFileSync(join(repo, '.gitmodules'), `[submodule "sub"]\n\tpath = sub\n\turl = ${join(base, 'nowhere')}\n`);
     dirty(sub, 's.txt');
 
+    // 子仓库里的 `git status` 一定会跑它的 core.fsmonitor;clean filter 是否触发取决于时间戳(racy),不作断言
     git(repo, '--no-optional-locks', '-c', 'diff.ignoreSubmodules=dirty', 'status', '--porcelain');
-    expect(marks()).toContain('sub-clean');
+    expect(marks()).toContain('sub-fsmonitor');
     clearMarks();
 
     await scanStatus(realApp(), repo);

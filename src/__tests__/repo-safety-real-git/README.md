@@ -100,7 +100,8 @@ may spawn a process inside it):
   hardening stripped the same run spawns `git status` inside `sub/`,
   `git submodule summary` and `git maintenance run --auto`.
 - R34: `-c diff.ignoreSubmodules=dirty` is outranked by
-  `submodule.<name>.ignore=none` (the nested clean filter runs); the plugin's
+  `submodule.<name>.ignore=none` (the nested repository's `core.fsmonitor`
+  program runs); the plugin's
   `--ignore-submodules=dirty` flag is not.
 
 Commit and the network (a hook-less Commit shows no confirmation):
