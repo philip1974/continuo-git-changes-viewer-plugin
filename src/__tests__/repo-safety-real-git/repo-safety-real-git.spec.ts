@@ -25,6 +25,7 @@ import { readStatusHash } from '../../git/status-hash';
 import { stageFile } from '../../git/stage-file';
 import { parsePorcelainStatus, scanStatus, UnsafeIndexError } from '../../git/status-scanner';
 import type { CoPluginApp, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
+import { keyPatterns, overlappingKeys, REVIEWED_OVERLAP } from '../repo-safety/key-overlap';
 
 // 最小 app.shell / app.fs 实现(对应宿主 shell.exec:env 合并进进程 env)
 function realApp(): CoPluginApp {
@@ -1660,6 +1661,56 @@ describe('config keys the viewer has not reviewed: default-deny for keys the run
     expect((await stageFile(app, repo, 'f.txt')).ok).toBe(true);
     expect(await gitCommit(app, repo, 'works')).toMatchObject({ ok: true });
     expect(marks()).toEqual([]);
+  });
+});
+
+describe('config keys are split the way git splits them: section . subsection (anything, even nothing) . name (real git)', () => {
+  const localKeys = () =>
+    execFileSync('git', ['config', '--local', '--list', '--name-only', '-z'], { cwd: repo, env: ENV, encoding: 'utf8' }).split('\0').filter(Boolean);
+
+  it.each([
+    ['an empty name (`[filter ""]`, selected by `* filter=`)', ''],
+    ['U+2028 in its name', 'a\u2028b'],
+    ['a dotted name ending like a variable', 'x.required'],
+  ])('R52 a filter driver with %s really runs on `git status`; the repository is restricted and the guarded plugin runs nothing', async (_label, driver) => {
+    appendFileSync(join(repo, '.git', 'config'), `[filter "${driver}"]\n\tclean = ${marker('clean')}\n`);
+    writeFileSync(join(repo, '.gitattributes'), `* filter=${driver}\n`);
+    const key = `filter.${driver}.clean`;
+    expect(localKeys()).toContain(key);
+
+    // 证明 fixture:git 自己确实把它当作驱动执行
+    dirty();
+    git(repo, '--no-optional-locks', 'status', '--porcelain');
+    expect(marks()).toEqual(['clean']);
+    clearMarks();
+
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect(await guard.check(repo, { fresh: true })).toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: [key] });
+    await runEverything(app);
+    expect((await stageFile(app, repo, 'g.txt')).ok).toBe(false);
+    expect(marks()).toEqual([]);
+  });
+
+  it('R53 a remote / branch whose name ends like another variable (`[remote "a.uploadpack"] url`, `[branch "x.remote"] merge`) is that remote\'s url, not an uploadpack key → trusted and usable; `[remote "a.url"] uploadpack` is restricted', async () => {
+    appendFileSync(join(repo, '.git', 'config'), '[remote "a.uploadpack"]\n\turl = https://example.invalid/r.git\n[branch "x.remote"]\n\tmerge = refs/heads/x\n\tremote = a.uploadpack\n[branch ""]\n\tdescription = d\n');
+    expect(localKeys()).toEqual(expect.arrayContaining(['remote.a.uploadpack.url', 'branch.x.remote.merge', 'branch.x.remote.remote', 'branch..description']));
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect(await guard.check(repo, { fresh: true })).toEqual({ kind: 'trusted' });
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    expect((await scanStatus(app, repo)).map((c) => c.path)).toEqual(['f.txt']);
+    expect((await stageFile(app, repo, 'f.txt')).ok).toBe(true);
+
+    appendFileSync(join(repo, '.git', 'config'), `[remote "a.url"]\n\tuploadpack = ${marker('uploadpack')}\n`);
+    expect(await guard.check(repo, { fresh: true })).toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: ['remote.a.url.uploadpack'] });
+    expect(marks()).toEqual([]);
+  });
+
+  it('R54 the keys the installed git documents, instantiated with ordinary / dotted / empty / look-alike names: the only keys both restricted and reviewed are the reviewed snapshot', () => {
+    const documented = keyPatterns(execFileSync('git', ['help', '--config'], { env: ENV, encoding: 'utf8' }));
+    expect(documented.length).toBeGreaterThan(900);
+    expect(overlappingKeys(documented)).toEqual([...REVIEWED_OVERLAP]);
   });
 });
 

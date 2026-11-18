@@ -203,3 +203,16 @@ Keys the viewer has not reviewed (`repo-safety` K1–K10 with the real `git help
   `GIT_TRACE` shows `git help --config` ran as a built-in and spawned nothing
   although `pager.help`, `help.format=web`, `browser.*.cmd`, `man.*.cmd` and
   `alias.help` were set.
+
+Key splitting (`repo-safety` C1–C8 against a real git):
+
+- R52: a filter driver named `""` (`[filter ""]`, selected by `* filter=`),
+  named with U+2028, or with a dotted name → plain `git status` runs its clean
+  command; the repository is restricted (`filter..clean`, …) and guarded ops
+  run nothing. (Before the fix the whole-key regex `^filter\..+\.clean$`
+  missed the first two and the repository was trusted.)
+- R53: `[remote "a.uploadpack"] url`, `[branch "x.remote"] merge`, `[branch
+  ""] description` → trusted, status / stage work; `[remote "a.url"]
+  uploadpack` → restricted.
+- R54: the overlap snapshot (`repo-safety` C6) computed from the installed
+  git's own `git help --config`.

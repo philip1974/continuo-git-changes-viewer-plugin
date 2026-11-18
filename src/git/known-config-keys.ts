@@ -5,7 +5,7 @@
 //
 // 收录条件:该键已按 doc/git-config-classification.md 审计过,且结论是"安全或已被固定参数 / 环境变量
 // 中和"。**受限键不在这里**(filter.<drv>.clean、diff.external、hook.*、core.worktree ... 见 repo-safety.ts
-// 的 UNSAFE_KEY_PATTERNS / isRedirectConfigEntry);按取值判定的键(core.bare、core.fsmonitor、
+// 的 UNSAFE_KEY_RULES / isRedirectConfigEntry);按取值判定的键(core.bare、core.fsmonitor、
 // diff.submodule)在这里,取值检查先于本表。
 //
 // 用途(repo-safety.ts):仓库作用域(local / worktree)里出现的键,不受限、也不在本表里的,再拿去问
@@ -1010,6 +1010,35 @@ status.compareBranches
 
 export const KNOWN_SAFE_CONFIG_KEYS: string = AUDITED_2_50_1 + AUDITED_2_51_TO_2_56_1;
 
+export interface ConfigKeyParts {
+  /** 小写(git 对段名大小写不敏感)。 */
+  readonly section: string;
+  /** null = 没有 subsection(`core.bare`);'' = 空 subsection(`[filter ""]` → `filter..clean`)。保留原大小写。 */
+  readonly subsection: string | null;
+  /** 变量名,小写。 */
+  readonly name: string;
+}
+
+/**
+ * 按 git 自己的规则(config.c 的 parse_config_key)切分 `git config --list` 输出的键:
+ * section = 第一个点之前,变量名 = 最后一个点之后,subsection = 两者之间的**全部**内容——可以含点
+ * (`[remote "a.uploadpack"] url` → `remote.a.uploadpack.url`)、可以为空(`[filter ""] clean` →
+ * `filter..clean`,git 照样把它当作名为 "" 的驱动,`* filter=` 即选中它,实测会执行)、可以含任何字符
+ * (U+2028 等;正则的 `.` 不匹配行终止符,所以这里不用正则)。
+ * 所有"这个键是什么"的判断(受限规则、已审计表、运行时 git 的键列表)都必须经过这一个函数。
+ * 不是键(没有点、section 或变量名为空)返回 null。
+ */
+export function splitConfigKey(key: string): ConfigKeyParts | null {
+  const first = key.indexOf('.');
+  const last = key.lastIndexOf('.');
+  if (first <= 0 || last === key.length - 1) return null;
+  return {
+    section: key.slice(0, first).toLowerCase(),
+    subsection: first === last ? null : key.slice(first + 1, last),
+    name: key.slice(last + 1).toLowerCase(),
+  };
+}
+
 export interface ConfigKeyMatcher {
   /** 列表里的键(模式)个数。 */
   readonly size: number;
@@ -1020,34 +1049,59 @@ export interface ConfigKeyMatcher {
 const WILDCARD_SEGMENT = /^(\*|<[^<>]*>)$/;
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+interface KeyRule {
+  /** null = 键必须没有 subsection;否则对整个 subsection 做匹配。 */
+  readonly subsection: RegExp | null;
+  /** null = 任意变量名。 */
+  readonly name: string | null;
+}
+
 /**
  * 解析 `git help --config` 写法的键列表(每行一个键;`<name>` / `*` 段是通配)。
- * - 中间的通配段是 subsection,可以含 `.`(`branch.<name>.remote` 匹配 `branch.feat/a.b.remote`);
- *   末尾的通配段是变量名,不含 `.`(`alias.*` 不匹配 `alias.x.command`)。
+ * 模式与键都按 splitConfigKey 的规则切分后逐部分比较:
+ * - 模式的第一段是 section,最后一段是变量名(通配 = 任意变量名),中间的段合起来是 subsection 的写法,
+ *   其中的通配段匹配任意内容——含 `.`、空串、任何字符(`branch.<name>.remote` 匹配
+ *   `branch.feat/a.b.remote` 与 `branch..remote`);两段的模式(`alias.*`、`core.bare`)只匹配没有
+ *   subsection 的键(`alias.*` 不匹配 `alias.x.command`)。
  * - 段名与变量名大小写不敏感(git 如此);subsection 严格说大小写敏感,这里一并忽略大小写——
  *   对"已审计"判断只会多认,不会把 git 实际解释的键漏掉。
  * - 不是键的行(空行、带空白的说明行)忽略。
  */
 export function parseConfigKeyList(text: string): ConfigKeyMatcher {
-  const exact = new Set<string>();
-  const patterns: RegExp[] = [];
+  const bySection = new Map<string, KeyRule[]>();
+  const seen = new Set<string>();
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (line === '' || /\s/.test(line)) continue;
     const segments = line.split('.');
     if (segments.length < 2 || segments.some((s) => s === '')) continue;
-    if (!segments.some((s) => WILDCARD_SEGMENT.test(s))) {
-      exact.add(line.toLowerCase());
-      continue;
-    }
-    const last = segments.length - 1;
-    const source = segments
-      .map((s, i) => (WILDCARD_SEGMENT.test(s) ? (i === last ? '[^.]+' : '.+') : escapeRegExp(s)))
-      .join('\\.');
-    patterns.push(new RegExp(`^${source}$`, 'i'));
+    if (seen.has(line.toLowerCase())) continue;
+    seen.add(line.toLowerCase());
+    const section = segments[0]!.toLowerCase();
+    const last = segments[segments.length - 1]!;
+    const middle = segments.slice(1, -1);
+    const rule: KeyRule = {
+      subsection:
+        middle.length === 0
+          ? null
+          : new RegExp(`^${middle.map((s) => (WILDCARD_SEGMENT.test(s) ? '[\\s\\S]*' : escapeRegExp(s))).join('\\.')}$`, 'i'),
+      name: WILDCARD_SEGMENT.test(last) ? null : last.toLowerCase(),
+    };
+    const rules = bySection.get(section);
+    if (rules) rules.push(rule);
+    else bySection.set(section, [rule]);
   }
   return {
-    size: exact.size + patterns.length,
-    matches: (key) => exact.has(key.toLowerCase()) || patterns.some((re) => re.test(key)),
+    size: seen.size,
+    matches: (key) => {
+      const parts = splitConfigKey(key);
+      if (!parts) return false;
+      const { subsection, name } = parts;
+      return (bySection.get(parts.section) ?? []).some(
+        (rule) =>
+          (rule.name === null || rule.name === name) &&
+          (rule.subsection === null ? subsection === null : subsection !== null && rule.subsection.test(subsection)),
+      );
+    },
   };
 }

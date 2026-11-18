@@ -1,7 +1,13 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExecUnguarded, registerGitGuard } from './exec';
 import { isNotFoundError } from './fs-errors';
-import { KNOWN_SAFE_CONFIG_KEYS, parseConfigKeyList, type ConfigKeyMatcher } from './known-config-keys';
+import {
+  KNOWN_SAFE_CONFIG_KEYS,
+  parseConfigKeyList,
+  splitConfigKey,
+  type ConfigKeyMatcher,
+  type ConfigKeyParts,
+} from './known-config-keys';
 
 // 受限仓库检测(安全):打开一个含攻击者控制 .git 的目录(解压包 / 共享盘)时,仓库可以用两类手段
 // 伤害用户;在运行任何 git 命令前先探测,命中任一即进入受限状态,不再运行任何 git 命令(fail-closed)。
@@ -21,7 +27,7 @@ import { KNOWN_SAFE_CONFIG_KEYS, parseConfigKeyList, type ConfigKeyMatcher } fro
 // 1. 配置:`git config --list --show-scope --includes -z` 只读配置文件,不执行任何程序
 //    (实测:恶意 filter/textconv/diff.external/fsmonitor/gpg.program 均不触发)。只看仓库作用域
 //    (local / worktree,含 include / includeIf 引入的文件);全局 / 系统 config 是用户自己的,可信。
-//    命中执行类键(UNSAFE_KEY_PATTERNS)或重定向类键(core.worktree、非 false 的 core.bare、
+//    命中执行类键(UNSAFE_KEY_RULES)或重定向类键(core.worktree、非 false 的 core.bare、
 //    core.attributesFile、core.excludesFile)即受限。其余的键必须在已审计的分类表里,或者是运行时
 //    git 不认识的外部工具私有键;git 认识而本插件没审计过的键 → 受限(见"未知键默认受限")。
 // 2. 布局(纵深,不依赖键列表):一次 `git rev-parse`(见 LAYOUT_PROBE_ARGS)向 git 自己询问
@@ -70,27 +76,42 @@ import { KNOWN_SAFE_CONFIG_KEYS, parseConfigKeyList, type ConfigKeyMatcher } fro
 //   仍列入执行类键(双保险)。
 // - safe.directory:git 只在受保护作用域(system / global / command)认它,local 无效。
 // - core.repositoryFormatVersion 异常值 / 未知 extensions:git 直接拒绝该仓库,所有命令失败(布局探测随之受限)。
-const UNSAFE_KEY_PATTERNS: readonly RegExp[] = [
-  /^filter\..+\.(clean|smudge|process)$/i,
-  /^diff\..+\.(textconv|command)$/i,
-  /^diff\.external$/i,
-  /^merge\..+\.driver$/i,
-  /^gpg\.program$/i,
-  /^gpg\..+\.program$/i,
-  /^gpg\.ssh\.defaultkeycommand$/i,
-  /^core\.(askpass|gitproxy|alternaterefscommand)$/i,
-  /^uploadpack\.packobjectshook$/i,
-  /^remote\..+\.(uploadpack|receivepack)$/i,
-  /^protocol\..+\.allow$/i,
-  /^trailer\..+\.(command|cmd)$/i,
-  /^lfs\.extension\..+\.(clean|smudge)$/i,
-  /^lfs\.customtransfer\..+\.path$/i,
-  /^gc\.recentobjectshook$/i,
+
+// 规则按 git 的切分写(splitConfigKey:section / subsection / 变量名),不用整键正则:subsection 可以为空
+// (`[filter ""] clean` + `* filter=`,git 照样执行——real-git R52)、可以含 `.` 与任何字符(U+2028 等,
+// 正则的 `.` 不匹配),整键正则 `^filter\..+\.clean$` 两种都会漏。
+type UnsafeKeyRule = (key: ConfigKeyParts) => boolean;
+/** `section.<任意 subsection,含空>.name`。 */
+const withSubsection = (section: string, ...names: string[]): UnsafeKeyRule => (k) =>
+  k.section === section && k.subsection !== null && names.includes(k.name);
+/** `section.name`(没有 subsection)。 */
+const plain = (section: string, ...names: string[]): UnsafeKeyRule => (k) =>
+  k.section === section && k.subsection === null && names.includes(k.name);
+/** git-lfs 的 `lfs.<kind>.<名字>.name`:subsection 是 `<kind>.<名字>`。 */
+const lfs = (kind: string, ...names: string[]): UnsafeKeyRule => (k) =>
+  k.section === 'lfs' && k.subsection !== null && k.subsection.toLowerCase().startsWith(`${kind}.`) && names.includes(k.name);
+
+const UNSAFE_KEY_RULES: readonly UnsafeKeyRule[] = [
+  withSubsection('filter', 'clean', 'smudge', 'process'),
+  withSubsection('diff', 'textconv', 'command'),
+  plain('diff', 'external'),
+  withSubsection('merge', 'driver'),
+  plain('gpg', 'program'),
+  // gpg.<format>.program;gpg.ssh.defaultKeyCommand
+  withSubsection('gpg', 'program', 'defaultkeycommand'),
+  plain('core', 'askpass', 'gitproxy', 'alternaterefscommand'),
+  plain('uploadpack', 'packobjectshook'),
+  withSubsection('remote', 'uploadpack', 'receivepack'),
+  withSubsection('protocol', 'allow'),
+  withSubsection('trailer', 'command', 'cmd'),
+  lfs('extension', 'clean', 'smudge'),
+  lfs('customtransfer', 'path'),
+  plain('gc', 'recentobjectshook'),
   // 配置式 hooks(git >= 2.54):`hook.<name>.command` + `hook.<name>.event` 让 git 在对应事件执行任意命令,
   // 不经 hooks 目录,core.hooksPath=/dev/null 管不到(实测 git 2.56.1:add、刷新 index 的 status 都触发)。
   // 整个 hook.* 段受限:`hook.<event>.enabled` / `hook.jobs` 等本身不执行程序,但它们只在配置式 hooks
   // 存在时才有意义,且仓库不该能改写用户全局 hooks 的开关。
-  /^hook\./i,
+  (k) => k.section === 'hook',
 ];
 
 // core.fsmonitor=true/false 是内置 daemon 开关(Scalar 等会在 local 设置),只有非布尔值
@@ -105,6 +126,12 @@ const GIT_FALSE = /^(false|no|off|0|)$/i;
 const SAFE_DIFF_SUBMODULE = /^(short|log)$/i;
 
 const UNTRUSTED_SCOPES: ReadonlySet<string> = new Set(['local', 'worktree']);
+
+/** `include.path` / `includeIf.<任意条件>.path`。 */
+function isIncludeKey(key: string): boolean {
+  const k = splitConfigKey(key);
+  return k !== null && k.name === 'path' && (k.subsection === null ? k.section === 'include' : k.section === 'includeif');
+}
 
 export interface ConfigEntry {
   readonly scope: string;
@@ -158,7 +185,8 @@ export function isUnsafeConfigEntry(entry: ConfigEntry): boolean {
   if (/^diff\.submodule$/i.test(entry.key)) {
     return !SAFE_DIFF_SUBMODULE.test((entry.value ?? '').trim());
   }
-  return UNSAFE_KEY_PATTERNS.some((re) => re.test(entry.key));
+  const parts = splitConfigKey(entry.key);
+  return parts !== null && UNSAFE_KEY_RULES.some((rule) => rule(parts));
 }
 
 // 未知键默认受限(结构性防线):上面的受限键是黑名单,只覆盖审计时那个 git 版本的键;git 每加一个会
@@ -437,7 +465,7 @@ export async function probeRepoSafety(
   const cacheable = !entries.some(
     (e) =>
       UNTRUSTED_SCOPES.has(e.scope) &&
-      (e.scope === 'worktree' || /^include(if\..+)?\.path$/i.test(e.key)),
+      (e.scope === 'worktree' || isIncludeKey(e.key)),
   );
   if (keys.length > 0) {
     return {
@@ -456,7 +484,8 @@ export async function probeRepoSafety(
   if (unreviewed.length > 0) {
     const documented = await probeDocumentedKeys(app, cwd);
     const failed = typeof documented === 'string';
-    const unknown = failed ? unreviewed : unreviewed.filter((key) => documented.matches(key));
+    // 切不出 section / 变量名的键(git 不会输出这种键)无从判断 → 同样受限
+    const unknown = failed ? unreviewed : unreviewed.filter((key) => splitConfigKey(key) === null || documented.matches(key));
     if (unknown.length > 0) {
       return {
         kind: 'restricted',

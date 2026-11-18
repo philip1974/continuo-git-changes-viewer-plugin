@@ -37,6 +37,15 @@ restricted verdict at one step skips the later ones.
      fails. They are restricted rather than pinned empty with `-c`, because a
      pin would also switch off the user's own global attributes / excludes
      (their normal home; in repository scope the keys are rare).
+   - Keys are split the way git splits them (`splitConfigKey`, mirroring
+     `parse_config_key`): section = up to the first dot, variable name = after
+     the last dot, subsection = everything in between. The subsection may
+     contain dots (`[remote "a.uploadpack"] url` is `remote.a.uploadpack.url`,
+     the url of that remote), may be empty (`[filter ""] clean` is
+     `filter..clean`; `* filter=` selects that driver and git runs it) and may
+     hold any character (U+2028, which a regex `.` does not match). The
+     restricted rules, the reviewed table and the running git's key list all
+     go through this one split; whole-key regexes are not used.
    - **Every other key must be reviewed, or unknown to git** (default-deny).
      The lists above are a blocklist frozen at the git version that was
      audited; each key a later git adds that runs a program (as `hook.*` did)
@@ -44,8 +53,8 @@ restricted verdict at one step skips the later ones.
      1. it is in the reviewed table (`src/git/known-config-keys.ts`: the keys
         of `git help --config` that the audit found safe or neutralized, in
         git's own notation — `branch.<name>.remote`, `alias.*`; a middle
-        wildcard is a subsection and may contain dots, a trailing one may
-        not) → fine;
+        wildcard is the whole subsection — dotted, empty, any character — a
+        trailing one is a variable name) → fine;
      2. otherwise the running git is asked what it understands: `git help
         --config` (hardened like every call; prints git's built-in key list,
         reads no repository key, starts no pager / browser / alias / child
@@ -126,3 +135,15 @@ K1 key-list notation. K2 reviewed table (common keys known, no restricted key in
 classified. K4 no extra git call for reviewed keys. K5 documented-but-unreviewed → restricted. K6 private tool
 keys → trusted. K7 `git help --config` unusable → restricted, not cached. K8 only repository scope. K9 restricted
 keys win. K10 cache.
+
+`config-key-classification.spec.ts` (shared helper: `key-overlap.ts`):
+C1 `splitConfigKey`. C2 one group per wildcard section (remote, branch, submodule, url, http, credential, filter,
+diff, merge, includeIf, pager, alias, guitool / difftool / mergetool, trailer, hook, gpg, protocol, lfs): names
+containing dots, empty names, names ending like another variable. C3 the key-list matcher uses the same split.
+C4 end to end (empty / odd driver names restricted; look-alike remote / branch names trusted). C5 include keys and
+the cache; C5b unsplittable key → restricted. C6 **overlap snapshot**: every documented key of both fixtures and
+every table entry, instantiated with ordinary / dotted / empty / look-alike names — the keys that are both
+restricted and reviewed must be exactly `REVIEWED_OVERLAP` (`core.bare`, `core.fsmonitor`, `diff.submodule`: the
+three value-dependent keys). Restricted rules are evaluated first, so an overlap is always restricted; a new
+overlap still turns C6 red so a person looks at it before updating the snapshot. C7 the three overlapping keys by
+value. C8 no instantiation of a documented restricted key is reviewed or unrestricted.

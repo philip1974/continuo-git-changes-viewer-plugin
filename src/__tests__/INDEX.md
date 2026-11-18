@@ -239,6 +239,7 @@
 
 ## [Repo Safety (restricted repositories)](./repo-safety/README.md)
 
+- [`config-key-classification.spec.ts`](./repo-safety/config-key-classification.spec.ts)
 - [`repo-safety.spec.ts`](./repo-safety/repo-safety.spec.ts)
 
 ## [Repo Safety — real git integration](./repo-safety-real-git/README.md)
