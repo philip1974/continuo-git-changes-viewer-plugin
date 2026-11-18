@@ -7,8 +7,16 @@ BDD coverage for CommitEditor amend UI.
 
 - T34: a HEAD message containing U+FFFD (its bytes were not valid UTF-8 and
   the commit has no usable `encoding` header) is pre-filled as decoded, with a
-  warning that amending saves the message as shown. Amend is not blocked: the
-  text is visible and editable.
+  warning that amending saves the message as shown. Checking Amend is not
+  blocked: the text is visible and editable.
+- T39: clicking Amend while that pre-filled message is still unedited amends
+  nothing (it would replace the original bytes with `EF BF BD`, measured in
+  `repo-safety-real-git` P9): Amend stays on, the text is kept and a warning
+  says to edit the message first or amend in a terminal. The pre-filled text
+  is kept in the store as `amendMessage`.
+- T40: an edited message (even with some U+FFFD left) amends as before, so
+  does an unedited message without U+FFFD; unchecking Amend forgets
+  `amendMessage`.
 
 Amend rewrites the commit whose message was loaded. A fingerprint that
 includes HEAD makes the panel refresh when HEAD moves, but the editor still

@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { fetchDiff } from '../../git/diff-fetcher';
 import { readStatusHash } from '../../git/status-hash';
 import { scanStatus } from '../../git/status-scanner';
-import { AMEND_HEAD_CHANGED_MESSAGE, REPO_CHANGED_MESSAGE, VIEW_REFRESHED_MESSAGE, VIEW_REFRESHING_MESSAGE } from '../../panel/CommitEditor';
+import { AMEND_HEAD_CHANGED_MESSAGE, AMEND_NON_UTF8_UNEDITED_MESSAGE, REPO_CHANGED_MESSAGE, VIEW_REFRESHED_MESSAGE, VIEW_REFRESHING_MESSAGE } from '../../panel/CommitEditor';
 import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CoPluginApp, Disposable, PanelApi, PanelVisibilityEvent, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 import type { AutoRefreshTimerOpts } from '../../state/auto-refresh-timer';
@@ -437,6 +437,53 @@ describe('a fingerprint that cannot be read is reported as such, and recovers by
     await waitFor(() => expect(commitButton().textContent).toBe('Commit'));
     fireEvent.click(commitButton());
     await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
+    await settled(store);
+  });
+});
+
+// G3:上一个提交的信息里有不是合法 UTF-8 的字节(没有 encoding 头的 GBK 提交)。预填的文本里它们是 U+FFFD;
+// 不改直接 Amend 会把原字节改写成 EF BF BD(`--amend --no-edit` 也一样)。面板拦下,改过信息后照常。
+describe('an unedited commit message with bytes that are not valid UTF-8 is not amended as is (real panel, real git)', () => {
+  it('P9 HEAD was committed with the GBK bytes of "中文" and no encoding header; Amend is checked and clicked without editing: the commit object is unchanged (same id, same bytes) and the panel says why; after editing the message Amend goes through with the edited text', async () => {
+    writeFileSync(join(repo, 'f'), 'v1\n');
+    git(repo, 'add', 'f');
+    // 提交对象用 plumbing 写(hash-object):`git commit` 遇到不是合法 UTF-8 的信息会当作 Latin-1 转成 UTF-8
+    // (实测 2.50.1 / 2.56.1),这样的提交来自别的工具(libgit2 / JGit / 旧版本)或 plumbing。字节经 printf 的八进制
+    // 转义给出("gbk 中文\n" 的 GBK 编码)。
+    execFileSync('sh', ['-c', [
+      'tree=$(git write-tree)',
+      'c=$(printf "tree %s\\nparent %s\\nauthor t <t@t> 1700000000 +0000\\ncommitter t <t@t> 1700000000 +0000\\n\\ngbk \\326\\320\\316\\304\\n" "$tree" "$(git rev-parse HEAD)" | git hash-object -t commit -w --stdin)',
+      'git update-ref HEAD "$c"',
+    ].join(' && ')], { cwd: repo, env: ENV });
+    // 提交对象的原始字节(十六进制)
+    const rawHead = () => execFileSync('git', ['cat-file', 'commit', 'HEAD'], { cwd: repo, env: ENV }).toString('hex');
+    const before = { id: git(repo, 'rev-parse', 'HEAD').trim(), raw: rawHead() };
+    expect(before.raw).toContain('d6d0cec4');
+    writeFileSync(join(repo, 'n'), 'new\n');
+    git(repo, 'add', 'n');
+
+    const { store } = mount(0);
+    const checkbox = (await screen.findByRole('checkbox', { name: 'Amend last commit' })) as HTMLInputElement;
+    await waitFor(() => expect(checkbox.disabled).toBe(false));
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(store.getState().commitMessage).toContain('�'));
+    await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
+    const amend = (await screen.findByRole('button', { name: 'Amend last commit' })) as HTMLButtonElement;
+    await waitFor(() => expect(amend.disabled).toBe(false));
+    fireEvent.click(amend);
+
+    await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'warn', message: AMEND_NON_UTF8_UNEDITED_MESSAGE, dismissable: true }));
+    await waitFor(() => expect(amend.textContent).toBe('Amend'));
+    expect(git(repo, 'rev-parse', 'HEAD').trim()).toBe(before.id);
+    expect(rawHead()).toBe(before.raw);
+    expect(git(repo, 'status', '--porcelain')).toBe('A  n\n');
+    expect(store.getState().amend).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'gbk 中文 (re-typed)' } });
+    fireEvent.click(amend);
+    await waitFor(() => expect(git(repo, 'status', '--porcelain')).toBe(''));
+    expect(git(repo, 'log', '-1', '--format=%B').trim()).toBe('gbk 中文 (re-typed)');
+    expect(git(repo, 'rev-list', '--count', 'HEAD').trim()).toBe('2');
     await settled(store);
   });
 });

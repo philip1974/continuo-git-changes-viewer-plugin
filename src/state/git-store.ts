@@ -62,6 +62,11 @@ export interface GitViewerState {
    * 提交(终端里又提交 / 改写过)就中止(见 CommitEditor)。amend 为 false 时是 null。
    */
   amendHead: string | null;
+  /**
+   * 勾选 Amend 时预填进编辑框的信息(amend 为 false 时是 null)。用来判断用户有没有改过它:含 U+FFFD 而没改过时
+   * 不 Amend(见 CommitEditor 的 AMEND_NON_UTF8_UNEDITED_MESSAGE)。
+   */
+  amendMessage: string | null;
   restriction: string | null;
   /** 最近一次 refresh 没拿到可信的 status(原因);下一次成功的 refresh 清除。非 null 时禁用 Commit / Amend。 */
   statusError: string | null;
@@ -83,7 +88,7 @@ export interface GitViewerState {
   setBanner(banner: BannerState): void;
   dismissBanner(): void;
   setCommitMessage(message: string): void;
-  setAmend(value: boolean, headSha?: string | null): void;
+  setAmend(value: boolean, headSha?: string | null, loadedMessage?: string | null): void;
 }
 
 interface ChangeSlice {
@@ -180,6 +185,7 @@ const emptyState = {
   commitMessage: '',
   amend: false,
   amendHead: null,
+  amendMessage: null,
   restriction: null,
   statusError: null,
   statusFingerprint: null,
@@ -196,6 +202,7 @@ const emptyState = {
   | 'commitMessage'
   | 'amend'
   | 'amendHead'
+  | 'amendMessage'
   | 'restriction'
   | 'statusError'
   | 'statusFingerprint'
@@ -335,6 +342,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         commitMessage: '',
         amend: false,
         amendHead: null,
+        amendMessage: null,
         restriction: null,
         statusError: null,
         statusFingerprint: null,
@@ -350,8 +358,8 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
     setCommitMessage(message) {
       set({ commitMessage: message });
     },
-    setAmend(value, headSha = null) {
-      set({ amend: value, amendHead: value ? headSha : null });
+    setAmend(value, headSha = null, loadedMessage = null) {
+      set({ amend: value, amendHead: value ? headSha : null, amendMessage: value ? loadedMessage : null });
     },
   }));
 }

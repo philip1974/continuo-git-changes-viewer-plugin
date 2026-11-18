@@ -69,6 +69,11 @@ export const AMEND_HEAD_CHANGED_MESSAGE =
 export const AMEND_NON_UTF8_MESSAGE =
   'The last commit message contains bytes that are not valid UTF-8. They are shown as \uFFFD, and amending will save the message as shown here.';
 
+// 预填的信息含 U+FFFD 而用户没改过就点 Amend:原提交信息里的那些字节会被改写成 EF BF BD(实测:没有 encoding 头的
+// GBK 提交;`--amend --no-edit` 也保不住原字节)。用户多半只想改内容、没打算改信息——拦下并说明。改过则照常。
+export const AMEND_NON_UTF8_UNEDITED_MESSAGE =
+  'The last commit message contains bytes that are not valid UTF-8, and it has not been edited: amending would replace those bytes with \uFFFD. Nothing was amended — edit the message before amending, or amend in a terminal.';
+
 // 提交前读不到当前指纹(status 失败 / 超时),或面板这份列表本来就没有指纹:无从比较。这不是"仓库变了"。
 export const repoStateUnconfirmedMessage = (reason: string | null): string =>
   `Could not confirm the current state of the repository${reason ? ` (${reason})` : ''}. ` +
@@ -225,10 +230,10 @@ export function CommitEditor({
       return;
     }
 
-    store.getState().setAmend(true, headSha);
+    store.getState().setAmend(true, headSha, headMessage);
     store.getState().setCommitMessage(headMessage);
     // 提交信息同样经宿主按 UTF-8 解码:不是合法 UTF-8 的字节(没有 encoding 头的 Latin-1 / GBK 提交信息)
-    // 已经变成 U+FFFD,Amend 会把预填的文本原样写回去。不拦(用户看得到、可以改),但要说明。
+    // 已经变成 U+FFFD,Amend 会把预填的文本原样写回去。照常预填并说明;没改过就点 Amend 会被拦下(见 onCommit)。
     if (headMessage.includes('\uFFFD')) showWarning(app, store, AMEND_NON_UTF8_MESSAGE);
   };
 
@@ -239,6 +244,12 @@ export function CommitEditor({
     // 用户看到的是渲染出来的列表与 diff;这里取的是 store 此刻的状态。refresh 在点击前一瞬间落盘、React 还没
     // 渲染(或刚渲染、用户不可能看过)的情形分辨不了——人机时序,见 README 的残余。
     const atClick = store.getState();
+    // 预填的信息含 U+FFFD 且一字未改:不 Amend(见 AMEND_NON_UTF8_UNEDITED_MESSAGE)。比较的是将要提交的文本。
+    if (amend && atClick.amendMessage !== null && atClick.amendMessage.includes('\uFFFD') && commitMessage === atClick.amendMessage) {
+      setHooksPrompt(null);
+      showWarning(app, store, AMEND_NON_UTF8_UNEDITED_MESSAGE);
+      return;
+    }
     // 确认框里的 "…and run hooks":基线是打开确认框的那次点击,不是这一次
     const shown = hooksConfirmed && hooksPrompt ? hooksPrompt.shown : snapshotShown(atClick);
     // 屏幕上的内容正在被换掉:列表的 refresh 在途,或 Staged 区的 diff 是刷新之前读的、新的还没到

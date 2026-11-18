@@ -2,7 +2,7 @@
 import React, { useSyncExternalStore } from 'react';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AMEND_HEAD_CHANGED_MESSAGE, AMEND_NON_UTF8_MESSAGE, CommitEditor } from '../../panel/CommitEditor';
+import { AMEND_HEAD_CHANGED_MESSAGE, AMEND_NON_UTF8_MESSAGE, AMEND_NON_UTF8_UNEDITED_MESSAGE, CommitEditor } from '../../panel/CommitEditor';
 import type { CommitResult, GitCommitOptions } from '../../git/git-commit';
 import type { CoPluginApp } from '../../sdk/types';
 import { createGitStore } from '../../state/git-store';
@@ -337,6 +337,57 @@ describe('CommitEditor amend UI', () => {
       await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'error', message: 'Failed to read HEAD commit message' }));
       expect(store.getState()).toMatchObject({ amend: false, amendHead: null });
       expect(readHeadMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  // 预填的信息含 U+FFFD(原提交信息有不是合法 UTF-8 的字节)而用户没改过:直接 Amend 会把原字节改写成 EF BF BD
+  // (实测,无 encoding 头的 GBK / Latin-1 提交;`--amend --no-edit` 也保不住)。拦下并说明;改过则照常。
+  describe('an unedited message with bytes that were not valid UTF-8 is not amended as is', () => {
+    const lossy = 'caf� subject\n\nbody ��';
+
+    it('T39 the pre-filled message still contains U+FFFD and was not edited: nothing is amended, Amend stays on, the text is kept and a warning says why and what to do', async () => {
+      const { app, notifications } = appWithShell();
+      const commit = vi.fn(async () => ({ ok: true as const }));
+      const { store } = renderEditor({ app, commit, readHeadMessage: vi.fn(async () => lossy), message: '' });
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: lossy }));
+      notifications.show.mockClear();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: AMEND_NON_UTF8_UNEDITED_MESSAGE }));
+      expect(AMEND_NON_UTF8_UNEDITED_MESSAGE).toBe(
+        'The last commit message contains bytes that are not valid UTF-8, and it has not been edited: amending would replace those bytes with �. Nothing was amended — edit the message before amending, or amend in a terminal.',
+      );
+      expect(commit).not.toHaveBeenCalled();
+      expect(store.getState()).toMatchObject({ amend: true, amendHead: 'sha-after', commitMessage: lossy });
+    });
+
+    it('T40 once the message was edited (even if some U+FFFD is left in it) Amend goes through as before; so does an unedited message without U+FFFD; unchecking Amend forgets the loaded message', async () => {
+      for (const [loaded, typed] of [
+        [lossy, 'café subject\n\nbody'],
+        [lossy, 'caf� subject\n\nbody �� edited'],
+        ['plain subject', null],
+      ] as const) {
+        const { app } = appWithShell();
+        const commit = vi.fn(async () => ({ ok: true as const }));
+        const { store } = renderEditor({ app, commit, readHeadMessage: vi.fn(async () => loaded), message: '' });
+        fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+        await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: loaded }));
+        expect(store.getState().amendMessage).toBe(loaded);
+        if (typed !== null) fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: typed } });
+        fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+        await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+        expect(commit).toHaveBeenCalledWith(app, '/repo', typed ?? loaded, { amend: true });
+        cleanup();
+      }
+
+      const { app } = appWithShell();
+      const { store } = renderEditor({ app, readHeadMessage: vi.fn(async () => lossy), message: '' });
+      const checkbox = await screen.findByRole('checkbox', { name: 'Amend last commit' });
+      fireEvent.click(checkbox);
+      await vi.waitFor(() => expect(store.getState().amendMessage).toBe(lossy));
+      fireEvent.click(checkbox);
+      expect(store.getState()).toMatchObject({ amend: false, amendHead: null, amendMessage: null });
     });
   });
 });

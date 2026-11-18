@@ -156,8 +156,11 @@ detect whether HEAD is already on a remote branch.
   diff says so; use the file-level actions, which are byte-exact. A file that
   really contains the character U+FFFD is treated the same way. File names
   that are not valid UTF-8, or contain U+FFFD, are listed but cannot be
-  operated on. Amending a commit whose message is not valid UTF-8 saves the
-  message as displayed (a warning says so).
+  operated on. When the last commit's message is not valid UTF-8, Amend with
+  the pre-filled message left unedited is refused (amending would replace
+  those bytes with `EF BF BD`; so would `git commit --amend --no-edit`): edit
+  the message first, or amend in a terminal. An edited message is saved as
+  displayed (a warning says so when it is loaded).
 - Auto-refresh notices changes of what is staged, of HEAD, of the list of
   changed files, and of the file whose working-tree diff is on screen. It does
   not notice an unstaged submodule moving to yet another commit (git status

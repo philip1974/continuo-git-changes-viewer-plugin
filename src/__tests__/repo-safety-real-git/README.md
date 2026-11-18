@@ -492,6 +492,13 @@ HEAD (`status-hash` T6c, `amend-component` T35–T38; run with git 2.50.1 and
   nothing: the terminal's message survives, Amend is turned off and the text
   is kept. Checking Amend again loads the current message and amending then
   works.
+- P9 (real panel): HEAD's message holds the GBK bytes of "中文" with no
+  `encoding` header (written with `hash-object`: `git commit` itself treats
+  such a message as Latin-1 and converts it to UTF-8, measured with 2.50.1 /
+  2.56.1; such commits come from other tools). Amend checked and clicked with
+  the pre-filled text unedited: the commit object stays byte-identical and the
+  panel says why (`amend-component` T39). After editing the message, Amend
+  goes through with the edited text.
 - R81: a staged submodule pointer that moves and is staged again (`M  sub`
   both times) changes the fingerprint, and the Staged row then shows the new
   commit. (An unstaged pointer moving again is not visible to status — see the
