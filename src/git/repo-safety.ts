@@ -28,8 +28,8 @@ import {
 //    (实测:恶意 filter/textconv/diff.external/fsmonitor/gpg.program 均不触发)。只看仓库作用域
 //    (local / worktree,含 include / includeIf 引入的文件);全局 / 系统 config 是用户自己的,可信。
 //    命中执行类键(UNSAFE_KEY_RULES)或重定向类键(core.worktree、非 false 的 core.bare、
-//    core.attributesFile、core.excludesFile)即受限。其余的键必须在已审计的分类表里,或者是运行时
-//    git 不认识的外部工具私有键;git 认识而本插件没审计过的键 → 受限(见"未知键默认受限")。
+//    core.attributesFile、core.excludesFile、不是格式名的 extensions.refStorage)即受限。其余的键必须在
+//    已审计的分类表里,或者是运行时 git 不认识的外部工具私有键;git 认识而本插件没审计过的键 → 受限(见"未知键默认受限")。
 // 2. 布局(纵深,不依赖键列表):一次 `git rev-parse`(见 LAYOUT_PROBE_ARGS)向 git 自己询问
 //    "cwd 是否就是工作树顶层"以及 git 目录 / common 目录的绝对路径,要求:
 //    - `--is-inside-work-tree` 为 true 且 `--show-prefix` 为空 ⇒ git 认定的工作树顶层就是 cwd(workspace 根)。
@@ -125,6 +125,12 @@ const GIT_FALSE = /^(false|no|off|0|)$/i;
 // 这里是双保险:只有 short / log(都不起子进程)放行,其余值(含无值、未知值)受限。
 const SAFE_DIFF_SUBMODULE = /^(short|log)$/i;
 
+// extensions.refStorage 原本只是格式名(files / reftable)。较新的 git(实测 2.56.1;2.50.1 拒绝这种取值)还接受
+// `files://<目录>` / `reftable://<目录>`:HEAD、refs、reflog 全部改存到那个目录——指向别人的仓库就列出它的
+// 分支名,commit 则把 HEAD 与含仓库 user.name 的 reflog 行写到工作区之外(real-git R55);git 目录本身仍在
+// 工作区内,布局探测与符号链接扫描都看不出来。只放行两个格式名,其余取值(含无值)按重定向类受限。
+const REF_STORAGE_FORMAT = /^(files|reftable)$/i;
+
 const UNTRUSTED_SCOPES: ReadonlySet<string> = new Set(['local', 'worktree']);
 
 /** `include.path` / `includeIf.<任意条件>.path`。 */
@@ -157,8 +163,8 @@ export function parseScopedConfigList(stdout: string): ConfigEntry[] {
 }
 
 /**
- * 重定向类键:让 git 把工作树解析到别处(core.worktree)、声明没有工作树(core.bare),或让 git 读取
- * 仓库指定的任意文件(core.attributesFile / core.excludesFile)。
+ * 重定向类键:让 git 把工作树解析到别处(core.worktree)、声明没有工作树(core.bare)、让 git 读取
+ * 仓库指定的任意文件(core.attributesFile / core.excludesFile),或把引用存到别处(extensions.refStorage)。
  *
  * 后两个:attributes 文件里不合法的属性名会被 git 原样打到 stderr(`<词> is not a valid attribute name:
  * <文件>:<行>`,status / diff / add 都会,实测 git 2.50 / 2.56),插件在命令失败时把 stderr 放进 toast——
@@ -172,6 +178,9 @@ export function isRedirectConfigEntry(entry: ConfigEntry): boolean {
   if (/^core\.(worktree|attributesfile|excludesfile)$/i.test(entry.key)) return true;
   if (/^core\.bare$/i.test(entry.key)) {
     return entry.value === null || !GIT_FALSE.test(entry.value.trim());
+  }
+  if (/^extensions\.refstorage$/i.test(entry.key)) {
+    return !REF_STORAGE_FORMAT.test((entry.value ?? '').trim());
   }
   return false;
 }

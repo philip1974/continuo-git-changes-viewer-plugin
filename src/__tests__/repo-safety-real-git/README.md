@@ -195,7 +195,8 @@ Keys the viewer has not reviewed (`repo-safety` K1–K10 with the real `git help
 --config`; also run with git 2.56.1):
 
 - R48: every key the installed git documents is restricted or in the reviewed
-  table, except `submodule.<name>.gitdir` (git ≥ 2.56, left unreviewed) and
+  table, except `submodule.<name>.gitdir` (git ≥ 2.56, left unreviewed),
+  `extensions.*` / `feature.*` names outside the reviewed ones, and
   keys newer than the newest reviewed list; each of those, set in the
   repository, yields `unknown-config`.
 - R49: private keys of gh / VS Code / git-flow / git-lfs / git-svn / git-town /
@@ -216,3 +217,16 @@ Key splitting (`repo-safety` C1–C8 against a real git):
   uploadpack` → restricted.
 - R54: the overlap snapshot (`repo-safety` C6) computed from the installed
   git's own `git help --config`.
+
+Extensions (`repo-safety` K12–K13):
+
+- R55: `extensions.refStorage=files://<outside dir>` → restricted on every git
+  (`unsafe-config` where git accepts the value; `probe-failed` on git 2.50,
+  which rejects it and fails every command), guarded ops write nothing. Where
+  git accepts it (2.56.1): an unguarded commit creates `HEAD` and `logs/HEAD`
+  (with the repository's `user.name`) in the outside directory, and pointing
+  it at another repository lists that repository's branch names.
+- R56: sha256 and reftable repositories with `extensions.worktreeConfig` →
+  trusted, status / stage / commit work; `extensions.futureThing` in a
+  version-0 repository (git ignores it) → `unknown-config`; the same name and
+  a new `feature.*` preset in global config → trusted.

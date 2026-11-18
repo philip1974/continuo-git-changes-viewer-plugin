@@ -6,9 +6,9 @@ import { isKnownSafeConfigKey, isUnsafeConfigEntry } from '../../git/repo-safety
 /**
  * 经人工审查的重叠清单(快照)。受限优先(probeRepoSafety 先看受限规则),所以重叠的键结论一定是受限;
  * 但出现新的重叠说明"表里收了一个本应受限的键"或"新规则盖住了已审计的键",两种都要人看一眼再更新这里。
- * 现有三个都是按取值判定的键:表里收录,取值检查在查表之前。
+ * 现有四个都是按取值判定的键:表里收录,取值检查在查表之前。
  */
-export const REVIEWED_OVERLAP: readonly string[] = ['core.bare', 'core.fsmonitor', 'diff.submodule'];
+export const REVIEWED_OVERLAP: readonly string[] = ['core.bare', 'core.fsmonitor', 'diff.submodule', 'extensions.refstorage'];
 
 const isWildcard = (segment: string) => segment === '*' || /^<[^<>]*>$/.test(segment);
 
@@ -29,7 +29,7 @@ const SUBSECTIONS = [
 const NAMES = [
   'x', 'clean', 'smudge', 'process', 'textconv', 'command', 'cmd', 'driver', 'program', 'uploadpack', 'receivepack',
   'allow', 'path', 'external', 'defaultkeycommand', 'packobjectshook', 'recentobjectshook', 'askpass', 'gitproxy',
-  'alternaterefscommand', 'worktree', 'bare', 'attributesfile', 'excludesfile', 'fsmonitor', 'submodule',
+  'alternaterefscommand', 'worktree', 'bare', 'attributesfile', 'excludesfile', 'fsmonitor', 'submodule', 'refstorage',
 ];
 
 /** 一个模式的全部具体化(通配段逐个取上面的样本;没有通配段就是它自己)。 */
@@ -43,7 +43,7 @@ export function instantiations(pattern: string): string[] {
   return keys;
 }
 
-// 取值无关的判断用 'x';三个按取值判定的键(core.bare / core.fsmonitor / diff.submodule)用 'x' 时受限。
+// 取值无关的判断用 'x';按取值判定的键(core.bare / core.fsmonitor / diff.submodule / extensions.refStorage)用 'x' 时受限。
 const restricted = (key: string) => isUnsafeConfigEntry({ scope: 'local', key, value: 'x' });
 
 /** 具体化之后同时"受限"又"在已审计表里"的键(去重、小写、排序)。 */

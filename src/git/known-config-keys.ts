@@ -6,11 +6,22 @@
 // 收录条件:该键已按 doc/git-config-classification.md 审计过,且结论是"安全或已被固定参数 / 环境变量
 // 中和"。**受限键不在这里**(filter.<drv>.clean、diff.external、hook.*、core.worktree ... 见 repo-safety.ts
 // 的 UNSAFE_KEY_RULES / isRedirectConfigEntry);按取值判定的键(core.bare、core.fsmonitor、
-// diff.submodule)在这里,取值检查先于本表。
+// diff.submodule、extensions.refStorage)在这里,取值检查先于本表。
 //
 // 用途(repo-safety.ts):仓库作用域(local / worktree)里出现的键,不受限、也不在本表里的,再拿去问
 // 运行时的 git(`git help --config`)——git 认识它 ⇒ 这是本表没审计过的新键 ⇒ 受限(fail-closed);
 // git 不认识 ⇒ 外部工具的私有键(gh / gitflow / lfs ...),git 不解释,放行。
+//
+// 文档本身是通配的段:
+// - `extensions.*` / `feature.*`:文档只有这一行通配,问不出运行时的 git 认识哪些名字。这里**不收通配**,
+//   按名字逐个收录审计过的(extensions 九个、feature 两个);其余名字不在表里,而运行时 git 的列表里有
+//   `extensions.*` / `feature.*` ⇒ 判为"git 认识、未审计"⇒ 受限。git 的 extensions 机制本意就是"不认识的
+//   扩展必须拒绝操作";未收录的 `extensions.submodulePathConfig`(git ≥ 2.56)正是 `submodule.<name>.gitdir`
+//   的开关。`extensions.refStorage` 另按取值判定(repo-safety.ts 的 isRedirectConfigEntry)。
+// - `http.<url>.*`、`credential.<url>.*`、`bundle.*`、`bundle.<id>.*`、`sendemail.<identity>.*`、
+//   `sideband.<url>.*`、`alias.*`、`pager.<cmd>` 等:只能按通配收录,这些段里今后新增的变量会被当成已审计
+//   (已知局限;它们只在联网 / 用户主动调用时生效,见 doc/git-config-classification.md)。通配条目的清单由
+//   repo-safety K16 钉住,新增通配需人工审查。
 //
 // 维护:git 发新版本后,用新版本的 `git help --config` 与 src/__tests__/repo-safety/fixtures/ 里最新的
 // 一份做 diff,逐个审计新增键,安全的追加到这里(并把新输出存为 fixture),会执行程序 / 越界的加进受限
@@ -315,9 +326,16 @@ difftool.<tool>.path
 difftool.guiDefault
 difftool.prompt
 difftool.trustExitCode
-extensions.*
+extensions.compatObjectFormat
+extensions.noop
+extensions.noop-v1
+extensions.objectFormat
+extensions.partialClone
+extensions.preciousObjects
+extensions.refStorage
+extensions.relativeWorktrees
+extensions.worktreeConfig
 fastimport.unpackLimit
-feature.*
 feature.experimental
 feature.manyFiles
 fetch.all

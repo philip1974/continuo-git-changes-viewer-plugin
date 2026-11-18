@@ -1622,9 +1622,11 @@ describe('config keys the viewer has not reviewed: default-deny for keys the run
       .map(instantiate),
   );
 
-  it('R48 every key the installed git documents is restricted or reviewed, except keys left unreviewed on purpose (submodule.<name>.gitdir, git >= 2.56) and keys newer than the reviewed list; each such key, set in the repository, restricts it', async () => {
+  it('R48 every key the installed git documents is restricted or reviewed, except keys left unreviewed on purpose (submodule.<name>.gitdir, git >= 2.56; extension / feature names outside the reviewed ones) and keys newer than the reviewed list; each such key, set in the repository, restricts it', async () => {
     const unreviewed = unreviewedKeys();
-    expect(unreviewed.filter((key) => reviewedUpTo.has(key) && key !== 'submodule.x.gitdir')).toEqual([]);
+    const onPurpose = ['submodule.x.gitdir', 'extensions.x', 'feature.x'];
+    expect(unreviewed.filter((key) => reviewedUpTo.has(key) && !onPurpose.includes(key))).toEqual([]);
+    expect(unreviewed).toEqual(expect.arrayContaining(['extensions.x', 'feature.x']));
 
     for (const key of unreviewed) {
       git(repo, 'config', key, 'x');
@@ -1711,6 +1713,86 @@ describe('config keys are split the way git splits them: section . subsection (a
     const documented = keyPatterns(execFileSync('git', ['help', '--config'], { env: ENV, encoding: 'utf8' }));
     expect(documented.length).toBeGreaterThan(900);
     expect(overlappingKeys(documented)).toEqual([...REVIEWED_OVERLAP]);
+  });
+});
+
+describe('extensions: only reviewed names, and extensions.refStorage only as a format name (real git)', () => {
+  it('R55 extensions.refStorage=files://<outside dir>: where git accepts it, an unguarded commit writes HEAD and a reflog line carrying the repository\'s user.name into that directory, and another repository\'s branch names are listed; guarded → restricted on every git, nothing written', async () => {
+    const outside = join(realpathSync(base), 'outside-refs');
+    mkdirSync(outside);
+    git(repo, 'config', 'core.repositoryformatversion', '1');
+    git(repo, 'config', 'user.name', 'INJECTED-NAME');
+    git(repo, 'config', 'user.email', 'i@i');
+    // 直接写文件:不接受这种取值的 git 设置之后连 `git config` 都会失败
+    appendFileSync(join(repo, '.git', 'config'), `[extensions]\n\trefStorage = files://${outside}\n`);
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+
+    // 接受这种取值的 git(实测 2.56.1)照常工作;git 2.50 报 invalid value,包括 `git config --list` 在内的所有命令失败
+    const accepted = (await gitExec(realApp(), repo, ['status', '--porcelain=v1', '-z'])).exitCode === 0;
+
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    const verdict = await guard.check(repo, { fresh: true });
+    if (accepted) {
+      expect(verdict).toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: ['extensions.refstorage'] });
+      expect(verdict.kind === 'restricted' && verdict.message).toContain('settings that point git away from this folder');
+    } else {
+      expect(verdict).toMatchObject({ kind: 'restricted', reason: 'probe-failed' });
+    }
+    await runEverything(app);
+    expect((await stageFile(app, repo, 'f.txt')).ok).toBe(false);
+    expect((await gitCommit(app, repo, 'msg')).ok).toBe(false);
+    expect(readdirSync(outside)).toEqual([]);
+
+    // 证明缺口(只在接受这种取值的 git 上成立)
+    if (accepted) {
+      expect((await gitExec(realApp(), repo, ['add', '--', 'f.txt'])).exitCode).toBe(0);
+      expect(await gitCommit(realApp(), repo, 'msg')).toMatchObject({ ok: true });
+      expect(readFileSync(join(outside, 'logs', 'HEAD'), 'utf8')).toContain('INJECTED-NAME');
+
+      const victim = join(realpathSync(base), 'victim');
+      mkdirSync(victim);
+      git(victim, 'init', '-q', '-b', 'main');
+      git(victim, 'commit', '-q', '--allow-empty', '-m', 'v');
+      git(victim, 'branch', 'secret-project-name');
+      git(repo, 'config', 'extensions.refStorage', `files://${join(victim, '.git')}`);
+      expect((await gitExec(realApp(), repo, ['branch', '--list'])).stdout).toContain('secret-project-name');
+      expect(await guard.check(repo, { fresh: true })).toMatchObject({ kind: 'restricted', reason: 'unsafe-config' });
+    }
+  });
+
+  it('R56 repositories using reviewed extensions (sha256 object format, reftable ref storage, worktreeConfig) stay trusted and fully usable; an extension name the viewer has not reviewed → restricted (unknown-config), in global config it is ignored', async () => {
+    for (const init of [['--object-format=sha256'], ['--ref-format=reftable']]) {
+      const dir = join(realpathSync(base), `ext${init[0]!.replace(/\W/g, '')}`);
+      mkdirSync(dir);
+      git(dir, 'init', '-q', '-b', 'main', ...init);
+      writeFileSync(join(dir, 'f.txt'), 'one\n');
+      git(dir, 'add', '.');
+      git(dir, 'commit', '-qm', 'init');
+      git(dir, 'config', 'extensions.worktreeConfig', 'true');
+      appendFileSync(join(dir, 'f.txt'), 'two\n');
+      const app = realApp();
+      const { guard } = installRepoSafetyGuard(app);
+      expect({ init, verdict: await guard.check(dir, { fresh: true }) }).toEqual({ init, verdict: { kind: 'trusted' } });
+      expect((await scanStatus(app, dir)).map((c) => c.path)).toEqual(['f.txt']);
+      expect((await stageFile(app, dir, 'f.txt')).ok).toBe(true);
+      expect(await gitCommit(app, dir, 'works')).toMatchObject({ ok: true });
+    }
+
+    // 版本 0 的仓库里 git 忽略不认识的扩展名(版本 1 则拒绝整个仓库);插件两种情况都不放行
+    git(repo, 'config', 'extensions.futureThing', 'true');
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect(git(repo, 'status', '--porcelain')).toBe('');
+    const verdict = await guard.check(repo, { fresh: true });
+    expect(verdict).toMatchObject({ kind: 'restricted', reason: 'unknown-config', keys: ['extensions.futurething'] });
+    expect(verdict.kind === 'restricted' && verdict.message).toContain('does not recognize (extensions.futurething)');
+    git(repo, 'config', '--unset', 'extensions.futureThing');
+
+    const globalCfg = join(base, 'global.cfg');
+    writeFileSync(globalCfg, '[extensions]\n\tfutureThing = true\n[feature]\n\tnewPreset = true\n');
+    process.env.GIT_CONFIG_GLOBAL = globalCfg;
+    expect(await guard.check(repo, { fresh: true })).toEqual({ kind: 'trusted' });
   });
 });
 

@@ -204,12 +204,12 @@ describe('overlap between the restricted rules and the reviewed table', () => {
 
   it('C6 every documented key (git 2.50.1 and 2.56.1) and every table entry, instantiated with ordinary / dotted / empty / look-alike names: the keys both restricted and reviewed are exactly the reviewed snapshot', () => {
     expect(allPatterns.length).toBeGreaterThan(1000);
-    expect(overlappingKeys(allPatterns)).toEqual(['core.bare', 'core.fsmonitor', 'diff.submodule']);
-    expect(REVIEWED_OVERLAP).toEqual(['core.bare', 'core.fsmonitor', 'diff.submodule']);
+    expect(overlappingKeys(allPatterns)).toEqual(['core.bare', 'core.fsmonitor', 'diff.submodule', 'extensions.refstorage']);
+    expect(REVIEWED_OVERLAP).toEqual(['core.bare', 'core.fsmonitor', 'diff.submodule', 'extensions.refstorage']);
   });
 
   it('C7 for each overlapping key the verdict does not depend on the table: an unsafe value restricts (unsafe-config), a safe value is trusted', async () => {
-    const safeValue: Record<string, string> = { 'core.bare': 'false', 'core.fsmonitor': 'true', 'diff.submodule': 'log' };
+    const safeValue: Record<string, string> = { 'core.bare': 'false', 'core.fsmonitor': 'true', 'diff.submodule': 'log', 'extensions.refstorage': 'reftable' };
     expect(Object.keys(safeValue)).toEqual(REVIEWED_OVERLAP);
     for (const key of REVIEWED_OVERLAP) {
       expect({ key, verdict: await verdictFor(key, '/x/evil') }).toMatchObject({ key, verdict: { kind: 'restricted', reason: 'unsafe-config', keys: [key] } });

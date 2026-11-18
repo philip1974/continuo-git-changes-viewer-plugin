@@ -96,3 +96,17 @@ detect whether HEAD is already on a remote branch.
   is reported as unsupported in this version.
 - Very large diffs degrade to a file-level placeholder with the exact git
   command to run manually.
+
+## Untrusted folders: known limitation
+
+Before running git the plugin checks the repository's own config and stops
+(showing why) when it contains a setting that runs a program, points git
+outside the folder, or that the installed git understands but this plugin has
+not reviewed. Repository extensions (`extensions.*`) and `feature.*` presets
+pass only by reviewed name. One gap remains by construction: git documents a
+few sections only as wildcards (`http.<url>.*`, `credential.<url>.*`,
+`bundle.*`, `sendemail.<identity>.*`, `sideband.<url>.*`, `alias.*`,
+`pager.<cmd>`), so a variable a future git adds inside one of them is treated
+as reviewed. Those sections only act during network transport, mail sending or
+when an alias / pager is invoked, none of which this plugin does. Details:
+[`doc/git-config-classification.md`](doc/git-config-classification.md).

@@ -22,7 +22,7 @@ keys git gives no switch for.
 
 | Handling | Keys | Count |
 | --- | --- | ---: |
-| **Restricted** — repository is not operated on | `filter.<drv>.clean/smudge/process`, `diff.<drv>.textconv/command`, `diff.external`, `merge.<drv>.driver`, `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `core.askPass`, `core.gitProxy`, `core.alternateRefsCommand`, `uploadpack.packObjectsHook`, `remote.<n>.uploadpack/receivepack`, `protocol.<n>.allow`, `trailer.<k>.cmd/command`, `gc.recentObjectsHook`, `hook.*` (config-defined hooks, git ≥ 2.54), `core.worktree`, `core.bare` (unless false), `core.attributesFile`, `core.excludesFile`; by value: `core.fsmonitor` (non-boolean), `diff.submodule` (other than short/log); plus git-lfs `lfs.extension.*` / `lfs.customtransfer.*` | 21 |
+| **Restricted** — repository is not operated on | `filter.<drv>.clean/smudge/process`, `diff.<drv>.textconv/command`, `diff.external`, `merge.<drv>.driver`, `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `core.askPass`, `core.gitProxy`, `core.alternateRefsCommand`, `uploadpack.packObjectsHook`, `remote.<n>.uploadpack/receivepack`, `protocol.<n>.allow`, `trailer.<k>.cmd/command`, `gc.recentObjectsHook`, `hook.*` (config-defined hooks, git ≥ 2.54), `core.worktree`, `core.bare` (unless false), `core.attributesFile`, `core.excludesFile`; by value: `core.fsmonitor` (non-boolean), `diff.submodule` (other than short/log), `extensions.refStorage` (other than files/reftable); plus git-lfs `lfs.extension.*` / `lfs.customtransfer.*` | 21 |
 | **Pinned with `-c`** (every command) | `core.fsmonitor=false`, `log.showSignature=false`, `submodule.recurse=false`, `diff.submodule=short`, `status.submoduleSummary=false`, `maintenance.auto=false`, `gc.auto=0`, `core.protectHFS=true`, `core.protectNTFS=true`, `i18n.commitEncoding=UTF-8`; `fsmonitor.*` (daemon never started) | 12 |
 | **Pinned with `-c`** (every command but `commit`, whose `-c` values reach hooks) | `protocol.allow=never` (also on a commit whose hooks were not confirmed), `core.hooksPath=/dev/null`, `hook.<event>.enabled=false` for every githooks(5) event (git ≥ 2.55), `status.renames=true`, `diff.renames=true`, `color.ui=false`, `color.diff=false`, `diff.noprefix=false`, `diff.mnemonicPrefix=false`, `diff.srcPrefix=a/`, `diff.dstPrefix=b/`, `diff.context=3`, `diff.interHunkContext=0`, `diff.suppressBlankEmpty=false`, `diff.relative=false`, `i18n.logOutputEncoding=UTF-8`, `apply.ignoreWhitespace=no` | 16 |
 | **Never triggered** — auto-maintenance is pinned off | remaining `gc.*`, `maintenance.*` | 31 |
@@ -31,7 +31,7 @@ keys git gives no switch for.
 | **Network only** — blocked by `GIT_ALLOW_PROTOCOL=` + `GIT_NO_LAZY_FETCH=1` + `-c protocol.allow=never` (every command except a hooks-confirmed commit) | `core.sshCommand`, `ssh.variant`, `http.*`, `credential.*`, `credentialCache.*`, `credentialStore.*`, `url.*`, `remote.*` (rest, incl. `vcs`, `proxy`, `promisor`, `partialclonefilter`), `remotes.*`, `fetch.*`, `transfer.*`, `bundle.*`, `clone.*`, `promisor.*`, `protocol.version`, `lsrefs.*`, `submodule.fetchJobs` / `alternate*` / `<n>.fetchRecurseSubmodules` | 114 |
 | **Protected scope** — git ignores the key in repository config | `trace2.*` (system / global only; verified: a local `trace2.*Target` writes nothing), `safe.*` | 13 |
 | **Not read by this command set** — belongs to commands the plugin never runs | `am`, `blame`, `branch`, `browser`, `clean`, `completion`, `difftool`, `fastimport`, `format` (rest), `fsck`, `gitcvs`, `gitweb`, `grep`, `gui`, `guitool`, `help`, `imap`, `init`, `instaweb`, `interactive`, `mailinfo`, `man`, `merge` (rest), `mergetool`, `notes`, `pack`, `pull`, `push`, `rebase`, `receive`, `repack`, `revert`, `sendemail`, `showBranch`, `stash`, `submodule` (rest), `tag`, `tar`, `trailer` (rest; no `--trailer`), `uploadarchive`, `uploadpack`, `versionsort`, `web`, `worktree`, `commitGraph`, `bitmapPseudoMerge`; `alias.*` (cannot shadow a built-in); `diff.tool/guitool/dirstat/stat*Width/wordRegex`, `log.follow/showRoot/diffMerges/graphColors`, `pretty.<name>`, `checkout.defaultRemote/guess` | 484 |
-| **Read, in-process only** — no process, no network, stays inside the workspace; changes presentation, performance or content conversion at most | remaining `core.*` (autocrlf / eol / safecrlf, fileMode, symlinks, ignoreCase, quotePath, abbrev, compression, sparseCheckout, splitIndex, untrackedCache, sharedRepository, fsync, lock timeouts, …), remaining `diff.*` (algorithm, renameLimit, `<drv>.xfuncname/binary`, orderFile, colorMoved, …), `index.*`, `splitIndex.*`, `sparse.*`, `feature.*`, `extensions.*`, remaining `log.*`, `mailmap.*`, `attr.tree`, `user.*`, `author.*`, `committer.*`, `commit.cleanup`, `commit.gpgSign`, `add.*`, `checkout.workers/thresholdForParallelism`, `rerere.*`, `reftable.*`, `gpg.format/minTrustLevel/ssh.*File`, `status.renameLimit/showUntrackedFiles`, `advice.*`, `include.path`, `includeIf.*` (followed by the config probe) | 157 |
+| **Read, in-process only** — no process, no network, stays inside the workspace; changes presentation, performance or content conversion at most | remaining `core.*` (autocrlf / eol / safecrlf, fileMode, symlinks, ignoreCase, quotePath, abbrev, compression, sparseCheckout, splitIndex, untrackedCache, sharedRepository, fsync, lock timeouts, …), remaining `diff.*` (algorithm, renameLimit, `<drv>.xfuncname/binary`, orderFile, colorMoved, …), `index.*`, `splitIndex.*`, `sparse.*`, `feature.experimental/manyFiles`, the nine reviewed `extensions.*` names (see below), remaining `log.*`, `mailmap.*`, `attr.tree`, `user.*`, `author.*`, `committer.*`, `commit.cleanup`, `commit.gpgSign`, `add.*`, `checkout.workers/thresholdForParallelism`, `rerere.*`, `reftable.*`, `gpg.format/minTrustLevel/ssh.*File`, `status.renameLimit/showUntrackedFiles`, `advice.*`, `include.path`, `includeIf.*` (followed by the config probe) | 157 |
 
 Notes on the last two rows (keys whose names look dangerous):
 
@@ -99,10 +99,45 @@ that is neither restricted nor in that file is checked against the running
 git's own `git help --config`: documented there → the repository is restricted
 (`unknown-config`); not documented → another tool's private key, which git does
 not interpret. If git cannot be asked, such keys are restricted. Details and
-tests: `src/__tests__/repo-safety/README.md`, K1–K10, real-git R48–R49.
+tests: `src/__tests__/repo-safety/README.md`, K1–K16, real-git R48–R49, R55–R56.
 
 So a git release that adds keys cannot open a hole by itself; the cost of not
 having reviewed a key is only that a repository using it is not operated on.
+
+Sections git documents only as a wildcard:
+
+- `extensions.*` and `feature.*` — the documentation has just that one line,
+  so the running git cannot say which names it knows. The reviewed table does
+  **not** contain the wildcard; it lists the reviewed names one by one
+  (`extensions.noop`, `noop-v1`, `objectFormat`, `compatObjectFormat`,
+  `partialClone`, `preciousObjects`, `refStorage`, `relativeWorktrees`,
+  `worktreeConfig`; `feature.experimental`, `feature.manyFiles`). Any other
+  name in repository scope matches the running git's `extensions.*` /
+  `feature.*` line and is therefore restricted as `unknown-config`
+  (`repo-safety` K12, K14; real-git R56). This follows git's own rule for
+  extensions — an extension that is not understood must stop the operation —
+  and covers `extensions.submodulePathConfig` (git ≥ 2.56), the switch for the
+  unreviewed `submodule.<name>.gitdir`.
+- `extensions.refStorage` is additionally checked by value: only the format
+  names `files` and `reftable` pass. Newer git (verified with 2.56.1; 2.50.1
+  rejects the value) accepts `files://<dir>` / `reftable://<dir>` and keeps
+  HEAD, refs and reflogs in that directory: pointed at another repository it
+  lists that repository's branches, and a commit writes HEAD and a reflog line
+  carrying the repository's `user.name` outside the workspace, while the git
+  directory itself stays inside (so the layout and symlink checks see nothing).
+  Restricted as a redirect key (K13, R55).
+- **Known limitation**: `http.<url>.*`, `credential.<url>.*`, `bundle.*`,
+  `bundle.<id>.*`, `sendemail.<identity>.*`, `sideband.<url>.*`, `alias.*`,
+  `pager.<cmd>`, `pretty.<name>`, `remotes.<group>`, `notes.rewrite.<command>`
+  and `fetch.fsck.<msg-id>` can only be listed as wildcards. A variable a
+  future git adds inside one of these sections counts as reviewed and does
+  not restrict the repository (pinned by K15; the list of wildcard entries is
+  pinned by K16 so that adding one needs a review). What bounds the exposure:
+  the first six sections only take effect during network transport or
+  `send-email`, which the plugin never performs (every call is run with the
+  network block); aliases and pagers are never invoked (`--no-pager`, built-in
+  subcommands only); the rest name formats / groups for commands the plugin
+  does not run.
 
 Limit: the check sees only keys git documents (the list is generated from
 `Documentation/config/`). Keys git reads without documenting them there (today:
@@ -118,7 +153,8 @@ real 2.56.1 binary (the whole real-git suite passes with it).
 | Handling | Keys |
 | --- | --- |
 | **Restricted** | `hook.<name>.command/event/enabled/parallel`, `hook.<event>.enabled/jobs`, `hook.jobs` |
-| **Left unreviewed** (restricted when the running git documents it) | `submodule.<name>.gitdir` (with `extensions.submodulePathConfig`: lets the repository name the git directory git reads a submodule's HEAD from) |
+| **Left unreviewed** (restricted when the running git documents it) | `submodule.<name>.gitdir` and its switch `extensions.submodulePathConfig` (lets the repository name the git directory git reads a submodule's HEAD from) |
+| **Restricted by value** | `extensions.refStorage` other than `files` / `reftable` (the `files://<dir>` form moves HEAD, refs and reflogs outside the workspace) |
 | Network only | `fetch.followRemoteHEAD`, `http.maxRetries/maxRetryTime/retryAfter`, `promisor.acceptFromServerUrl/checkFields/sendFields/storeFields`, `remote.<n>.advertisedAs/negotiationInclude/negotiationRestrict`, `sideband.*` |
 | Never triggered (maintenance pinned off) | `maintenance.geometric-repack.*` |
 | Not read by this command set | `alias.*.command` (aliases cannot shadow a built-in), `am.messageId`, `branch.<n>.deleteMerged`, `commitGraph.changedPaths`, `format.commitListFormat`, `fsck.*` / `receive.fsck.*` additions, `gui.GCWarning`, `init.defaultSubmodulePathConfig`, `pack.usePathWalk`, `pull.autoStash`, `repack.midx*`, `replay.refAction`, `sendemail.*` additions, `stash.index` |

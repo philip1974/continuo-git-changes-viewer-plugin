@@ -30,7 +30,10 @@ restricted verdict at one step skips the later ones.
      `core.hooksPath=/dev/null` override does not stop it (verified with git
      2.56.1: it fires on `add` and on a `status` that refreshes the index).
    - Redirect keys → restricted: `core.worktree` (any value), `core.bare`
-     unless false, and `core.attributesFile` / `core.excludesFile` (any value):
+     unless false, `extensions.refStorage` unless it is one of the format
+     names `files` / `reftable` (git ≥ 2.5x also accepts `files://<dir>`, which
+     moves HEAD, refs and reflogs to that directory), and
+     `core.attributesFile` / `core.excludesFile` (any value):
      git reads whatever file the repository names, and prints words of a
      malformed attributes file on stderr (`<word> is not a valid attribute
      name: <file>:<line>`), which the plugin shows in a toast when a command
@@ -126,7 +129,8 @@ Reviewed versions: git 2.50.1 (all 954 keys, key by key) and the keys added
 up to 2.56.1 (from their documentation). `fixtures/` holds both `git help
 --config` outputs. Deliberately unreviewed: `submodule.<name>.gitdir` (git ≥
 2.56) — a repository that sets it is restricted when the running git knows the
-key.
+key — and every `extensions.*` / `feature.*` name outside the reviewed ones
+(restricted with any git, since git documents those sections as wildcards).
 
 T1 output parsing. T2–T5 executable key classification (T4b diff.submodule). T18–T20 redirect keys (T18b attributesFile / excludesFile).
 T6–T9 config probe and fail-closed. L1–L7 layout probe. S1–S7 symlink scan.
@@ -135,6 +139,15 @@ K1 key-list notation. K2 reviewed table (common keys known, no restricted key in
 classified. K4 no extra git call for reviewed keys. K5 documented-but-unreviewed → restricted. K6 private tool
 keys → trusted. K7 `git help --config` unusable → restricted, not cached. K8 only repository scope. K9 restricted
 keys win. K10 cache.
+K11 keys a newer git adds (plain, with subsection, new variable in an existing section): repository scope →
+`unknown-config` naming the key; global / system / command scope → trusted. K12 `extensions.*`: only the nine
+reviewed names pass, any other name is restricted with every git and when git cannot be asked. K13
+`extensions.refStorage` by value. K14 `feature.*`: only the two reviewed presets. K15 **known limitation, pinned**:
+a new variable inside a section the table can only list as a wildcard (`http.<url>.*`, `credential.<url>.*`,
+`bundle.*`, `bundle.<id>.*`, `sendemail.<identity>.*`, `sideband.<url>.*`, `alias.*`, `pager.<cmd>`) counts as
+reviewed — trusted, git not asked, even if a newer git documents it by name (why this is bounded:
+`doc/git-config-classification.md`, "Sections git documents only as a wildcard"). K16 the wildcard entries of the
+table are a fixed list; adding one turns it red.
 
 `config-key-classification.spec.ts` (shared helper: `key-overlap.ts`):
 C1 `splitConfigKey`. C2 one group per wildcard section (remote, branch, submodule, url, http, credential, filter,

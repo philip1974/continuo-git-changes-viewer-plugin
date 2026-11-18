@@ -318,7 +318,7 @@ describe('config keys the viewer has not reviewed (default-deny for keys git und
       'status.comparebranches', 'core.lockfilepid']) {
       expect({ key, known: isKnownSafeConfigKey(key) }).toEqual({ key, known: true });
     }
-    const safeValue: Record<string, string> = { 'core.bare': 'false', 'core.fsmonitor': 'false', 'diff.submodule': 'short' };
+    const safeValue: Record<string, string> = { 'core.bare': 'false', 'core.fsmonitor': 'false', 'diff.submodule': 'short', 'extensions.refstorage': 'files' };
     const entries = helpKeys(KNOWN_SAFE_CONFIG_KEYS);
     expect(entries.length).toBeGreaterThan(900);
     const restrictedInTable = entries.filter((k) => {
@@ -332,7 +332,7 @@ describe('config keys the viewer has not reviewed (default-deny for keys git und
     }
   });
 
-  it('K3 every key git documents is either restricted or reviewed — git 2.50.1: all 954; git 2.56.1: all but submodule.<name>.gitdir (left unreviewed on purpose)', () => {
+  it('K3 every key git documents is either restricted or reviewed — except the two wildcard headings narrowed to reviewed names (extensions.*, feature.*: see K12 / K14) and, in git 2.56.1, submodule.<name>.gitdir (left unreviewed on purpose)', () => {
     const unreviewed = (help: string) =>
       helpKeys(help).filter((k) => {
         const key = instantiate(k);
@@ -341,9 +341,9 @@ describe('config keys the viewer has not reviewed (default-deny for keys git und
         return !isKnownSafeConfigKey(key) && !isUnsafeConfigEntry(local(key, 'x')) && !isUnsafeConfigEntry(local(key, 'false'));
       });
     expect(helpKeys(HELP_2_50)).toHaveLength(954);
-    expect(unreviewed(HELP_2_50)).toEqual([]);
+    expect(unreviewed(HELP_2_50)).toEqual(['extensions.*', 'feature.*']);
     expect(helpKeys(HELP_2_56)).toHaveLength(1011);
-    expect(unreviewed(HELP_2_56)).toEqual(['submodule.<name>.gitdir']);
+    expect(unreviewed(HELP_2_56)).toEqual(['extensions.*', 'feature.*', 'submodule.<name>.gitdir']);
   });
 
   it('K4 only reviewed keys in the repository config → git is not asked which keys it understands', async () => {
@@ -432,6 +432,107 @@ describe('config keys the viewer has not reviewed (default-deny for keys git und
     config = z(['local', 'core.bare', 'false']);
     mtimeMs = 2;
     expect(await guard.check('/repo')).toEqual({ kind: 'trusted' });
+  });
+});
+
+describe('unknown keys end to end: what a newer git adds, and the sections git documents only as wildcards', () => {
+  const helpCalls = (exec: ReturnType<typeof gitMock>) => exec.mock.calls.filter((c) => isHelpProbe(c[1]));
+  function probeWith(config: string, help: PluginShellExecResult | null = result({ stdout: HELP_2_56 })) {
+    const exec = gitMock(config, undefined, undefined, help);
+    return { exec, verdict: probeRepoSafety({ shell: { exec }, fs: fsMock() } as unknown as CoPluginApp, '/repo') };
+  }
+  // 模拟比已审计列表更新的 git:文档里多出几个键(普通键、带 subsection 的键、已有段里的新变量)
+  const NEWER_GIT = `${HELP_2_56}core.newExecHelper\nnewsection.run\nremote.<name>.newHelper\nfuture.<name>.cmd\n`;
+  const NEW_KEYS = ['core.newexechelper', 'newsection.run', 'remote.origin.newhelper', 'future.a.b.cmd'];
+
+  it.each(NEW_KEYS)('K11 %s, documented by the running git but never reviewed: in repository scope (local / worktree) → restricted, unknown-config, the message names the key; only in global / system / command scope → trusted and git is not even asked', async (key) => {
+    for (const scope of ['local', 'worktree']) {
+      const r = await probeWith(z(['local', 'core.bare', 'false'], [scope, key, 'v']), result({ stdout: NEWER_GIT })).verdict;
+      expect(r).toMatchObject({ kind: 'restricted', reason: 'unknown-config', keys: [key] });
+      expect(r.kind === 'restricted' && r.message).toContain(`does not recognize (${key})`);
+      expect(r.kind === 'restricted' && r.message).toContain('Your git understands them, but they are newer than the settings this viewer has reviewed');
+    }
+    for (const scope of ['global', 'system', 'command']) {
+      const { exec, verdict } = probeWith(z(['local', 'core.bare', 'false'], [scope, key, 'v']), result({ stdout: NEWER_GIT }));
+      await expect(verdict).resolves.toMatchObject({ kind: 'trusted' });
+      expect(helpCalls(exec)).toHaveLength(0);
+    }
+    // 同一个键,运行时的 git 不认识(旧版本)→ 对它是惰性数据
+    await expect(probeWith(z([`local`, key, 'v']), result({ stdout: HELP_2_50 })).verdict).resolves.toMatchObject({ kind: 'trusted' });
+  });
+
+  // git 的 extensions 机制本意是"不认识的扩展必须拒绝操作";文档只写 `extensions.*`,问不出 git 认识哪些名字,
+  // 所以表里按名字逐个收录,其余名字一律按"git 认识、但没审计"处理。
+  const REVIEWED_EXTENSIONS = ['noop', 'noop-v1', 'objectformat', 'compatobjectformat', 'partialclone', 'preciousobjects', 'refstorage', 'relativeworktrees', 'worktreeconfig'];
+
+  it('K12 extensions: only the reviewed extension names pass; any other name in repository scope → restricted (unknown-config) with every git version, and when git cannot be asked', async () => {
+    const safeValue: Record<string, string> = { objectformat: 'sha256', compatobjectformat: 'sha1', partialclone: 'origin', refstorage: 'reftable' };
+    const reviewed = z(...REVIEWED_EXTENSIONS.map((n): [string, string, string] => ['local', `extensions.${n}`, safeValue[n] ?? 'true']));
+    const ok = probeWith(reviewed);
+    await expect(ok.verdict).resolves.toEqual({ kind: 'trusted', cacheable: true });
+    expect(helpCalls(ok.exec)).toHaveLength(0);
+
+    for (const key of ['extensions.futurething', 'extensions.submodulepathconfig', 'extensions.x']) {
+      for (const help of [HELP_2_50, HELP_2_56, NEWER_GIT]) {
+        const r = await probeWith(z(['local', 'core.repositoryformatversion', '1'], ['local', key, 'true']), result({ stdout: help })).verdict;
+        expect({ key, r }).toMatchObject({ key, r: { kind: 'restricted', reason: 'unknown-config', keys: [key] } });
+      }
+      expect(await probeWith(z(['worktree', key, 'true']), result({ exitCode: 129 })).verdict).toMatchObject({ kind: 'restricted', reason: 'unknown-config', keys: [key] });
+      await expect(probeWith(z(['global', key, 'true'])).verdict).resolves.toMatchObject({ kind: 'trusted' });
+    }
+    // 带 subsection 的写法不是扩展(git 按 `extensions.<名字>` 整串比较),也不在文档的 `extensions.*` 里
+    await expect(probeWith(z(['local', 'extensions.a.b', 'true'])).verdict).resolves.toMatchObject({ kind: 'trusted' });
+  });
+
+  it('K13 extensions.refStorage: `files` / `reftable` are formats; anything else (git >= 2.5x accepts `files://<dir>` and keeps HEAD, refs and reflogs in that directory) points git outside the folder → restricted as a redirect key', async () => {
+    for (const value of ['files', 'reftable', 'FILES', ' reftable ']) {
+      expect(isUnsafeConfigEntry(local('extensions.refstorage', value))).toBe(false);
+    }
+    for (const value of ['files:///elsewhere', 'reftable:///elsewhere/.git', 'files://', 'file', 'bogus', '']) {
+      expect({ value, redirect: isRedirectConfigEntry(local('extensions.refStorage', value)) }).toEqual({ value, redirect: true });
+      expect(isUnsafeConfigEntry({ scope: 'worktree', key: 'extensions.refstorage', value })).toBe(true);
+    }
+    expect(isRedirectConfigEntry({ scope: 'local', key: 'extensions.refstorage', value: null })).toBe(true);
+    expect(isRedirectConfigEntry({ scope: 'global', key: 'extensions.refstorage', value: 'files:///elsewhere' })).toBe(false);
+
+    const r = await probeWith(z(['local', 'extensions.refstorage', 'files:///victim/.git'])).verdict;
+    expect(r).toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: ['extensions.refstorage'] });
+    expect(r.kind === 'restricted' && r.message).toContain('settings that point git away from this folder (extensions.refstorage)');
+  });
+
+  it('K14 feature: the two reviewed presets pass; another feature.* name (a preset that may switch on settings nobody reviewed) → restricted', async () => {
+    const ok = probeWith(z(['local', 'feature.manyfiles', 'true'], ['local', 'feature.experimental', 'true']));
+    await expect(ok.verdict).resolves.toMatchObject({ kind: 'trusted' });
+    expect(helpCalls(ok.exec)).toHaveLength(0);
+    for (const help of [HELP_2_50, HELP_2_56]) {
+      await expect(probeWith(z(['local', 'feature.newpreset', 'true']), result({ stdout: help })).verdict).resolves.toMatchObject({
+        kind: 'restricted', reason: 'unknown-config', keys: ['feature.newpreset'],
+      });
+    }
+  });
+
+  // 已知局限(钉住现状):下面这些段在 git 文档里本身就是通配(`http.<url>.*` 等),表里也只能按通配收录;
+  // 新版本 git 在这些段里加的变量会被当成"已审计"。它们都属于只在联网时生效的一类(插件的每次调用都断网)
+  // 或只是名字(alias / pager,插件不调用别名、--no-pager)。见 README "Known limitation"。
+  const WILDCARD_SECTION_KEYS = [
+    'bundle.newvariable', 'bundle.x.newvariable', 'http.https://h.example/.newvariable', 'credential.https://h.example.newvariable',
+    'sendemail.work.newvariable', 'sideband.https://h.example/.newvariable', 'alias.newalias', 'alias.x.command', 'pager.newcommand',
+  ];
+
+  it.each(WILDCARD_SECTION_KEYS)('K15 known limitation: %s — a new variable inside a section the reviewed table can only list as a wildcard counts as reviewed (trusted, git not asked), even when a newer git documents it by name', async (key) => {
+    const documentedByName = `${NEWER_GIT}${key}\n`;
+    const { exec, verdict } = probeWith(z(['local', 'core.bare', 'false'], ['local', key, 'v']), result({ stdout: documentedByName }));
+    await expect(verdict).resolves.toMatchObject({ kind: 'trusted' });
+    expect(helpCalls(exec)).toHaveLength(0);
+    expect(isKnownSafeConfigKey(key)).toBe(true);
+  });
+
+  it('K16 the wildcard entries of the reviewed table are a fixed, reviewed list: adding one (which widens what counts as reviewed) turns this red', () => {
+    const wildcardTail = helpKeys(KNOWN_SAFE_CONFIG_KEYS).filter((k) => /\.(\*|<[^<>]*>)$/.test(k)).sort();
+    expect(wildcardTail).toEqual([
+      'alias.*', 'bundle.*', 'bundle.<id>.*', 'credential.<url>.*', 'fetch.fsck.<msg-id>', 'http.<url>.*', 'notes.rewrite.<command>',
+      'pager.<cmd>', 'pretty.<name>', 'remotes.<group>', 'sendemail.<identity>.*', 'sideband.<url>.*',
+    ]);
   });
 });
 
