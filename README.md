@@ -207,6 +207,10 @@ when an alias / pager is invoked, none of which this plugin does. Details:
 
 Error messages and notices that carry git output or text from the repository
 (stderr, `core.hooksPath`, hook names) are shown in a visible, single-line,
-bounded form: control characters, bidirectional controls and zero-width
-characters appear as `<U+XXXX>`, line breaks become spaces, and long text is
-cut. File names in the file list are shown as they are.
+bounded form: control and format characters (bidirectional controls,
+zero-width characters, …) and other default-ignorable code points (variation
+selectors, tag characters, Hangul fillers, …) appear as `<U+XXXX>`, line
+breaks become spaces, and long text is cut (before the replacement, at a
+grapheme boundary where possible). The command shown in the "Diff too large"
+placeholder is displayed the same way; Copy still copies it exactly. File
+names in the file list are shown as they are.

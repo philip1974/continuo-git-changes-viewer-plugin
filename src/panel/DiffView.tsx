@@ -99,7 +99,8 @@ function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string |
   return (
     <div className="cgv-placeholder">
       <strong>Diff too large</strong>
-      {exactCommand !== null ? <code>{exactCommand}</code> : null}
+      {/* 显示可见形式(文件名里的 U+202E 等不会把命令倒过来显示、看不见的字符看得见;不截断);Copy 复制的仍是原命令 */}
+      {exactCommand !== null ? <code>{visibleText(exactCommand, Number.POSITIVE_INFINITY)}</code> : null}
       <button
         type="button"
         disabled={exactCommand === null}
