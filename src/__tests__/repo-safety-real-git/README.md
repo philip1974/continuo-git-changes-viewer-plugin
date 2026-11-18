@@ -176,3 +176,16 @@ Config enumeration (see `doc/git-config-classification.md`):
   browser / difftool / mergetool commands, local `trace2.*Target`) → stays
   trusted, and status / diff / every write op / commit / amend start none of
   them; the same `trace2` key in global scope does write (fixture proof).
+
+Keys the viewer has not reviewed (`repo-safety` K1–K10 with the real `git help
+--config`; also run with git 2.56.1):
+
+- R48: every key the installed git documents is restricted or in the reviewed
+  table, except `submodule.<name>.gitdir` (git ≥ 2.56, left unreviewed) and
+  keys newer than the newest reviewed list; each of those, set in the
+  repository, yields `unknown-config`.
+- R49: private keys of gh / VS Code / git-flow / git-lfs / git-svn / git-town /
+  Git for Windows in `.git/config` → trusted, status / stage / commit work;
+  `GIT_TRACE` shows `git help --config` ran as a built-in and spawned nothing
+  although `pager.help`, `help.format=web`, `browser.*.cmd`, `man.*.cmd` and
+  `alias.help` were set.

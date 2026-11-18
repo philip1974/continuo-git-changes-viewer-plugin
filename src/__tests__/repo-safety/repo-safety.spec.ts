@@ -1,7 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { gitExec } from '../../git/exec';
+import { KNOWN_SAFE_CONFIG_KEYS, parseConfigKeyList } from '../../git/known-config-keys';
 import {
   installRepoSafetyGuard,
+  isKnownSafeConfigKey,
+  KNOWN_KEYS_PROBE_ARGS,
   isRedirectConfigEntry,
   isUnsafeConfigEntry,
   LAYOUT_PROBE_ARGS,
@@ -37,11 +42,26 @@ const layoutOut = (o: { inside?: string; prefix?: string; gitDir?: string; commo
 
 const isConfigProbe = (args: readonly string[]) => args.includes('--show-scope');
 const isLayoutProbe = (args: readonly string[]) => args.includes('--is-inside-work-tree');
+const isHelpProbe = (args: readonly string[]) => args.slice(-2).join(' ') === 'help --config';
 
-/** exec 替身:配置探测返回 config,布局探测返回 layout,其余命令返回 other。 */
-function gitMock(config = '', layout: PluginShellExecResult = result({ stdout: layoutOut() }), other = result()) {
+/** `git help --config` 的真实输出(随仓库保存的两份):本机 git 2.50.1 与 Homebrew git 2.56.1。 */
+const helpFixture = (version: '2.50.1' | '2.56.1') =>
+  readFileSync(join(__dirname, 'fixtures', `git-help-config-${version}.txt`), 'utf8');
+const HELP_2_50 = helpFixture('2.50.1');
+const HELP_2_56 = helpFixture('2.56.1');
+const helpKeys = (stdout: string) => stdout.split('\n').filter((l) => l !== '' && !l.includes(' '));
+/** 把文档写法的键(`branch.<name>.remote`、`alias.*`)换成一个具体的键。 */
+const instantiate = (key: string) => key.split('.').map((s) => (s === '*' || /^<.*>$/.test(s) ? 'x' : s)).join('.');
+
+/** exec 替身:配置探测返回 config,布局探测返回 layout,`git help --config` 返回 help(null = 宿主没给结果),其余命令返回 other。 */
+function gitMock(
+  config = '',
+  layout: PluginShellExecResult = result({ stdout: layoutOut() }),
+  other = result(),
+  help: PluginShellExecResult | null = result({ stdout: HELP_2_50 }),
+) {
   return vi.fn(async (_cmd: string, args: readonly string[], _opts?: unknown) =>
-    isConfigProbe(args) ? result({ stdout: config }) : isLayoutProbe(args) ? layout : other,
+    isConfigProbe(args) ? result({ stdout: config }) : isLayoutProbe(args) ? layout : isHelpProbe(args) ? (help ?? undefined) : other,
   );
 }
 
@@ -269,6 +289,149 @@ describe('probeRepoSafety', () => {
     const exec = vi.fn().mockResolvedValue(r);
     const a = { shell: { exec }, fs: fsMock() } as unknown as CoPluginApp;
     await expect(probeRepoSafety(a, '/repo')).resolves.toMatchObject({ kind: 'restricted', reason: 'probe-failed', cacheable: false });
+  });
+});
+
+describe('config keys the viewer has not reviewed (default-deny for keys git understands)', () => {
+  const helpCalls = (exec: ReturnType<typeof gitMock>) => exec.mock.calls.filter((c) => isHelpProbe(c[1]));
+  function probeWith(config: string, help?: PluginShellExecResult | null) {
+    const exec = gitMock(config, undefined, undefined, help);
+    return { exec, verdict: probeRepoSafety({ shell: { exec }, fs: fsMock() } as unknown as CoPluginApp, '/repo') };
+  }
+
+  it('K1 parseConfigKeyList reads `git help --config` notation: <placeholder> / * segments are wildcards (a middle one may contain dots, the last one may not), names are case-insensitive, non-key lines are ignored', () => {
+    const m = parseConfigKeyList("\nbranch.<name>.remote\nalias.*\nhttp.<url>.*\ncore.bare\nmaintenance.commit-graph.auto\n\n'git help config' for more information\n");
+    expect(m.size).toBe(5);
+    for (const key of ['branch.main.remote', 'branch.feat/a.b.remote', 'BRANCH.Main.Remote', 'alias.co', 'http.https://x.y/z.sslverify', 'core.bare', 'Core.Bare', 'maintenance.commit-graph.auto']) {
+      expect({ key, known: m.matches(key) }).toEqual({ key, known: true });
+    }
+    for (const key of ['branch.main.gh-merge-base', 'branch.remote', 'alias.co.command', 'http.sslverify', 'core.barely', 'xcore.bare', 'core.bare.x', 'git', 'for more information']) {
+      expect({ key, known: m.matches(key) }).toEqual({ key, known: false });
+    }
+  });
+
+  it('K2 the reviewed table: common repository keys are known; no entry is a restricted key (those must stay out of it)', () => {
+    for (const key of ['core.bare', 'core.repositoryformatversion', 'core.filemode', 'core.logallrefupdates', 'core.ignorecase', 'core.precomposeunicode',
+      'core.hookspath', 'core.sshcommand', 'core.fsmonitor', 'diff.submodule', 'user.name', 'user.email', 'remote.origin.url', 'remote.origin.fetch',
+      'remote.origin.promisor', 'branch.main.remote', 'branch.feat/x.y.merge', 'branch.main.description', 'submodule.libs/a.b.url', 'submodule.x.active',
+      'include.path', 'includeif.gitdir:~/work/.path', 'extensions.worktreeconfig', 'credential.helper', 'alias.co', 'pull.rebase', 'commit.gpgsign',
+      'status.comparebranches', 'core.lockfilepid']) {
+      expect({ key, known: isKnownSafeConfigKey(key) }).toEqual({ key, known: true });
+    }
+    const safeValue: Record<string, string> = { 'core.bare': 'false', 'core.fsmonitor': 'false', 'diff.submodule': 'short' };
+    const entries = helpKeys(KNOWN_SAFE_CONFIG_KEYS);
+    expect(entries.length).toBeGreaterThan(900);
+    const restrictedInTable = entries.filter((k) => {
+      const key = instantiate(k);
+      return isUnsafeConfigEntry(local(key, safeValue[key.toLowerCase()] ?? 'x'));
+    });
+    expect(restrictedInTable).toEqual([]);
+    for (const key of ['filter.x.clean', 'diff.x.textconv', 'diff.external', 'hook.x.command', 'hook.jobs', 'core.worktree', 'core.attributesfile',
+      'core.excludesfile', 'remote.origin.uploadpack', 'protocol.file.allow', 'gpg.program', 'submodule.x.gitdir']) {
+      expect({ key, known: isKnownSafeConfigKey(key) }).toEqual({ key, known: false });
+    }
+  });
+
+  it('K3 every key git documents is either restricted or reviewed — git 2.50.1: all 954; git 2.56.1: all but submodule.<name>.gitdir (left unreviewed on purpose)', () => {
+    const unreviewed = (help: string) =>
+      helpKeys(help).filter((k) => {
+        const key = instantiate(k);
+        // 文档里唯一不是配置键的一行(includeIf 的条件写法)
+        if (k.startsWith('hasconfig:')) return false;
+        return !isKnownSafeConfigKey(key) && !isUnsafeConfigEntry(local(key, 'x')) && !isUnsafeConfigEntry(local(key, 'false'));
+      });
+    expect(helpKeys(HELP_2_50)).toHaveLength(954);
+    expect(unreviewed(HELP_2_50)).toEqual([]);
+    expect(helpKeys(HELP_2_56)).toHaveLength(1011);
+    expect(unreviewed(HELP_2_56)).toEqual(['submodule.<name>.gitdir']);
+  });
+
+  it('K4 only reviewed keys in the repository config → git is not asked which keys it understands', async () => {
+    const { exec, verdict } = probeWith(z(['local', 'core.bare', 'false'], ['local', 'remote.origin.url', 'x'], ['local', 'branch.main.merge', 'refs/heads/main'], ['local', 'user.name', 'n']));
+    await expect(verdict).resolves.toEqual({ kind: 'trusted', cacheable: true });
+    expect(helpCalls(exec)).toHaveLength(0);
+  });
+
+  it('K5 a key the running git documents but the viewer never reviewed (a newer git added it) → restricted (unknown-config); asked through the hardened `git help --config` in the repo; the layout probe is not run', async () => {
+    const newerGit = `${HELP_2_50}hook.<friendly-name>.command\nfoo.bar\nsubmodule.<name>.gitdir\nnewsection.<name>.*\n`;
+    const { exec, verdict } = probeWith(
+      z(['local', 'core.bare', 'false'], ['local', 'foo.bar', '1'], ['worktree', 'submodule.lib.gitdir', '/elsewhere'], ['local', 'newsection.a.b.exec', 'x'], ['local', 'foo.bar', '2'], ['local', 'gitflow.branch.master', 'main']),
+      result({ stdout: newerGit }),
+    );
+    const r = await verdict;
+    expect(r).toMatchObject({ kind: 'restricted', reason: 'unknown-config', keys: ['foo.bar', 'submodule.lib.gitdir', 'newsection.a.b.exec'] });
+    const message = r.kind === 'restricted' ? r.message : '';
+    expect(message).toContain('Git commands are disabled for this repository: its local git config contains settings this viewer does not recognize (foo.bar, submodule.lib.gitdir, newsection.a.b.exec)');
+    expect(message).toContain('You can still use git in a terminal');
+    expect(message).toContain('click Refresh');
+    expect(KNOWN_KEYS_PROBE_ARGS).toEqual(['help', '--config']);
+    const [call] = helpCalls(exec);
+    expect(helpCalls(exec)).toHaveLength(1);
+    expect(call![1]).toEqual(expect.arrayContaining(['--no-pager', 'core.hooksPath=/dev/null', 'protocol.allow=never']));
+    expect(call![2]).toMatchObject({ cwd: '/repo', env: { GIT_OPTIONAL_LOCKS: '0' } });
+    expect(exec.mock.calls.some((c) => isLayoutProbe(c[1]))).toBe(false);
+  });
+
+  it('K6 keys git itself does not document are private data of other tools (gh, VS Code, git-flow, git-lfs, git-svn, ...) → trusted, with git 2.50.1 and 2.56.1 alike', async () => {
+    const privateKeys = [
+      'branch.main.gh-merge-base', 'remote.origin.gh-resolved', 'branch.feat.vscode-merge-base', 'branch.feat.github-pr-owner-number',
+      'gitflow.branch.master', 'gitflow.prefix.feature', 'lfs.repositoryformatversion', 'lfs.https://example.com/x.git/info/lfs.access',
+      'filter.lfs.required', 'remote.origin.lfsurl', 'svn-remote.svn.url', 'svn.authorsfile', 'git-town.main-branch', 'git-town-branch.feat.parent',
+      'sourcetree.something', 'cola.spellcheck', 'gitreview.username', 'gitbutler.aiopenaikey', 'codespaces.x', 'jj.x', 'absorb.maxstack',
+      'delta.navigate', 'bash.showdirtystate', 'oh-my-zsh.hide-status', 'ghq.root', 'core.longpaths', 'core.fscache',
+    ];
+    const config = z(['local', 'core.bare', 'false'], ...privateKeys.map((k): [string, string, string] => ['local', k, 'v']));
+    for (const help of [HELP_2_50, HELP_2_56]) {
+      const { exec, verdict } = probeWith(config, result({ stdout: help }));
+      await expect(verdict).resolves.toEqual({ kind: 'trusted', cacheable: true });
+      expect(helpCalls(exec)).toHaveLength(1);
+    }
+  });
+
+  it.each([
+    ['non-zero exit', result({ exitCode: 129, stderr: 'usage: git help' })],
+    ['truncated', result({ stdout: HELP_2_50, truncated: true })],
+    ['timed out', result({ stdout: HELP_2_50, timedOut: true })],
+    ['empty output', result()],
+    ['output that is not a key list', result({ stdout: 'usage: git [-v | --version] [-h | --help]\n   or: git help\n' })],
+    ['a short list (not the full key table)', result({ stdout: 'core.bare\nuser.name\n' })],
+    ['no result', null],
+  ])('K7 git cannot say which keys it understands (%s) → any unreviewed key is restricted, fail-closed, never cached', async (_label, help) => {
+    const { verdict } = probeWith(z(['local', 'branch.main.gh-merge-base', 'abc']), help);
+    const r = await verdict;
+    expect(r).toMatchObject({ kind: 'restricted', reason: 'unknown-config', keys: ['branch.main.gh-merge-base'], cacheable: false });
+    const message = r.kind === 'restricted' ? r.message : '';
+    expect(message).toContain('does not recognize (branch.main.gh-merge-base)');
+    expect(message).toContain('could not ask git which settings it understands');
+    expect(message).toContain('You can still use git in a terminal');
+  });
+
+  it('K8 unreviewed keys in global / system / command scope are the user\'s own → ignored, git is not asked', async () => {
+    const { exec, verdict } = probeWith(z(['global', 'foo.bar', '1'], ['system', 'hook.x.command', 'x'], ['command', 'hook.pre-commit.enabled', 'false'], ['global', 'submodule.x.gitdir', '/y']), result({ stdout: `${HELP_2_56}foo.bar\n` }));
+    await expect(verdict).resolves.toMatchObject({ kind: 'trusted' });
+    expect(helpCalls(exec)).toHaveLength(0);
+  });
+
+  it('K9 restricted keys win over unreviewed ones: the verdict names the restricted keys and git is not asked', async () => {
+    const { exec, verdict } = probeWith(z(['local', 'foo.bar', '1'], ['local', 'hook.x.command', 'evil']), result({ stdout: `${HELP_2_56}foo.bar\n` }));
+    await expect(verdict).resolves.toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: ['hook.x.command'] });
+    expect(helpCalls(exec)).toHaveLength(0);
+  });
+
+  it('K10 an unreviewed-key verdict follows the config cache rules: cached while .git/config is unchanged, re-probed after it changes', async () => {
+    let config = z(['local', 'foo.bar', '1']);
+    let mtimeMs = 1;
+    const exec = vi.fn(async (_cmd: string, args: readonly string[]) =>
+      isConfigProbe(args) ? result({ stdout: config }) : isLayoutProbe(args) ? result({ stdout: layoutOut() }) : isHelpProbe(args) ? result({ stdout: `${HELP_2_50}foo.bar\n` }) : result(),
+    );
+    const stat = vi.fn(async (p: string) => ({ size: 10, mtimeMs, isFile: !p.endsWith('.git'), isDirectory: p.endsWith('.git'), isSymlink: false }));
+    const guard = new RepoSafetyGuard({ shell: { exec }, fs: { ...fsMock(), stat } } as unknown as CoPluginApp);
+    expect(await guard.check('/repo')).toMatchObject({ kind: 'restricted', reason: 'unknown-config' });
+    expect(await guard.check('/repo')).toMatchObject({ kind: 'restricted', reason: 'unknown-config' });
+    expect(exec.mock.calls.filter((c) => isConfigProbe(c[1]))).toHaveLength(1);
+    config = z(['local', 'core.bare', 'false']);
+    mtimeMs = 2;
+    expect(await guard.check('/repo')).toEqual({ kind: 'trusted' });
   });
 });
 

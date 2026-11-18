@@ -37,6 +37,36 @@ restricted verdict at one step skips the later ones.
      fails. They are restricted rather than pinned empty with `-c`, because a
      pin would also switch off the user's own global attributes / excludes
      (their normal home; in repository scope the keys are rare).
+   - **Every other key must be reviewed, or unknown to git** (default-deny).
+     The lists above are a blocklist frozen at the git version that was
+     audited; each key a later git adds that runs a program (as `hook.*` did)
+     would be a new hole. So for each remaining `local` / `worktree` key:
+     1. it is in the reviewed table (`src/git/known-config-keys.ts`: the keys
+        of `git help --config` that the audit found safe or neutralized, in
+        git's own notation — `branch.<name>.remote`, `alias.*`; a middle
+        wildcard is a subsection and may contain dots, a trailing one may
+        not) → fine;
+     2. otherwise the running git is asked what it understands: `git help
+        --config` (hardened like every call; prints git's built-in key list,
+        reads no repository key, starts no pager / browser / alias / child
+        process). Only run when such a key exists.
+        - git documents the key → git will interpret a setting nobody
+          reviewed → restricted (`unknown-config`), naming the keys and
+          saying git can still be used in a terminal.
+        - git does not document it → private data of another tool (`gh`'s
+          `branch.<n>.gh-merge-base` / `remote.<n>.gh-resolved`, VS Code's
+          `branch.<n>.vscode-merge-base`, `gitflow.*`, `lfs.*`,
+          `filter.lfs.required`, `svn-remote.*`, `git-town.*`, Git for
+          Windows' `core.longpaths`, …): git ignores it → fine.
+        - the command fails, times out, is truncated, or its output is not a
+          key list (fewer than 300 keys, or `core.bare` / `user.name`
+          missing) → new keys cannot be told from private ones → those keys
+          are restricted, the message says why, and the verdict is not
+          cached.
+     Restricted keys take precedence (git is not asked). Global / system /
+     command scope is never inspected.
+     Limit: only keys git *documents* can be recognised this way
+     (`git help --config` is generated from the documentation).
 2. **Layout** (defense in depth, independent of the key list) — one
    `git rev-parse --path-format=absolute --is-inside-work-tree --show-prefix
    --absolute-git-dir --git-common-dir --show-toplevel`:
@@ -83,6 +113,16 @@ The full key-by-key audit (every documented git config key against the
 plugin's command set, and how each group is handled) is in
 [`doc/git-config-classification.md`](../../../doc/git-config-classification.md).
 
+Reviewed versions: git 2.50.1 (all 954 keys, key by key) and the keys added
+up to 2.56.1 (from their documentation). `fixtures/` holds both `git help
+--config` outputs. Deliberately unreviewed: `submodule.<name>.gitdir` (git ≥
+2.56) — a repository that sets it is restricted when the running git knows the
+key.
+
 T1 output parsing. T2–T5 executable key classification (T4b diff.submodule). T18–T20 redirect keys (T18b attributesFile / excludesFile).
 T6–T9 config probe and fail-closed. L1–L7 layout probe. S1–S7 symlink scan.
 T10–T15b cache. T16–T17 guard wiring into `gitExec`.
+K1 key-list notation. K2 reviewed table (common keys known, no restricted key in it). K3 both fixtures fully
+classified. K4 no extra git call for reviewed keys. K5 documented-but-unreviewed → restricted. K6 private tool
+keys → trusted. K7 `git help --config` unusable → restricted, not cached. K8 only repository scope. K9 restricted
+keys win. K10 cache.

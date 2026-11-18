@@ -87,7 +87,47 @@ Not config, but found by the same audit:
 Real-git assertions per group: `repo-safety-real-git` R2–R5 (restricted keys,
 first pins), R7–R15, R46–R47 (hooks), R14 / R35–R38 (network), R32–R34 (submodules,
 maintenance), R39–R41 (pathspecs), R43–R44 (output pins), R45 (pager, editor,
-alias, trace2, help / tool commands).
+alias, trace2, help / tool commands), R48–R49 (unknown keys).
 
-When a new git release adds keys, rerun `git help --config`, diff against this
-table and extend it; prefer a `-c` pin over a new restricted key.
+## Unknown keys are denied by default
+
+The table above is encoded in `src/git/known-config-keys.ts` (every key not in
+the Restricted row, in `git help --config` notation). A key in repository scope
+that is neither restricted nor in that file is checked against the running
+git's own `git help --config`: documented there → the repository is restricted
+(`unknown-config`); not documented → another tool's private key, which git does
+not interpret. If git cannot be asked, such keys are restricted. Details and
+tests: `src/__tests__/repo-safety/README.md`, K1–K10, real-git R48–R49.
+
+So a git release that adds keys cannot open a hole by itself; the cost of not
+having reviewed a key is only that a repository using it is not operated on.
+
+Limit: the check sees only keys git documents (the list is generated from
+`Documentation/config/`). Keys git reads without documenting them there (today:
+`filter.<drv>.process`, `filter.<drv>.required`, `merge.<drv>.name/recursive`)
+are covered by the restricted patterns or are inert, but a future undocumented
+executable key would not be caught.
+
+## Keys added after 2.50.1 (git 2.51 – 2.56.1)
+
+Classified from the 2.56.1 documentation; only `hook.*` was exercised against a
+real 2.56.1 binary (the whole real-git suite passes with it).
+
+| Handling | Keys |
+| --- | --- |
+| **Restricted** | `hook.<name>.command/event/enabled/parallel`, `hook.<event>.enabled/jobs`, `hook.jobs` |
+| **Left unreviewed** (restricted when the running git documents it) | `submodule.<name>.gitdir` (with `extensions.submodulePathConfig`: lets the repository name the git directory git reads a submodule's HEAD from) |
+| Network only | `fetch.followRemoteHEAD`, `http.maxRetries/maxRetryTime/retryAfter`, `promisor.acceptFromServerUrl/checkFields/sendFields/storeFields`, `remote.<n>.advertisedAs/negotiationInclude/negotiationRestrict`, `sideband.*` |
+| Never triggered (maintenance pinned off) | `maintenance.geometric-repack.*` |
+| Not read by this command set | `alias.*.command` (aliases cannot shadow a built-in), `am.messageId`, `branch.<n>.deleteMerged`, `commitGraph.changedPaths`, `format.commitListFormat`, `fsck.*` / `receive.fsck.*` additions, `gui.GCWarning`, `init.defaultSubmodulePathConfig`, `pack.usePathWalk`, `pull.autoStash`, `repack.midx*`, `replay.refAction`, `sendemail.*` additions, `stash.index` |
+| Overridden by a fixed flag | `status.compareBranches` (`--porcelain=v1` without `-b`), `log.graphIndent` (no `--graph`) |
+| Read, in-process only | `advice.pushRepoLooksLikeRef`, `core.configLockTimeout`, `core.lockfilePid` (a `<name>~pid.lock` file next to the lock, inside the git directory), `index.maxPathLen` |
+
+## When a new git release adds keys
+
+Diff its `git help --config` against the newest file in
+`src/__tests__/repo-safety/fixtures/`, review each new key against the command
+set above, append the safe ones to `known-config-keys.ts` (and save the new
+output as a fixture), add executable / redirecting ones to the restricted
+patterns or pin them in `exec.ts`; prefer a `-c` pin over a new restricted
+key. Until then repositories using a new key are restricted, not exposed.

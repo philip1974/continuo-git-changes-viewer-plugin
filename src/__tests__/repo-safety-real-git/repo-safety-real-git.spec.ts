@@ -19,7 +19,7 @@ import { _resetRestoreCache, unstageFile } from '../../git/unstage-file';
 import { unstageHunk } from '../../git/unstage-hunk';
 import { gitCommit } from '../../git/git-commit';
 import { hasHeadCommit, readHeadMessage } from '../../git/head-meta';
-import { installRepoSafetyGuard, probeRepoSafety } from '../../git/repo-safety';
+import { installRepoSafetyGuard, isKnownSafeConfigKey, isUnsafeConfigEntry, probeRepoSafety } from '../../git/repo-safety';
 import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
 import { stageFile } from '../../git/stage-file';
@@ -1568,5 +1568,70 @@ describe('config-defined hooks (hook.<name>.command / .event, git >= 2.54) ignor
       await runEverything(app);
       expect(marks()).toEqual([]);
     }
+  });
+});
+
+describe('config keys the viewer has not reviewed: default-deny for keys the running git understands (real git)', () => {
+  const documentedKeys = () =>
+    execFileSync('git', ['help', '--config'], { env: ENV, encoding: 'utf8' })
+      .split('\n')
+      .filter((l) => l !== '' && !l.includes(' ') && !l.startsWith('hasconfig:'));
+  const instantiate = (key: string) => key.split('.').map((s) => (s === '*' || /^<.*>$/.test(s) ? 'x' : s)).join('.');
+  /** 这个 git 文档化、但既不受限也不在分类表里的键(具体化之后)。 */
+  const unreviewedKeys = () =>
+    documentedKeys()
+      .map(instantiate)
+      .filter(
+        (key) =>
+          !isKnownSafeConfigKey(key) &&
+          !isUnsafeConfigEntry({ scope: 'local', key, value: 'x' }) &&
+          !isUnsafeConfigEntry({ scope: 'local', key, value: 'false' }),
+      );
+  // 分类表审计到的最新版本的键列表(随仓库保存)。比它更新的 git 可能带来还没审计的键——那正是要受限的情形。
+  const reviewedUpTo = new Set(
+    readFileSync(join(__dirname, '..', 'repo-safety', 'fixtures', 'git-help-config-2.56.1.txt'), 'utf8')
+      .split('\n')
+      .map(instantiate),
+  );
+
+  it('R48 every key the installed git documents is restricted or reviewed, except keys left unreviewed on purpose (submodule.<name>.gitdir, git >= 2.56) and keys newer than the reviewed list; each such key, set in the repository, restricts it', async () => {
+    const unreviewed = unreviewedKeys();
+    expect(unreviewed.filter((key) => reviewedUpTo.has(key) && key !== 'submodule.x.gitdir')).toEqual([]);
+
+    for (const key of unreviewed) {
+      git(repo, 'config', key, 'x');
+      const verdict = await probeRepoSafety(realApp(), repo);
+      expect({ key, verdict }).toMatchObject({ key, verdict: { kind: 'restricted', reason: 'unknown-config', keys: [key.toLowerCase()] } });
+      git(repo, 'config', '--unset-all', key);
+    }
+    expect(await probeRepoSafety(realApp(), repo)).toMatchObject({ kind: 'trusted' });
+  });
+
+  it('R49 private keys of other tools (gh, VS Code, git-flow, git-lfs, git-svn, ...) are not understood by git → trusted and fully usable; asking git (`git help --config`) starts no pager / browser / alias and no child process', async () => {
+    const privateKeys = [
+      'branch.main.gh-merge-base', 'remote.origin.gh-resolved', 'branch.main.vscode-merge-base', 'branch.main.github-pr-owner-number',
+      'gitflow.branch.master', 'gitflow.prefix.feature', 'lfs.repositoryformatversion', 'filter.lfs.required', 'remote.origin.lfsurl',
+      'svn-remote.svn.url', 'git-town.main-branch', 'sourcetree.x', 'cola.spellcheck', 'gitreview.username', 'core.longpaths', 'core.fscache',
+    ];
+    for (const key of privateKeys) git(repo, 'config', key, 'true');
+    // help 自己的可执行配置:都不得被启动
+    for (const [k, v] of Object.entries({
+      'pager.help': marker('pager-help'), 'core.pager': marker('pager'), 'help.format': 'web', 'web.browser': 'x',
+      'browser.x.cmd': marker('browser'), 'man.viewer': 'y', 'man.y.cmd': marker('man'), 'alias.help': `!${marker('alias-help')}`,
+    })) git(repo, 'config', k, v);
+    clearMarks();
+
+    const stderr: string[] = [];
+    const app = tamperedApp({ addEnv: { GIT_TRACE: '1' }, stderr });
+    const { guard } = installRepoSafetyGuard(app);
+    expect(await guard.check(repo, { fresh: true })).toEqual({ kind: 'trusted' });
+    expect(stderr.some((s) => /trace: built-in: git help --config/.test(s))).toBe(true);
+    expect(spawned(stderr)).toEqual([]);
+
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    expect((await scanStatus(app, repo)).map((c) => c.path)).toEqual(['f.txt']);
+    expect((await stageFile(app, repo, 'f.txt')).ok).toBe(true);
+    expect(await gitCommit(app, repo, 'works')).toMatchObject({ ok: true });
+    expect(marks()).toEqual([]);
   });
 });

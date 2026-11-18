@@ -1,6 +1,7 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExecUnguarded, registerGitGuard } from './exec';
 import { isNotFoundError } from './fs-errors';
+import { KNOWN_SAFE_CONFIG_KEYS, parseConfigKeyList, type ConfigKeyMatcher } from './known-config-keys';
 
 // 受限仓库检测(安全):打开一个含攻击者控制 .git 的目录(解压包 / 共享盘)时,仓库可以用两类手段
 // 伤害用户;在运行任何 git 命令前先探测,命中任一即进入受限状态,不再运行任何 git 命令(fail-closed)。
@@ -21,7 +22,8 @@ import { isNotFoundError } from './fs-errors';
 //    (实测:恶意 filter/textconv/diff.external/fsmonitor/gpg.program 均不触发)。只看仓库作用域
 //    (local / worktree,含 include / includeIf 引入的文件);全局 / 系统 config 是用户自己的,可信。
 //    命中执行类键(UNSAFE_KEY_PATTERNS)或重定向类键(core.worktree、非 false 的 core.bare、
-//    core.attributesFile、core.excludesFile)即受限。
+//    core.attributesFile、core.excludesFile)即受限。其余的键必须在已审计的分类表里,或者是运行时
+//    git 不认识的外部工具私有键;git 认识而本插件没审计过的键 → 受限(见"未知键默认受限")。
 // 2. 布局(纵深,不依赖键列表):一次 `git rev-parse`(见 LAYOUT_PROBE_ARGS)向 git 自己询问
 //    "cwd 是否就是工作树顶层"以及 git 目录 / common 目录的绝对路径,要求:
 //    - `--is-inside-work-tree` 为 true 且 `--show-prefix` 为空 ⇒ git 认定的工作树顶层就是 cwd(workspace 根)。
@@ -159,11 +161,55 @@ export function isUnsafeConfigEntry(entry: ConfigEntry): boolean {
   return UNSAFE_KEY_PATTERNS.some((re) => re.test(entry.key));
 }
 
+// 未知键默认受限(结构性防线):上面的受限键是黑名单,只覆盖审计时那个 git 版本的键;git 每加一个会
+// 执行程序 / 越界的键(2.54 的 hook.<name>.command 就是)都会是新缺口。因此仓库作用域的每个键必须落在
+// 下面三类之一,否则受限:
+//   1. 受限键(isUnsafeConfigEntry)→ 受限(unsafe-config);
+//   2. 已审计为安全 / 已中和的键(known-config-keys.ts 的编译期分类表)→ 通过;
+//   3. 两者都不是 → 问运行时的 git:`git help --config` 列出**这个 git 自己认识**的全部键(含新版本
+//      新增的)。git 认识它 ⇒ git 会解释一个本插件没审计过的键 ⇒ 受限(unknown-config);
+//      git 不认识 ⇒ 外部工具的私有键(`branch.*.gh-merge-base`、`gitflow.*`、`lfs.*` ...),git 不解释,
+//      是惰性数据 ⇒ 通过。
+// `git help --config` 只打印 git 内置的列表(实测 2.50 / 2.56:不读仓库 config 的键、不触发 hooks);
+// 照常带全部加固参数。只在第 3 类键存在时才运行(常见仓库不多起进程)。命令失败 / 被截断 / 输出不像
+// 键列表 ⇒ 无法区分"新键"与"私有键" ⇒ 这些键一律受限(fail-closed),文案说明原因。
+// 局限:只能识别 git **文档化**的键(`git help --config` 由文档生成);git 解释但未文档化的键
+// (现有的如 filter.<drv>.process,已在黑名单里)不在其列。
+let knownSafeKeys: ConfigKeyMatcher | null = null;
+
+/** 键是否在编译期分类表里(已审计为安全 / 已中和)。 */
+export function isKnownSafeConfigKey(key: string): boolean {
+  knownSafeKeys ??= parseConfigKeyList(KNOWN_SAFE_CONFIG_KEYS);
+  return knownSafeKeys.matches(key);
+}
+
+export const KNOWN_KEYS_PROBE_ARGS: readonly string[] = ['help', '--config'];
+
+// 真实输出有九百多个键;远小于此或缺少最基本的键,说明拿到的不是键列表(旧版 git 的用法说明等)。
+const MIN_DOCUMENTED_KEYS = 300;
+
+/** 运行时 git 文档化的键;拿不到可信的列表时返回失败原因。 */
+async function probeDocumentedKeys(
+  app: Pick<CoPluginApp, 'shell'>,
+  cwd: string,
+): Promise<ConfigKeyMatcher | string> {
+  const r = await gitExecUnguarded(app, cwd, KNOWN_KEYS_PROBE_ARGS, { timeoutMs: 5_000 });
+  if (!r) return 'no result';
+  if (r.timedOut) return 'timed out';
+  if (r.truncated) return 'output truncated';
+  if (r.exitCode !== 0) return (r.stderr || `exit ${r.exitCode ?? 'unknown'}`).trim().split('\n')[0]!.slice(0, 200);
+  const documented = parseConfigKeyList(r.stdout);
+  if (documented.size < MIN_DOCUMENTED_KEYS || !documented.matches('core.bare') || !documented.matches('user.name')) {
+    return 'unexpected output';
+  }
+  return documented;
+}
+
 export type RepoSafety =
   | { readonly kind: 'trusted' }
   | {
       readonly kind: 'restricted';
-      readonly reason: 'unsafe-config' | 'unsafe-layout' | 'probe-failed';
+      readonly reason: 'unsafe-config' | 'unknown-config' | 'unsafe-layout' | 'probe-failed';
       readonly keys: readonly string[];
       readonly message: string;
     };
@@ -180,6 +226,22 @@ function unsafeConfigMessage(keys: readonly string[], redirectOnly: boolean): st
   return (
     `${DISABLED}its local git config defines ${what} (${shown}${more}). ${NO_GIT_HERE} ` +
     `If you trust this folder, review .git/config ` +
+    `(including files it includes), remove those settings, then click Refresh.`
+  );
+}
+
+function unknownConfigMessage(keys: readonly string[], helpFailure: string | null): string {
+  const shown = keys.slice(0, 5).join(', ');
+  const more = keys.length > 5 ? ` and ${keys.length - 5} more` : '';
+  const why =
+    helpFailure === null
+      ? 'Your git understands them, but they are newer than the settings this viewer has reviewed, ' +
+        'so it cannot tell whether they are safe.'
+      : `The viewer could not ask git which settings it understands (${helpFailure}), ` +
+        'so it cannot tell whether they are safe.';
+  return (
+    `${DISABLED}its local git config contains settings this viewer does not recognize (${shown}${more}). ` +
+    `${why} ${NO_GIT_HERE} You can still use git in a terminal. If you trust this folder, review .git/config ` +
     `(including files it includes), remove those settings, then click Refresh.`
   );
 }
@@ -385,6 +447,26 @@ export async function probeRepoSafety(
       message: unsafeConfigMessage(keys, unsafe.every(isRedirectConfigEntry)),
       cacheable,
     };
+  }
+  const unreviewed = [
+    ...new Set(
+      entries.filter((e) => UNTRUSTED_SCOPES.has(e.scope) && !isKnownSafeConfigKey(e.key)).map((e) => e.key),
+    ),
+  ];
+  if (unreviewed.length > 0) {
+    const documented = await probeDocumentedKeys(app, cwd);
+    const failed = typeof documented === 'string';
+    const unknown = failed ? unreviewed : unreviewed.filter((key) => documented.matches(key));
+    if (unknown.length > 0) {
+      return {
+        kind: 'restricted',
+        reason: 'unknown-config',
+        keys: unknown,
+        message: unknownConfigMessage(unknown, failed ? documented : null),
+        // 问不到 git 时不缓存:下次(git 可用了)应重新判断
+        cacheable: cacheable && !failed,
+      };
+    }
   }
   const layout = await probeLayout(app, cwd);
   if (layout === null) return { kind: 'trusted', cacheable: false };
