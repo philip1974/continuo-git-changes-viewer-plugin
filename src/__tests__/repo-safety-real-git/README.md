@@ -459,3 +459,13 @@ HEAD (`status-hash` T6c, `amend-component` T35–T38; run with git 2.50.1 and
   both times) changes the fingerprint, and the Staged row then shows the new
   commit. (An unstaged pointer moving again is not visible to status — see the
   residual note in `status-hash`.)
+
+Unmerged paths and intent-to-add (`can-file-ops` T31–T33; run with git 2.50.1
+and 2.56.1):
+
+- R82: a merge leaving `AA DD UA AU UD DU UU`. No row offers Unstage or
+  Discard. Why: `git restore --staged` on `AA` / `AU` exits 0 and the conflict
+  stages are gone (` M` / clean); `git checkout --` on an unmerged path fails.
+  Stage on `UD` / `DD` resolves the path; the other conflicts are untouched.
+- R83: an intent-to-add entry (` A`) is shown in Changes as its whole content
+  with no hunk button and no file-level action.

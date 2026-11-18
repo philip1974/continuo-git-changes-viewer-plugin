@@ -170,4 +170,19 @@ describe('file-level write-op integration', () => {
       });
     });
   });
+  it('T40 Stage on an unmerged row (`UD`) runs the same git add, and the toast says what that meant: the conflict was marked resolved', async () => {
+    const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
+    const { notifications, refresh } = renderWithChanges(
+      [{ path: 'del1.txt', status: 'D', statusX: 'U', statusY: 'D', kind: 'text' }],
+      exec,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage file del1.txt' }));
+
+    await vi.waitFor(() => {
+      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['add', '--', 'del1.txt']), expect.anything());
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+    expect(notifications.show).toHaveBeenCalledWith({ kind: 'info', message: 'Marked del1.txt as resolved (staged)' });
+  });
 });

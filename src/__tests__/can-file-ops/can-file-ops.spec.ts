@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { canDiscardFile } from '../../git/can-discard-file';
 import { canStageFile } from '../../git/can-stage-file';
 import { canUnstageFile } from '../../git/can-unstage-file';
-import type { FileChange } from '../../git/status-scanner';
+import { isUnmerged, type FileChange, type PorcelainStatusCode } from '../../git/status-scanner';
 
 function change(partial: Partial<FileChange>): FileChange {
   return {
@@ -78,5 +78,38 @@ describe('file-level write-op eligibility', () => {
     }
     expect(canUnstageFile(change({ statusX: 'T', statusY: ' ' }), 'staged')).toBe(true);
     expect(canUnstageFile(change({ statusX: 'T', statusY: 'M' }), 'staged')).toBe(true);
+  });
+  // git-status(1) 的未合并表:DD AU UD UA DU AA UU
+  const UNMERGED = ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'] as const;
+  const xy = (code: string) => change({ statusX: code[0] as PorcelainStatusCode, statusY: code[1] as PorcelainStatusCode });
+
+  it('T31 an unmerged path (DD AU UD UA DU AA UU) has no file-level Unstage and no Discard in any section: unstaging silently drops the conflict stages, and a checkout of an unmerged path can only fail', () => {
+    for (const code of UNMERGED) {
+      expect(isUnmerged(xy(code)), code).toBe(true);
+      for (const section of ['staged', 'changed', 'untracked'] as const) {
+        expect(canUnstageFile(xy(code), section), `${code} ${section}`).toBe(false);
+        expect(canDiscardFile(xy(code), section), `${code} ${section}`).toBe(false);
+      }
+    }
+    // 不是未合并的组合不受影响
+    for (const code of ['M ', 'A ', 'D ', 'AM', 'AD', 'MM', ' M', ' D', 'MD']) expect(isUnmerged(xy(code)), code).toBe(false);
+    expect(canUnstageFile(xy('AM'), 'staged')).toBe(true);
+    expect(canUnstageFile(xy('AD'), 'staged')).toBe(true);
+    expect(canDiscardFile(xy('AD'), 'changed')).toBe(true);
+    expect(canDiscardFile(xy('MD'), 'changed')).toBe(true);
+  });
+
+  it('T32 Stage on an unmerged path is exactly what it was — offered for UD and DD (a deleted side), nowhere else: nothing is opened up, nothing taken away (the panel words it as marking the conflict resolved)', () => {
+    expect(UNMERGED.filter((code) => canStageFile(xy(code), 'changed'))).toEqual(['DD', 'UD']);
+    for (const code of UNMERGED) expect(canStageFile(xy(code), 'staged'), code).toBe(false);
+  });
+
+  it('T33 an intent-to-add entry (` A`, from `git add -N`) is listed in Changes with no file-level action at all', () => {
+    const ita = change({ status: 'A', statusX: ' ', statusY: 'A' });
+    for (const section of ['staged', 'changed', 'untracked'] as const) {
+      expect(canStageFile(ita, section)).toBe(false);
+      expect(canUnstageFile(ita, section)).toBe(false);
+      expect(canDiscardFile(ita, section)).toBe(false);
+    }
   });
 });

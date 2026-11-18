@@ -125,6 +125,11 @@ detect whether HEAD is already on a remote branch.
 - Files whose names are not portable (`c:notes.txt`, a name containing `..\`)
   are listed but cannot be viewed, staged, unstaged or discarded here. If one
   is already staged the row says so, because a commit will include it.
+- Files with an unresolved merge conflict are listed with a CONFLICT badge.
+  They have no Unstage or Discard here (unstaging would silently drop the
+  conflict; discarding cannot work); resolve them in an editor or a terminal.
+  Where Stage is offered on such a row it marks the conflict as resolved. A
+  file added with `git add -N` (intent to add) is shown but has no actions.
 - Text that is not valid UTF-8 (Latin-1, GBK, …) is displayed with the
   replacement character `�`. Files whose diff contains it have no hunk
   buttons — a hunk patch could not write the original bytes back — and the

@@ -4,7 +4,7 @@ import { isNotFoundError } from './fs-errors';
 import { GITLINK_MODE, readIndexEntries } from './index-entry';
 import { isSafeRepoRelativePath, joinRepoPath, UNSAFE_PATH_ERROR } from './path-utils';
 import { shellQuotePath } from './shell-quote';
-import type { FileChange } from './status-scanner';
+import { isUnmerged, type FileChange } from './status-scanner';
 
 // v0.1.3 hotfix: MergeView 必须接收两个全文（不是 filter unified diff +/-）。
 // `original` = HEAD 版整个文件；`modified` = 新版整个文件——Changes 区(mode 'changed')是工作树文件,
@@ -238,12 +238,6 @@ async function readIndexBlob(
 ): Promise<FileRead> {
   const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `:0:${change.path}`], FILE_READ_LIMITS);
   return partialOrWhole(r) ?? { content: '', withheld: await stagedReadFailure(app, repoRoot, change) };
-}
-
-/** status 的 XY 表示未合并(git-status(1) 的 unmerged 表:DD AU UD UA DU AA UU)。 */
-function isUnmerged(change: FileChange): boolean {
-  const { statusX: x, statusY: y } = change;
-  return x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D');
 }
 
 // index 版本没读出来的原因。此前一律说成"子模块或未解决的冲突"——被守卫拒绝、进程起不来、退出码 128

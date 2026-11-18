@@ -3,7 +3,7 @@ import { canDiscardFile } from '../git/can-discard-file';
 import { canStageFile } from '../git/can-stage-file';
 import type { SectionKind } from '../git/can-stage-hunk';
 import { canUnstageFile } from '../git/can-unstage-file';
-import type { FileChange } from '../git/status-scanner';
+import { isUnmerged, type FileChange } from '../git/status-scanner';
 import {
   selectChanged,
   selectStaged,
@@ -38,6 +38,10 @@ export const INOPERABLE_NOTE =
   'Unsupported file name — cannot be viewed or changed here. Use git in a terminal.';
 export const INOPERABLE_STAGED_NOTE =
   'Unsupported file name — cannot be viewed or changed here, but it is staged and a commit will include it. Use git in a terminal.';
+
+// 未合并的行(冲突):没有 Unstage / Discard(见 can-unstage-file / can-discard-file)。行上的标记说明原因。
+export const UNMERGED_NOTE =
+  'Unresolved merge conflict. Unstage and Discard are not available for it here: resolve the conflict in an editor or a terminal, then stage the result.';
 
 function rowLabel(change: FileChange): string {
   return change.oldPath ? `${change.oldPath} -> ${change.path}` : change.path;
@@ -94,6 +98,11 @@ function Section({
                 <span className="cgv-status">{statusIcon[change.status]}</span>
                 <span className="cgv-path">{rowLabel(change)}</span>
                 {change.kind === 'binary' ? <span className="cgv-badge">BIN</span> : null}
+                {isUnmerged(change) ? (
+                  <span className="cgv-badge cgv-conflict-badge" title={UNMERGED_NOTE}>
+                    CONFLICT
+                  </span>
+                ) : null}
               </button>
             )}
             <div className="cgv-row-actions">
@@ -101,7 +110,8 @@ function Section({
                 <button
                   type="button"
                   className="cgv-row-action-btn cgv-stage-action"
-                  title={`Stage file ${change.path}`}
+                  // 未合并的行上 `git add` 的含义是"标记为已解决"
+                  title={isUnmerged(change) ? `Mark ${change.path} as resolved (git add)` : `Stage file ${change.path}`}
                   aria-label={`Stage file ${change.path}`}
                   onClick={() => onStageFile(change, section)}
                 >

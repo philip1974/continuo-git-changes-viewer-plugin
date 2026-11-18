@@ -26,7 +26,7 @@ import {
   type DrawerAction,
   type PreviewDrawerState,
 } from './PreviewDrawer';
-import type { FileChange } from '../git/status-scanner';
+import { isUnmerged, type FileChange } from '../git/status-scanner';
 import type { SectionKind } from '../git/can-stage-hunk';
 
 export const DIFF_REFRESHING_NOTE = 'Refreshing diff…';
@@ -272,7 +272,12 @@ export function GitViewerPanel({
 
     await store.getState().refresh();
     if (!mountedRef.current) return;
-    showInfo(`${action === 'stage' ? 'Staged' : 'Unstaged'} ${change.path}`);
+    // 未合并的行(UD / DD)上 Stage 就是 `git add`:冲突被标记为已解决——照实说
+    showInfo(
+      action === 'stage' && isUnmerged(change)
+        ? `Marked ${change.path} as resolved (staged)`
+        : `${action === 'stage' ? 'Staged' : 'Unstaged'} ${change.path}`,
+    );
   };
 
   const openDiscardFileDrawer = (change: FileChange, _section: SectionKind) => {

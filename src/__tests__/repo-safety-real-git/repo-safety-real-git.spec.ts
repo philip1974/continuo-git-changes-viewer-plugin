@@ -3469,3 +3469,80 @@ describe('submodule pointers in the fingerprint (real git)', () => {
     expect(diff.ok && diff.unifiedDiff).toContain(`+Subproject commit ${third}`);
   });
 });
+
+describe('unmerged paths: no file-level action that silently discards the conflict (real git)', () => {
+  // main 与 x 两个分支对同一批路径做了互相冲突的改动,然后 `git merge x`
+  const conflicted = () => {
+    const w = (name: string, text: string) => writeFileSync(join(repo, name), text);
+    w('m', 'base\n'); w('del1', 'x\n'); w('del2', 'x\n'); w('dd', 'x\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'b');
+    git(repo, 'checkout', '-qb', 'x');
+    w('m', 'x\n'); w('aa', 'ax\n'); git(repo, 'rm', '-q', 'del1'); w('del2', 'xx\n'); git(repo, 'mv', 'dd', 'ddx');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'x');
+    git(repo, 'checkout', '-q', 'main');
+    w('m', 'y\n'); w('aa', 'ay\n'); w('del1', 'yy\n'); git(repo, 'rm', '-q', 'del2'); git(repo, 'mv', 'dd', 'ddy');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'y');
+    expect(() => git(repo, 'merge', 'x')).toThrow();
+  };
+  const STATUS = 'AA aa\nDD dd\nUA ddx\nAU ddy\nUD del1\nDU del2\nUU m\n';
+  const stages = (path: string) => git(repo, 'ls-files', '-s', '--', path).split('\n').filter(Boolean).map((l) => l.split(/\s+/)[2]).join(',');
+
+  it('R82 every unmerged path: no Unstage and no Discard is offered. Why: `git restore --staged` on `AA` / `AU` exits 0 and drops the conflict stages (the path then looks merely modified, or clean), and `git checkout --` on an unmerged path only fails. Stage (offered for UD / DD as before) marks the conflict resolved', async () => {
+    conflicted();
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const rows = await scanStatus(app, repo);
+    expect(rows.map((c) => `${c.statusX}${c.statusY} ${c.path}`).join('\n') + '\n').toBe(STATUS);
+    for (const row of rows) {
+      for (const section of ['staged', 'changed'] as const) {
+        expect(canUnstageFile(row, section), row.path).toBe(false);
+        expect(canDiscardFile(row, section), row.path).toBe(false);
+      }
+    }
+    expect(rows.filter((row) => canStageFile(row, 'changed')).map((row) => row.path)).toEqual(['dd', 'del1']);
+
+    // 为什么不提供 Unstage:git 报成功,冲突的各 stage 没了
+    expect(stages('aa')).toBe('2,3');
+    expect((await gitExec(app, repo, ['restore', '--staged', '--', 'aa'])).exitCode).toBe(0);
+    expect(stages('aa')).toBe('0');
+    expect(git(repo, 'status', '--porcelain', '--', 'aa')).toBe(' M aa\n');
+    expect(stages('ddy')).toBe('2');
+    expect((await gitExec(app, repo, ['restore', '--staged', '--', 'ddy'])).exitCode).toBe(0);
+    expect(git(repo, 'status', '--porcelain', '--', 'ddy')).toBe('');
+    // 为什么不提供 Discard:只会失败
+    const checkout = await gitExec(app, repo, ['checkout', '--', 'del1']);
+    expect(checkout.exitCode).not.toBe(0);
+    expect(checkout.stderr).toContain('unmerged');
+
+    // Stage:标记为已解决(UD 保留我方的文件;DD 记为删除)
+    expect(await stageFile(app, repo, 'del1')).toEqual({ ok: true });
+    expect(stages('del1')).toBe('0');
+    expect(readFileSync(join(repo, 'del1'), 'utf8')).toBe('yy\n');
+    expect(await stageFile(app, repo, 'dd')).toEqual({ ok: true });
+    expect(stages('dd')).toBe('');
+    // 其余冲突原样还在
+    expect(git(repo, 'status', '--porcelain', '--', 'm', 'del2', 'ddx')).toBe('UA ddx\nDU del2\nUU m\n');
+  });
+
+  it('R83 an intent-to-add entry (` A`): shown in Changes as the whole new content, with no hunk button and no file-level action — nothing the panel offers would act on it', async () => {
+    writeFileSync(join(repo, 'n.txt'), 'l1\nl2\n');
+    git(repo, 'add', '-N', 'n.txt');
+    expect(git(repo, 'status', '--porcelain')).toBe(' A n.txt\n');
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const [row] = await scanStatus(app, repo);
+    expect(row).toMatchObject({ path: 'n.txt', statusX: ' ', statusY: 'A' });
+    for (const section of ['staged', 'changed'] as const) {
+      expect(canStageFile(row!, section)).toBe(false);
+      expect(canUnstageFile(row!, section)).toBe(false);
+      expect(canDiscardFile(row!, section)).toBe(false);
+    }
+    const view = await rendered(app, row!, 'changed');
+    expect(view.added).toEqual(['+l1', '+l2']);
+    expect(view.buttons).toEqual([]);
+  });
+});

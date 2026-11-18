@@ -24,6 +24,12 @@ export interface FileChange {
   readonly inoperable?: true;
 }
 
+/** status 的 XY 表示未合并(git-status(1) 的 unmerged 表:DD AU UD UA DU AA UU)。 */
+export function isUnmerged(change: Pick<FileChange, 'statusX' | 'statusY'>): boolean {
+  const { statusX: x, statusY: y } = change;
+  return x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D');
+}
+
 export function deriveFileStatus(change: FileChange): FileStatus {
   return statusFromCode(`${change.statusX}${change.statusY}`);
 }
