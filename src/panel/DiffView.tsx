@@ -95,7 +95,13 @@ const WITHHELD_NOTICE = {
 const COPY_COMMAND_TITLE =
   'Copy this command. It is quoted for POSIX-style shells (sh, bash, zsh, fish), not for PowerShell or cmd.';
 
-function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string | null }) {
+function TooLargePlaceholder({
+  exactCommand,
+  onCopyFailed,
+}: {
+  readonly exactCommand: string | null;
+  readonly onCopyFailed: (reason: string) => void;
+}) {
   return (
     <div className="cgv-placeholder">
       <strong>Diff too large</strong>
@@ -110,7 +116,20 @@ function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string |
             : COPY_COMMAND_TITLE
         }
         onClick={() => {
-          if (exactCommand !== null) void navigator.clipboard?.writeText(exactCommand);
+          if (exactCommand === null) return;
+          // 剪贴板写入可被拒绝(窗口没有焦点、权限被拒),也可能没有剪贴板 API:说明没复制成,不静默、不留未处理的 rejection
+          const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+          if (typeof clipboard?.writeText !== 'function') {
+            onCopyFailed('clipboard unavailable');
+            return;
+          }
+          const failed = (err: unknown) => onCopyFailed(err instanceof Error ? err.message : String(err));
+          // 同步调用 writeText(仍在点击的用户激活之内),结果再接住
+          try {
+            Promise.resolve(clipboard.writeText(exactCommand)).catch(failed);
+          } catch (err) {
+            failed(err);
+          }
         }}
       >
         Copy
@@ -258,11 +277,24 @@ export function DiffView({
     };
   }, []);
 
+  // 定义在下面的提前返回之前:"Diff too large" 占位的 Copy 失败也用它
+  const showError = (message: string) => {
+    if (typeof app?.notifications?.show === 'function') {
+      app.notifications.show({ kind: 'error', message: visibleText(message) });
+      return;
+    }
+    store.getState().setBanner({
+      kind: 'error',
+      message,
+      dismissable: true,
+    });
+  };
+
   if (!change) return <main className="cgv-diff-empty">Select a file</main>;
   if (!diff) return <main className="cgv-diff-empty">Loading diff…</main>;
   if (!diff.ok) {
     if (diff.reason === 'too-large') {
-      return <TooLargePlaceholder exactCommand={diff.exactCommand} />;
+      return <TooLargePlaceholder exactCommand={diff.exactCommand} onCopyFailed={(reason) => showError(`Could not copy the command: ${reason}`)} />;
     }
     return <main className="cgv-diff-empty">{visibleText(diff.message ?? 'git diff failed')}</main>;
   }
@@ -348,17 +380,6 @@ export function DiffView({
     });
   };
 
-  const showError = (message: string) => {
-    if (typeof app?.notifications?.show === 'function') {
-      app.notifications.show({ kind: 'error', message: visibleText(message) });
-      return;
-    }
-    store.getState().setBanner({
-      kind: 'error',
-      message,
-      dismissable: true,
-    });
-  };
 
   const handleHunkAction = (hunkLineIndex: number, action: DrawerAction) => {
     if (!diff.ok) return;

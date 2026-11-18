@@ -51,6 +51,11 @@ Commands the plugin runs itself never go through a shell (argument arrays via
   command is quoted for POSIX-style shells, not PowerShell / cmd.
 - Q8: with no command, the button is disabled and carries a title explaining
   why; no command text is shown and nothing is copied.
+- Q12: the clipboard refuses the write (window not focused, permission
+  denied) → an error "Could not copy the command: <reason>"; no unhandled
+  rejection (before: nothing was shown).
+- Q13: no clipboard API at all → the same error ("clipboard unavailable"),
+  as a banner when the host has no notifications (before: a silent no-op).
 
 This is the only copy-to-clipboard surface in the panel. Other places that
 show a path (banners, toasts, the file list) render it as text.

@@ -200,4 +200,32 @@ describe('placeholder Copy button', () => {
     fireEvent.click(button);
     expect(writeText).not.toHaveBeenCalled();
   });
+
+  // 剪贴板写入会被拒绝(窗口没有焦点、权限被拒),也可能根本没有剪贴板 API:此前什么都不显示(rejection 未处理)
+  it('Q12 the clipboard refuses the write: an error says the command was not copied, with the reason; no unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (r: unknown) => void unhandled.push(r);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      writeText.mockImplementation(() => Promise.reject(new Error('Document is not focused.')));
+      const notifications = { show: vi.fn() };
+      const app = { shell: { exec: vi.fn() }, notifications } as unknown as CoPluginApp;
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      render(<DiffView app={app} store={createGitStore()} change={change} diff={{ ok: false, reason: 'too-large', path: 'x', exactCommand: 'git diff -- x' }} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'error', message: 'Could not copy the command: Document is not focused.' }));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('Q13 no clipboard API at all: the same error (banner without host notifications) instead of a silent no-op', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    const store = createGitStore();
+    render(<DiffView store={store} change={change} diff={{ ok: false, reason: 'too-large', path: 'x', exactCommand: 'git diff -- x' }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    await vi.waitFor(() => expect(store.getState().banner).toEqual({ kind: 'error', message: 'Could not copy the command: clipboard unavailable', dismissable: true }));
+  });
 });

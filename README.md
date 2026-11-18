@@ -222,5 +222,6 @@ zero-width characters, …) and other default-ignorable code points (variation
 selectors, tag characters, Hangul fillers, …) appear as `<U+XXXX>`, line
 breaks become spaces, and long text is cut (before the replacement, at a
 grapheme boundary where possible). The command shown in the "Diff too large"
-placeholder is displayed the same way; Copy still copies it exactly. File
+placeholder is displayed the same way; Copy still copies it exactly (and
+reports an error if the clipboard refuses the write). File
 names in the file list are shown as they are.

@@ -34,3 +34,13 @@ Checking whether there is a last commit (on mount):
 - H8: Amend already on when the check is refused → the Amend button is
   disabled; the checkbox can still be unchecked (draft back), and cannot be
   checked again.
+
+Other entry points checked for the same gap: Stage / Unstage
+(`GitViewerPanel` `runFileAction`), the file and hunk drawers
+(`handleDrawerConfirm` in `GitViewerPanel` and `DiffView`), jump-back
+(`openFile` has its own catch) and the settings tab already catch. Refresh
+(button, command, mount, auto-refresh) goes through `git-store` `refresh` /
+`loadDiff`, which never reject (failures become `statusError` / a banner);
+the auto-refresh's own fingerprint and worktree-stamp reads are caught and
+logged, and retried on the next tick. The "Diff too large" Copy button did not
+catch a refused clipboard write — see `copy-command` Q12 / Q13.
