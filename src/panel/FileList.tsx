@@ -32,6 +32,13 @@ const statusIcon: Record<FileChange['status'], string> = {
   U: '?',
 };
 
+// 不可操作行(FileChange.inoperable):文件名是 POSIX 上合法、但插件不肯传给 git 的形式(`c:notes.txt`、`..\x`)。
+// 只显示——路径是纯文本,行不是按钮,没有任何操作;已暂存的要说明"提交会包含它"(用户必须能看见将要提交什么)。
+export const INOPERABLE_NOTE =
+  'Unsupported file name — cannot be viewed or changed here. Use git in a terminal.';
+export const INOPERABLE_STAGED_NOTE =
+  'Unsupported file name — cannot be viewed or changed here, but it is staged and a commit will include it. Use git in a terminal.';
+
 function rowLabel(change: FileChange): string {
   return change.oldPath ? `${change.oldPath} -> ${change.path}` : change.path;
 }
@@ -70,15 +77,25 @@ function Section({
             key={`${title}:${change.statusX}${change.statusY}:${change.path}`}
             className="cgv-file-li"
           >
-            <button
-              className="cgv-file-row"
-              type="button"
-              onClick={() => store.getState().selectFile(change.path, mode)}
-            >
-              <span className="cgv-status">{statusIcon[change.status]}</span>
-              <span className="cgv-path">{rowLabel(change)}</span>
-              {change.kind === 'binary' ? <span className="cgv-badge">BIN</span> : null}
-            </button>
+            {change.inoperable ? (
+              <div className="cgv-file-row cgv-file-row--readonly">
+                <span className="cgv-status">{statusIcon[change.status]}</span>
+                <span className="cgv-path">{rowLabel(change)}</span>
+                <span className="cgv-row-note" role="note">
+                  {section === 'staged' ? INOPERABLE_STAGED_NOTE : INOPERABLE_NOTE}
+                </span>
+              </div>
+            ) : (
+              <button
+                className="cgv-file-row"
+                type="button"
+                onClick={() => store.getState().selectFile(change.path, mode)}
+              >
+                <span className="cgv-status">{statusIcon[change.status]}</span>
+                <span className="cgv-path">{rowLabel(change)}</span>
+                {change.kind === 'binary' ? <span className="cgv-badge">BIN</span> : null}
+              </button>
+            )}
             <div className="cgv-row-actions">
               {onStageFile && canStageFile(change, section) ? (
                 <button

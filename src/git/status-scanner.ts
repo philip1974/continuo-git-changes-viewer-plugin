@@ -14,6 +14,12 @@ export interface FileChange {
   readonly statusX: PorcelainStatusCode;
   readonly statusY: PorcelainStatusCode;
   readonly kind: FileKind;
+  /**
+   * 路径(或重命名 / 复制的原路径)不是 isSafeRepoRelativePath 认可的形式,但也不是伪造 index 的证据——
+   * POSIX 上合法的名字 `c:notes.txt`、`..\x`。这一行只用于显示(路径当作文本):不可选中、不可
+   * stage / unstage / discard、不读 diff,路径不进入任何 git / cat 参数。见 parsePorcelainStatus。
+   */
+  readonly inoperable?: true;
 }
 
 export function deriveFileStatus(change: FileChange): FileStatus {
@@ -101,9 +107,13 @@ export function parsePorcelainStatus(
     // 原路径必须在这里吞掉:否则它会被当成下一条记录(`C  copy\0/etc/passwd\0` → 伪条目)。
     const origPath = hasOrigPath(code) ? parts[++i] : undefined;
 
-    // 不可信仓库的 index 可以含仓库外 / git 目录内的路径(见 path-utils),一律丢弃,不显示、不可操作。
-    if (!isSafeRepoRelativePath(path)) continue;
-    if (origPath !== undefined && !isSafeRepoRelativePath(origPath)) continue;
+    // 不可信仓库的 index 可以含仓库外 / git 目录内的路径(见 path-utils):git 自己绝不会记录的那些(伪造)
+    // 一律丢弃——scanStatus 遇到它们会整体拒绝(UnsafeIndexError),这里只是解析器单独使用时的兜底。
+    if (path === '' || isForgedIndexPath(path)) continue;
+    if (origPath !== undefined && isForgedIndexPath(origPath)) continue;
+    // 其余不满足 isSafeRepoRelativePath 的名字(`c:notes.txt`、`..\x`:POSIX 上合法,git 会正常记录)不能丢:
+    // 它们若已暂存,`commit -F -` 照样把它们提交,而用户在面板里看不到。保留为不可操作行(只显示)。
+    const inoperable = !isSafeRepoRelativePath(path) || (origPath !== undefined && !isSafeRepoRelativePath(origPath));
 
     // 复制(仅 status.renames=copies 时出现;插件已固定 renames=true)按新增文件显示,不带 oldPath:
     // 原文件仍在,HEAD 里没有新路径的版本。
@@ -115,6 +125,7 @@ export function parsePorcelainStatus(
       statusX,
       statusY,
       kind: kindFor(path, numstat),
+      ...(inoperable ? { inoperable: true as const } : {}),
     });
   }
 

@@ -162,6 +162,10 @@ Paths reported by git:
   writes `../outside.txt` and `.git/hooks/planted` into the tree; the status
   scan rejects with `UnsafeIndexError`, and after `guard.restrict` the commit
   is refused and HEAD does not move.
+- R60: `..\x`, `a:b`, `c:notes.txt` staged with plain git, plus an untracked
+  `d:untracked` → listed as inoperable rows; stage / unstage / discard / diff
+  for them start no process; the plugin's commit succeeds and the paths in the
+  commit are exactly the rows the Staged section showed.
 - R43: `status.renames=copies` makes git emit copy records; with the plugin's
   pinned rename detection the list is the same whatever the repository
   configures (`copies`, `false`), and with the pins stripped the copy record is

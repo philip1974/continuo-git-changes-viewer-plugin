@@ -280,6 +280,13 @@
   background: transparent;
 }
 
+/* 不可操作行的说明:占满整行,排在状态与路径下面 */
+.cgv-row-note {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  white-space: normal;
+}
+
 .cgv-row-actions {
   display: flex;
   align-items: center;

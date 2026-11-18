@@ -92,6 +92,9 @@ detect whether HEAD is already on a remote branch.
   signing, hook bypass, amend push detection, and stash UI are not supported.
 - Jump-back currently shows an inline panel banner with a `path:line` hint. A
   future v0.2 SDK expansion is expected to add real editor navigation.
+- Files whose names are not portable (`c:notes.txt`, a name containing `..\`)
+  are listed but cannot be viewed, staged, unstaged or discarded here. If one
+  is already staged the row says so, because a commit will include it.
 - The workspace root must be the git toplevel. Opening a subdirectory of a repo
   is reported as unsupported in this version.
 - Very large diffs degrade to a file-level placeholder with the exact git

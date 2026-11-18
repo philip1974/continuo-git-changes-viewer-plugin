@@ -33,7 +33,8 @@ export function isSafeRepoRelativePath(path: string): boolean {
  * git 自己绝不会写进 index 的路径:POSIX 绝对路径、含空段 / `.` / `..` 段、任何一段是 `.git`
  * (git 的 verify_path 在写 index 时拒绝它们;读 index 时不校验)。status 里出现这样的条目说明 index 是
  * 伪造的。只按 `/` 分段、不看盘符:`c:notes.txt`、`..\x` 在 POSIX 上是合法文件名,它们仍不满足
- * isSafeRepoRelativePath(不显示、不可操作),但不构成"伪造"的证据。
+ * isSafeRepoRelativePath(列表里显示为不可操作行,见 status-scanner 的 FileChange.inoperable;路径不进入
+ * 任何 git / cat 参数),但不构成"伪造"的证据。
  */
 export function isForgedIndexPath(path: string): boolean {
   if (path === '') return false;

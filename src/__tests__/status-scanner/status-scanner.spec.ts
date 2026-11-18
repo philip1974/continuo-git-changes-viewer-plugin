@@ -128,9 +128,37 @@ describe('porcelain status parsing', () => {
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
-  it('T8 a name that is only unsafe on Windows (`c:notes.txt`, `..\\x`) is dropped as before but does not fail the scan', async () => {
-    const exec = vi.fn().mockResolvedValueOnce(result('?? c:notes.txt\0 M ..\\x\0 M ok.txt\0')).mockResolvedValue(result(''));
+  // POSIX 上合法、但不满足 isSafeRepoRelativePath 的名字(盘符形、含 `\`、`..\x`、`.git\x`):git 自己会记录它们,
+  // 不是伪造的证据;插件不为它们运行任何命令。它们若已暂存,`commit` 照样提交——所以必须留在列表里让用户看见。
+  it('T8 names the plugin will not pass to git but git itself records (`c:notes.txt`, `..\\x`, `.git\\config`, `\\x`) stay in the list as inoperable rows, in whatever state they are — staged ones included; the scan does not fail', async () => {
+    const stdout = 'A  c:notes.txt\0AM ..\\x\0 M .git\\config\0?? \\x\0M  a:b\0 M ok.txt\0?? a\\b\0';
+    const exec = vi.fn().mockResolvedValueOnce(result(stdout)).mockResolvedValue(result(''));
     const app = { shell: { exec } } as unknown as CoPluginApp;
-    expect((await scanStatus(app, '/repo')).map((c) => c.path)).toEqual(['ok.txt']);
+
+    expect(await scanStatus(app, '/repo')).toEqual<FileChange[]>([
+      { path: 'c:notes.txt', status: 'A', statusX: 'A', statusY: ' ', kind: 'text', inoperable: true },
+      { path: '..\\x', status: 'A', statusX: 'A', statusY: 'M', kind: 'text', inoperable: true },
+      { path: '.git\\config', status: 'M', statusX: ' ', statusY: 'M', kind: 'text', inoperable: true },
+      { path: '\\x', status: 'U', statusX: '?', statusY: '?', kind: 'text', inoperable: true },
+      { path: 'a:b', status: 'M', statusX: 'M', statusY: ' ', kind: 'text', inoperable: true },
+      { path: 'ok.txt', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' },
+      // `a\b` 两段都是普通名字:可操作
+      { path: 'a\\b', status: 'U', statusX: '?', statusY: '?', kind: 'text' },
+    ]);
+  });
+
+  it('T9 a rename / copy whose other side is such a name is one inoperable row (the original path is still consumed and shown as text); forged paths are still dropped by the parser, and still fail the scan even next to inoperable ones', async () => {
+    expect(parsePorcelainStatus('R  new.txt\0c:old.txt\0R  d:new.txt\0old.txt\0C  copy.txt\0..\\src\0 M ok.txt\0')).toEqual<FileChange[]>([
+      { path: 'new.txt', oldPath: 'c:old.txt', status: 'R', statusX: 'R', statusY: ' ', kind: 'text', inoperable: true },
+      { path: 'd:new.txt', oldPath: 'old.txt', status: 'R', statusX: 'R', statusY: ' ', kind: 'text', inoperable: true },
+      { path: 'copy.txt', status: 'A', statusX: 'C', statusY: ' ', kind: 'text', inoperable: true },
+      { path: 'ok.txt', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' },
+    ]);
+    expect(parsePorcelainStatus('A  ../outside\0A  c:notes.txt\0R  ok.txt\0/abs\0').map((c) => c.path)).toEqual(['c:notes.txt']);
+
+    const exec = vi.fn().mockResolvedValueOnce(result('A  c:notes.txt\0A  ../outside\0')).mockResolvedValue(result(''));
+    const error = await scanStatus({ shell: { exec } } as unknown as CoPluginApp, '/repo').then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(UnsafeIndexError);
+    expect((error as UnsafeIndexError).paths).toEqual(['../outside']);
   });
 });

@@ -81,6 +81,10 @@ Not config, but found by the same audit:
   and `.git/hooks/x` (`repo-safety-real-git` R42). Dropping them from the list
   is not enough — staged ones would still be committed — so a status scan that
   meets such a path puts the repository into the restricted state (R42b).
+  Names that fail the check but that git records normally on POSIX
+  (`c:notes.txt`, `..\x`) are no evidence of forgery: they are listed as
+  read-only rows (so a staged one is visible before it is committed) and never
+  reach a git or `cat` argument (`inoperable-entries`, R60).
 - Nested repositories. A gitlink entry needs no `.gitmodules`; the nested
   repository's own config is never inspected, so the invariant is that no
   plugin command starts a process inside it (`repo-safety-real-git` R32–R34,

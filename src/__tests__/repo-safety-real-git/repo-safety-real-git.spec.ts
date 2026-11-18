@@ -1393,6 +1393,50 @@ describe('paths reported by git are not trusted: forged index entries and copy r
     expect(tree()).toEqual(expect.arrayContaining(['../outside.txt', '.git/hooks/planted']));
   });
 
+  it('R60 names git records normally but the plugin will not hand to git (`c:notes.txt`, `..\\x`, `a:b`): they are listed as inoperable rows instead of vanishing, every operation on them is refused without starting a process, and what the Staged section shows is exactly what the commit contains', async () => {
+    const ODD = ['..\\x', 'a:b', 'c:notes.txt'];
+    for (const name of ODD) writeFileSync(join(repo, name), 'odd\n');
+    git(repo, 'add', '--', ...ODD);
+    appendFileSync(join(repo, 'a:b'), 'edited after staging\n');
+    writeFileSync(join(repo, 'd:untracked'), 'u\n');
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect(await guard.check(repo, { fresh: true })).toEqual({ kind: 'trusted' });
+    const spawned: string[][] = [];
+    const spy = {
+      ...app,
+      shell: { exec: (cmd: string, args: readonly string[], opts?: PluginShellExecOptions) => (spawned.push([cmd, ...args]), app.shell.exec(cmd, args, opts)) },
+    } as unknown as CoPluginApp;
+
+    const changes = await scanStatus(spy, repo);
+    expect(changes.map((c) => [c.statusX + c.statusY, c.path, c.inoperable === true])).toEqual([
+      ['A ', '..\\x', true], ['AM', 'a:b', true], ['A ', 'c:notes.txt', true], [' M', 'f.txt', false], ['??', 'd:untracked', true],
+    ]);
+    // 扫描本身只跑了 status 与 numstat,参数里没有这些名字
+    expect(spawned.flat().filter((a) => [...ODD, 'd:untracked'].includes(a))).toEqual([]);
+    spawned.length = 0;
+
+    for (const path of [...ODD, 'd:untracked']) {
+      expect((await stageFile(spy, repo, path)).ok).toBe(false);
+      expect((await unstageFile(spy, repo, path)).ok).toBe(false);
+      expect((await discardFile(spy, repo, path)).ok).toBe(false);
+      for (const mode of ['changed', 'staged'] as const) {
+        expect((await fetchDiff(spy, repo, changes.find((c) => c.path === path)!, mode)).ok).toBe(false);
+      }
+    }
+    expect(spawned).toEqual([]);
+    expect(readFileSync(join(repo, 'a:b'), 'utf8')).toBe('odd\nedited after staging\n');
+
+    // 提交:Staged 段显示的条目 = 这次提交实际包含的路径(修复前这三行不显示,提交照样包含它们)
+    const stagedShown = changes.filter((c) => c.statusX !== ' ' && c.statusX !== '?').map((c) => c.path);
+    expect(stagedShown).toEqual(ODD);
+    expect(await gitCommit(spy, repo, 'odd names')).toEqual({ ok: true });
+    const committed = execFileSync('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', 'HEAD'], { cwd: repo, env: ENV, encoding: 'utf8' }).split('\0').filter(Boolean);
+    expect(committed).toEqual(stagedShown);
+  });
+
   it('R43 status.renames=copies: git emits copy records (`C  new\\0orig\\0`); the plugin pins rename detection so the list does not depend on repository config, and still parses copies correctly if they appear', async () => {
     writeFileSync(join(repo, 'a.txt'), 'one\ntwo\nthree\nfour\nfive\n');
     git(repo, 'add', 'a.txt');

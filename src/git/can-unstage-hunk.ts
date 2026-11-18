@@ -9,6 +9,7 @@ export function canUnstageHunk(
   section: SectionKind,
 ): boolean {
   if (!change || !diff) return false;
+  if (change.inoperable) return false;
   if (section !== 'staged') return false;
   if (change.kind !== 'text') return false;
   if (!diff.ok) return false;

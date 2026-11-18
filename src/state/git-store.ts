@@ -79,9 +79,11 @@ export function cacheKey(path: string, mode: DiffMode): string {
   return `${mode}:${path}`;
 }
 
+// 不可操作行(FileChange.inoperable)不可选中:选中即读 diff,而插件不为这些路径运行任何命令。
 export function firstSelectableEntry(
-  changes: readonly FileChange[],
+  all: readonly FileChange[],
 ): SelectedRef | null {
+  const changes = all.filter((change) => !change.inoperable);
   const changed = selectChanged({ changes })[0];
   if (changed) return { path: changed.path, mode: 'changed' };
   const staged = selectStaged({ changes })[0];
@@ -92,6 +94,7 @@ export function firstSelectableEntry(
 }
 
 function isModeValid(change: FileChange, mode: DiffMode): boolean {
+  if (change.inoperable) return false;
   if (mode === 'staged') {
     return change.statusX !== ' ' && change.statusX !== '?';
   }
@@ -200,6 +203,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
       }
     },
     selectFile(path, mode) {
+      if (get().changes.find((c) => c.path === path)?.inoperable) return;
       set({ selected: { path, mode } });
       void get().loadDiff(path, mode);
     },
@@ -209,7 +213,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
       const key = cacheKey(path, mode);
       if (diffCache.has(key)) return; // cache hit
       const change = changes.find((c) => c.path === path);
-      if (!change) return;
+      if (!change || change.inoperable) return;
       try {
         const result = await deps.fetchDiff(repoRoot, change, mode);
         const next = new Map(get().diffCache);

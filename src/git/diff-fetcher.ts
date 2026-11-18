@@ -142,7 +142,8 @@ export async function fetchDiff(
 ): Promise<DiffResult> {
   const untracked = change.status === 'U';
 
-  // status 解析已丢弃这类条目(见 path-utils);这里是同一检查在读取入口的再次把关,不起任何进程。
+  // 这类条目在列表里是不可操作行(FileChange.inoperable,不可选中)或已被丢弃(伪造,见 path-utils);
+  // 这里是同一检查在读取入口的再次把关,不起任何进程。
   if (!isSafeRepoRelativePath(change.path) || (change.oldPath !== undefined && !isSafeRepoRelativePath(change.oldPath))) {
     return {
       ok: false,

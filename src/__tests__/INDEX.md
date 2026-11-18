@@ -166,6 +166,10 @@
 
 - [`hunk-patch-builder.spec.ts`](./hunk-patch-builder/hunk-patch-builder.spec.ts)
 
+## [Inoperable entries (names the plugin will not hand to git)](./inoperable-entries/README.md)
+
+- [`inoperable-entries.spec.tsx`](./inoperable-entries/inoperable-entries.spec.tsx)
+
 ## [jsx-runtime-shim (v0.3.2/v0.3.3 regression guards)](./jsx-runtime-shim/README.md)
 
 - [`jsx-runtime-shim.spec.ts`](./jsx-runtime-shim/jsx-runtime-shim.spec.ts)
