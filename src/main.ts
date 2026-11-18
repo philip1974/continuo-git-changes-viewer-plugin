@@ -12,6 +12,7 @@ import { readStatusHash } from './git/status-hash';
 import { scanStatus, StatusUnavailableError, UnsafeIndexError } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
 import { SettingsBus } from './lib/settings-bus';
+import { tryNotify } from './lib/notify';
 import { visibleText } from './lib/visible-text';
 import { AutoRefreshTimer } from './state/auto-refresh-timer';
 import { createGitStore } from './state/git-store';
@@ -68,12 +69,9 @@ export default class GitChangesViewerPlugin extends Plugin {
     message: string,
     code?: string,
   ): void {
-    if (typeof this.app.notifications?.show === 'function') {
-      this.app.notifications.show(
-        code === undefined ? { kind, message: visibleText(message) } : { kind, message: visibleText(message), code },
-      );
-      return;
-    }
+    const opts = code === undefined ? { kind, message: visibleText(message) } : { kind, message: visibleText(message), code };
+    // 宿主拒绝显示(插件被吊销后 show 同步抛出)时与没有通知 API 一样退回 banner,不抛出
+    if (tryNotify(this.app, opts)) return;
 
     // Defensive fallback only. The SDK toast has no dismissable field; inline
     // banners keep it because the panel banner UI supports manual dismissal.

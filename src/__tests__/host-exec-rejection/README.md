@@ -44,3 +44,6 @@ Other entry points checked for the same gap: Stage / Unstage
 the auto-refresh's own fingerprint and worktree-stamp reads are caught and
 logged, and retried on the next tick. The "Diff too large" Copy button did not
 catch a refused clipboard write — see `copy-command` Q12 / Q13.
+
+"No unhandled rejection" also needs the report itself not to throw: after the
+plugin is revoked, `notifications.show` throws too — see `notify-refused`.

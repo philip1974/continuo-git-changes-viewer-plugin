@@ -89,6 +89,11 @@ real subject from `git log -1 --pretty=%s` so commit-msg hook rewrites are
 reflected in the toast. If Continuo refuses to run git for the commit (for
 example too many git processes running in the window at once), the panel shows
 "Commit failed" (or "Amend failed") with the reason and keeps the message.
+If Continuo also refuses to show notifications (the plugin was disabled or its
+permissions revoked while the panel was open), every message the panel would
+have shown as a notification goes to the panel's own banner instead (the
+settings tab, which has no banner, only logs it to the console); nothing is
+left half-done because of the refused notification.
 
 Right before committing, the plugin checks that the repository is still in
 the state the panel last read (the same fingerprint the auto-refresh uses:

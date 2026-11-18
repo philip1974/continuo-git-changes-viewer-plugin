@@ -9,6 +9,7 @@ import { stageHunk } from '../git/stage-hunk';
 import { unstageFile } from '../git/unstage-file';
 import { unstageHunk } from '../git/unstage-hunk';
 import type { SettingsBus } from '../lib/settings-bus';
+import { tryNotify } from '../lib/notify';
 import { visibleText } from '../lib/visible-text';
 import {
   type AutoRefreshIntervalSec,
@@ -245,18 +246,12 @@ export function GitViewerPanel({
   const stagedCount = selectStaged({ changes: state.changes }).length;
 
   const showError = (message: string) => {
-    if (typeof app?.notifications?.show === 'function') {
-      app.notifications.show({ kind: 'error', message: visibleText(message) });
-      return;
-    }
+    if (tryNotify(app, { kind: 'error', message: visibleText(message) })) return;
     store.getState().setBanner({ kind: 'error', message, dismissable: true });
   };
 
   const showInfo = (message: string) => {
-    if (typeof app?.notifications?.show === 'function') {
-      app.notifications.show({ kind: 'info', message: visibleText(message) });
-      return;
-    }
+    if (tryNotify(app, { kind: 'info', message: visibleText(message) })) return;
     store.getState().setBanner({ kind: 'info', message, dismissable: true });
   };
 

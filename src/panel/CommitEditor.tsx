@@ -19,6 +19,7 @@ import {
   type RepoHooks,
 } from '../git/repo-hooks';
 import { readStatusHash } from '../git/status-hash';
+import { tryNotify } from '../lib/notify';
 import { visibleText } from '../lib/visible-text';
 import { COMMIT_IN_PROGRESS_TITLE } from './FileList';
 import type { CoPluginApp } from '../sdk/types';
@@ -162,26 +163,17 @@ function shownReplaced(shown: ShownSnapshot, now: GitViewerState): boolean {
 }
 
 function showWarning(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
-  if (typeof app.notifications?.show === 'function') {
-    app.notifications.show({ kind: 'warning', message: visibleText(message) });
-    return;
-  }
+  if (tryNotify(app, { kind: 'warning', message: visibleText(message) })) return;
   store.getState().setBanner({ kind: 'warn', message, dismissable: true });
 }
 
 function showInfo(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
-  if (typeof app.notifications?.show === 'function') {
-    app.notifications.show({ kind: 'info', message: visibleText(message) });
-    return;
-  }
+  if (tryNotify(app, { kind: 'info', message: visibleText(message) })) return;
   store.getState().setBanner({ kind: 'info', message, dismissable: true });
 }
 
 function showError(app: CoPluginApp, store: StoreApi<GitViewerState>, message: string): void {
-  if (typeof app.notifications?.show === 'function') {
-    app.notifications.show({ kind: 'error', message: visibleText(message) });
-    return;
-  }
+  if (tryNotify(app, { kind: 'error', message: visibleText(message) })) return;
   store.getState().setBanner({ kind: 'error', message, dismissable: true });
 }
 
@@ -480,15 +472,7 @@ export function CommitEditor({
       setHeadHasCommit(true);
       if (amend) {
         if (noOp) {
-          if (typeof app.notifications?.show === 'function') {
-            app.notifications.show({ kind: 'warning', message: 'HEAD unchanged' });
-          } else {
-            store.getState().setBanner({
-              kind: 'warn',
-              message: 'HEAD unchanged',
-              dismissable: true,
-            });
-          }
+          showWarning(app, store, 'HEAD unchanged');
         } else {
           showInfo(app, store, `Amended HEAD: ${truncateSubject(subject ?? 'staged changes')}`);
         }

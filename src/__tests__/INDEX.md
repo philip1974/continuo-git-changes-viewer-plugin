@@ -223,6 +223,10 @@
 
 - [`mapping.spec.ts`](./notification-mapping/mapping.spec.ts)
 
+## [notify-refused](./notify-refused/README.md)
+
+- [`notify-refused.spec.tsx`](./notify-refused/notify-refused.spec.tsx)
+
 ## [Numstat Binary Detection](./numstat/README.md)
 
 - [`numstat.spec.ts`](./numstat/numstat.spec.ts)

@@ -10,6 +10,7 @@ import { joinRepoPath } from '../git/path-utils';
 import { stageHunk } from '../git/stage-hunk';
 import { unstageHunk } from '../git/unstage-hunk';
 import type { CoPluginApp } from '../sdk/types';
+import { tryNotify } from '../lib/notify';
 import { visibleText } from '../lib/visible-text';
 import type { FileChange } from '../git/status-scanner';
 import type { GitViewerState } from '../state/git-store';
@@ -279,10 +280,7 @@ export function DiffView({
 
   // 定义在下面的提前返回之前:"Diff too large" 占位的 Copy 失败也用它
   const showError = (message: string) => {
-    if (typeof app?.notifications?.show === 'function') {
-      app.notifications.show({ kind: 'error', message: visibleText(message) });
-      return;
-    }
+    if (tryNotify(app, { kind: 'error', message: visibleText(message) })) return;
     store.getState().setBanner({
       kind: 'error',
       message,
@@ -437,11 +435,9 @@ export function DiffView({
         // the destructive action always has visible confirmation.
         // (Stage/unstage also benefit, less critical since they don't
         // destroy work.)
-        if (drawer.action === 'discard' && typeof app?.notifications?.show === 'function') {
-          app.notifications.show({
-            kind: 'info',
-            message: visibleText(`Hunk discarded from ${drawer.filePath}`),
-          });
+        if (drawer.action === 'discard') {
+          // 宿主拒绝显示(插件被吊销)时不退回 banner——与没有通知 API 时一样,只是不提示;刷新照常进行
+          tryNotify(app, { kind: 'info', message: visibleText(`Hunk discarded from ${drawer.filePath}`) });
         }
         await store.getState().refresh();
         if (!mountedRef.current) return;
