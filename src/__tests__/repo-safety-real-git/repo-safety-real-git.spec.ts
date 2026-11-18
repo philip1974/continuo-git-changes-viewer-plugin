@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchDiff, FILE_READ_TIMEOUT_MS, MAX_FILE_BYTES } from '../../git/diff-fetcher';
 import { discardFile } from '../../git/discard-file';
 import { discardHunk } from '../../git/discard-hunk';
-import { DISABLED_HOOKS_PATH, gitExec, KNOWN_HOOK_EVENTS } from '../../git/exec';
+import { DISABLED_HOOKS_PATH, gitExec, KNOWN_HOOK_EVENTS, LITERAL_ARGV_CONFIG } from '../../git/exec';
 import { detectRepoHooks } from '../../git/repo-hooks';
 import { stageHunk } from '../../git/stage-hunk';
 import { extractHunkPatchFromUnifiedDiff } from '../../git/hunk-patch';
@@ -2404,4 +2404,234 @@ describe('config scopes: only system / global / command are trusted (real git)',
       git(repo, 'config', 'filter.x.clean', marker('repo-filter'));
       expect(await probeRepoSafety(app, repo)).toMatchObject({ kind: 'restricted', reason: 'unsafe-config', keys: ['filter.x.clean'] });
     }));
+});
+
+// macOS:仓库 config 里的 core.precomposeUnicode=true(`git init` 默认写入)让 git 把命令行参数与读目录得到的
+// 名字转成预组合形式(NFC),index 里的名字不转换。其它平台的 git 不读这个键,文件系统也区分两种形式——
+// 下面的断言在两类平台上都成立("每个操作作用于 status 列出的那个条目");只有 fixture 证明(去掉固定参数后
+// 出错)以"这个 git 确实改写参数"为前提。
+describe('file names reach git byte for byte whatever core.precomposeUnicode says (real git)', () => {
+  const NFC = 'café.txt';
+  const NFD = 'café.txt';
+  // 不做任何转换的 git(测试自己读写 index 用)
+  const raw = (...args: string[]) => git(repo, '-c', 'core.precomposeUnicode=false', ...args);
+  const indexNames = () => raw('ls-files', '-z').split('\0').filter(Boolean).sort();
+  const indexBlob = (name: string) => raw('cat-file', 'blob', `:0:${name}`);
+  const headBlob = (name: string) => raw('cat-file', 'blob', `HEAD:${name}`);
+  const blobOf = (content: string) =>
+    execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: repo, input: content, env: ENV, encoding: 'utf8' }).trim();
+  /** 这个 git 在 core.precomposeUnicode=true 时改写命令行参数(macOS)。 */
+  const rewritesArgv = () => {
+    const probe = blobOf('probe\n');
+    const idx = join(base, 'probe-index');
+    const env = { ...ENV, GIT_INDEX_FILE: idx };
+    execFileSync('git', ['-c', 'core.precomposeUnicode=false', 'update-index', '--add', '--cacheinfo', `100644,${probe},${NFD}`], { cwd: repo, env });
+    try {
+      execFileSync('git', ['-c', 'core.precomposeUnicode=true', 'cat-file', '-e', `:0:${NFD}`], { cwd: repo, env, stdio: 'ignore' });
+      return false;
+    } catch {
+      return true;
+    } finally {
+      rmSync(idx, { force: true });
+    }
+  };
+  const noPin = () => tamperedApp({ dropPins: LITERAL_ARGV_CONFIG.map(([k]) => k) });
+  const entry = (changes: Awaited<ReturnType<typeof scanStatus>>, path: string) => {
+    const change = changes.find((c) => c.path === path);
+    if (!change) throw new Error(`no status entry for ${JSON.stringify(path)} in ${JSON.stringify(changes.map((c) => c.path))}`);
+    return change;
+  };
+  const okDiff = async (app: CoPluginApp, change: Awaited<ReturnType<typeof scanStatus>>[number], mode: 'staged' | 'changed') => {
+    const d = await fetchDiff(app, repo, change, mode);
+    if (!d.ok) throw new Error(`${change.path}: ${d.message}`);
+    return d;
+  };
+
+  beforeEach(() => {
+    git(repo, 'config', 'core.precomposeUnicode', 'true');
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'config', 'user.email', 't@t');
+  });
+
+  it('R66 an index entry with an NFD name (`MM`): the Staged view shows its index blob, both diffs are non-empty, stage / unstage / discard (file and hunk) change that entry and create no second one, and the commit contains what was shown; without the pin the staged content is unreadable while the commit still goes through', async () => {
+    // index 条目按 NFD 名建立(旧 mac 仓库 / Linux 上提交 / 压缩包带来的)
+    raw('update-index', '--add', '--cacheinfo', `100644,${blobOf('one\n')},${NFD}`);
+    raw('commit', '-qm', 'nfd entry');
+    writeFileSync(join(repo, NFD), 'one\ntwo\n');
+    raw('add', '--', NFD);
+    writeFileSync(join(repo, NFD), 'one\ntwo\nthree\n');
+    expect(indexNames()).toEqual(['f.txt', 'g.txt', NFD].sort());
+
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('trusted');
+    let changes = await scanStatus(app, repo);
+    expect(entry(changes, NFD)).toMatchObject({ statusX: 'M', statusY: 'M' });
+
+    const staged = await okDiff(app, entry(changes, NFD), 'staged');
+    expect(staged).not.toHaveProperty('withheld');
+    expect(staged.modified).toBe('one\ntwo\n');
+    expect(staged.original).toBe('one\n');
+    expect(staged.unifiedDiff).toContain('+two');
+    expect(staged.unifiedDiff).not.toContain('+three');
+    const unstaged = await okDiff(app, entry(changes, NFD), 'changed');
+    expect(unstaged.modified).toBe('one\ntwo\nthree\n');
+    expect(unstaged.unifiedDiff).toContain('+three');
+
+    if (rewritesArgv()) {
+      // fixture 证明:不固定时参数被改成 NFC——index 里没有这个名字
+      const loose = await okDiff(noPin(), entry(changes, NFD), 'staged');
+      expect(loose).toMatchObject({ modified: '', unifiedDiff: '' });
+      expect(loose.withheld).toBeDefined();
+      expect((await stageFile(noPin(), repo, NFD)).ok).toBe(true);
+      expect(indexNames()).toEqual(['f.txt', 'g.txt', NFD, NFC].sort());
+      raw('rm', '-q', '--cached', '--', NFC);
+    }
+
+    // stage:更新的是 NFD 条目,不新增条目
+    expect(await stageFile(app, repo, NFD)).toEqual({ ok: true });
+    expect(indexNames()).toEqual(['f.txt', 'g.txt', NFD].sort());
+    expect(indexBlob(NFD)).toBe('one\ntwo\nthree\n');
+    // unstage(restore --staged 与 reset 兜底)
+    _resetRestoreCache();
+    expect(await unstageFile(app, repo, NFD)).toEqual({ ok: true });
+    expect(indexBlob(NFD)).toBe('one\n');
+    raw('add', '--', NFD);
+    expect((await gitExec(app, repo, ['reset', 'HEAD', '--', NFD])).exitCode).toBe(0);
+    expect(indexBlob(NFD)).toBe('one\n');
+    expect(indexNames()).toEqual(['f.txt', 'g.txt', NFD].sort());
+
+    // hunk 级:补丁里的路径来自 diff 输出(NFD),按原样匹配 index
+    changes = await scanStatus(app, repo);
+    const d = await okDiff(app, entry(changes, NFD), 'changed');
+    const lines = d.unifiedDiff.split('\n');
+    const patch = extractHunkPatchFromUnifiedDiff(NFD, d.unifiedDiff, lines.findIndex((l) => l.startsWith('@@')));
+    expect(await stageHunk(app, repo, patch!)).toMatchObject({ ok: true });
+    expect(indexBlob(NFD)).toBe('one\ntwo\nthree\n');
+    expect(await unstageHunk(app, repo, patch!)).toMatchObject({ ok: true });
+    expect(indexBlob(NFD)).toBe('one\n');
+    expect(await discardHunk(app, repo, patch!)).toMatchObject({ ok: true });
+    expect(readFileSync(join(repo, NFD), 'utf8')).toBe('one\n');
+
+    // discard(文件级):工作树回到 index 版本
+    writeFileSync(join(repo, NFD), 'one\ntwo\n');
+    raw('add', '--', NFD);
+    writeFileSync(join(repo, NFD), 'scratch\n');
+    expect(await discardFile(app, repo, NFD)).toEqual({ ok: true });
+    expect(readFileSync(join(repo, NFD), 'utf8')).toBe('one\ntwo\n');
+
+    // 提交的正是 Staged 区显示的内容
+    changes = await scanStatus(app, repo);
+    const shown = await okDiff(app, entry(changes, NFD), 'staged');
+    expect(await gitCommit(app, repo, 'commit nfd')).toMatchObject({ ok: true });
+    expect(headBlob(NFD)).toBe(shown.modified);
+    expect(indexNames()).toEqual(['f.txt', 'g.txt', NFD].sort());
+  });
+
+  it('R67 an ordinary repository whose files have decomposed names on disk (Finder-style: accented Latin, Hangul jamo): the list has no phantom untracked row, an untracked file is staged by the name status reported, and viewing / unstaging / modifying / discarding it keeps working', async () => {
+    const HANGUL_NFD = '한글.txt';
+    // 磁盘上是分解形式的名字;status / add 按仓库设置读目录(macOS 上报告并记录为 NFC)
+    writeFileSync(join(repo, NFD), 'tracked\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'tracked decomposed-on-disk file');
+    const trackedName = git(repo, 'ls-files', '-z').split('\0').filter((n) => n && n !== 'f.txt' && n !== 'g.txt');
+    expect(trackedName).toHaveLength(1);
+    appendFileSync(join(repo, NFD), 'edited\n');
+    writeFileSync(join(repo, HANGUL_NFD), 'new\n');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    let changes = await scanStatus(app, repo);
+    // 恰好两条:已跟踪文件的修改 + 一个未跟踪文件。固定 status 的 precomposeUnicode=false 时,macOS 上
+    // 已跟踪文件会多出一条 `??`(磁盘名与 index 名的形式不同)。
+    expect(changes.map((c) => `${c.statusX}${c.statusY}`).sort()).toEqual([' M', '??']);
+    expect(changes.find((c) => c.statusY === 'M')!.path).toBe(trackedName[0]);
+    expect((await readStatusHash(app, repo)).split('\0').filter(Boolean)).toHaveLength(2);
+    const tracked = changes.find((c) => c.statusY === 'M')!;
+    const untracked = changes.find((c) => c.statusX === '?')!;
+    expect(untracked.path.normalize('NFC')).toBe(HANGUL_NFD.normalize('NFC'));
+
+    // 已跟踪文件:查看 / 暂存 / 取消 / 丢弃
+    const d = await okDiff(app, tracked, 'changed');
+    expect(d.unifiedDiff).toContain('+edited');
+    expect(d.modified).toBe('tracked\nedited\n');
+    expect(await stageFile(app, repo, tracked.path)).toEqual({ ok: true });
+    expect(indexBlob(tracked.path)).toBe('tracked\nedited\n');
+    expect(await unstageFile(app, repo, tracked.path)).toEqual({ ok: true });
+    expect(indexBlob(tracked.path)).toBe('tracked\n');
+    expect(await discardFile(app, repo, tracked.path)).toEqual({ ok: true });
+    expect(readFileSync(join(repo, NFD), 'utf8')).toBe('tracked\n');
+
+    // 未跟踪文件:内容可见;按 status 报告的名字暂存(面板对 `??` 行传 untracked: true)
+    expect((await okDiff(app, untracked, 'changed')).modified).toBe('new\n');
+    expect(await stageFile(app, repo, untracked.path, { untracked: true })).toEqual({ ok: true });
+    changes = await scanStatus(app, repo);
+    expect(changes.map((c) => `${c.statusX}${c.statusY} ${c.path}`)).toEqual([`A  ${untracked.path}`]);
+    expect(indexBlob(untracked.path)).toBe('new\n');
+    expect((await okDiff(app, entry(changes, untracked.path), 'staged')).modified).toBe('new\n');
+
+    if (rewritesArgv()) {
+      // fixture 证明:对未跟踪路径也固定 false 时,git add 以 0 退出却什么都没暂存
+      raw('rm', '-q', '--cached', '--', untracked.path);
+      expect(await stageFile(app, repo, untracked.path)).toEqual({ ok: true });
+      expect(indexNames()).not.toContain(untracked.path);
+      expect(await stageFile(app, repo, untracked.path, { untracked: true })).toEqual({ ok: true });
+      expect(indexNames()).toContain(untracked.path);
+    }
+
+    // 暂存后的新文件再改:Changes 区的增量、文件级暂存、取消暂存都作用于同一条目
+    appendFileSync(join(repo, HANGUL_NFD), 'more\n');
+    changes = await scanStatus(app, repo);
+    expect(changes.map((c) => `${c.statusX}${c.statusY} ${c.path}`)).toEqual([`AM ${untracked.path}`]);
+    expect(await stageFile(app, repo, untracked.path)).toEqual({ ok: true });
+    expect(indexBlob(untracked.path)).toBe('new\nmore\n');
+    expect(await unstageFile(app, repo, untracked.path)).toEqual({ ok: true });
+    changes = await scanStatus(app, repo);
+    expect(changes.map((c) => `${c.statusX}${c.statusY} ${c.path}`)).toEqual([`?? ${untracked.path}`]);
+  });
+
+  it('R68 the index holds both an NFC and an NFD entry of the same name: each row is viewed, staged, unstaged and discarded on its own entry', async () => {
+    raw('update-index', '--add', '--cacheinfo', `100644,${blobOf('nfc v1\n')},${NFC}`);
+    raw('update-index', '--add', '--cacheinfo', `100644,${blobOf('nfd v1\n')},${NFD}`);
+    raw('commit', '-qm', 'both forms');
+    // 规范化不敏感的文件系统(APFS / HFS+)上两个名字是同一个文件;敏感的文件系统上是两个文件
+    writeFileSync(join(repo, NFC), 'disk nfc\n');
+    writeFileSync(join(repo, NFD), 'disk nfd\n');
+    const disk = (name: string) => readFileSync(join(repo, name), 'utf8');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    let changes = await scanStatus(app, repo);
+    expect(entry(changes, NFC)).toMatchObject({ statusX: ' ', statusY: 'M' });
+    expect(entry(changes, NFD)).toMatchObject({ statusX: ' ', statusY: 'M' });
+
+    for (const [name, other, v1] of [[NFD, NFC, 'nfd v1\n'], [NFC, NFD, 'nfc v1\n']] as const) {
+      const otherBlob = indexBlob(other);
+      const changed = await okDiff(app, entry(changes, name), 'changed');
+      expect(changed.original).toBe(v1);
+      expect(changed.unifiedDiff).toContain(`-${v1.trim()}`);
+      expect(changed.unifiedDiff).toContain(`+${disk(name).trim()}`);
+
+      expect(await stageFile(app, repo, name)).toEqual({ ok: true });
+      expect(indexBlob(name)).toBe(disk(name));
+      expect(indexBlob(other)).toBe(otherBlob);
+      const staged = await okDiff(app, entry(await scanStatus(app, repo), name), 'staged');
+      expect(staged.modified).toBe(disk(name));
+      expect(staged).not.toHaveProperty('withheld');
+
+      expect(await unstageFile(app, repo, name)).toEqual({ ok: true });
+      expect(indexBlob(name)).toBe(v1);
+      expect(indexBlob(other)).toBe(otherBlob);
+      expect(indexNames()).toEqual(['f.txt', 'g.txt', NFC, NFD].sort());
+    }
+
+    // discard:工作树文件回到**这个**条目的 index 版本
+    changes = await scanStatus(app, repo);
+    expect(await discardFile(app, repo, entry(changes, NFD).path)).toEqual({ ok: true });
+    expect(disk(NFD)).toBe('nfd v1\n');
+    expect(indexBlob(NFC)).toBe('nfc v1\n');
+    writeFileSync(join(repo, NFC), 'disk again\n');
+    expect(await discardFile(app, repo, NFC)).toEqual({ ok: true });
+    expect(disk(NFC)).toBe('nfc v1\n');
+  });
 });

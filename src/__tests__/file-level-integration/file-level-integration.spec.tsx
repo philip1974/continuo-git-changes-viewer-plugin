@@ -68,10 +68,24 @@ describe('file-level write-op integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stage file new.txt' }));
 
     await vi.waitFor(() => {
-      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['add', '--', 'new.txt']), expect.anything());
+      // 未跟踪行:名字来自 git 读目录,add 不固定 core.precomposeUnicode(见 exec T13)
+      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['add', '--', 'new.txt'], { untrackedPathArgs: true }), expect.anything());
       expect(refresh).toHaveBeenCalledTimes(1);
     });
     expect(notifications.show).toHaveBeenCalledWith({ kind: 'info', message: 'Staged new.txt' });
+  });
+
+  it('T35b stages a tracked Changed row with the byte-exact argument pin (core.precomposeUnicode=false)', async () => {
+    const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
+    const nfd = 'cafe\u0301.txt';
+    renderWithChanges([{ path: nfd, status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }], exec);
+
+    fireEvent.click(screen.getByRole('button', { name: `Stage file ${nfd}` }));
+
+    await vi.waitFor(() => {
+      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['add', '--', nfd]), expect.anything());
+    });
+    expect(buildGitArgs(['add', '--', nfd])).toContain('core.precomposeUnicode=false');
   });
 
   it('T36 discards a Changed MM file with checkout -- and never HEAD --', async () => {

@@ -212,7 +212,7 @@ export function GitViewerPanel({
     }
 
     const result = action === 'stage'
-      ? await stageFile(app, repoRoot, change.path)
+      ? await stageFile(app, repoRoot, change.path, { untracked: change.statusX === '?' })
       : await unstageFile(app, repoRoot, change.path);
     if (!mountedRef.current) return;
 

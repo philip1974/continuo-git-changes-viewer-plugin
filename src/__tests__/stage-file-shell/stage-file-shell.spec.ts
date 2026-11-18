@@ -57,4 +57,19 @@ describe('stageFile shell wrapper', () => {
       error: 'git add exit 128',
     });
   });
+
+  it('T5 an untracked path is added with the repository\'s own core.precomposeUnicode (its name was read from the directory under that setting); a tracked path pins it to false', async () => {
+    const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
+    const app = { shell: { exec } } as unknown as CoPluginApp;
+    const pin = 'core.precomposeUnicode=false';
+
+    await stageFile(app, '/repo', 'caf\u00e9.txt', { untracked: true });
+    expect(exec.mock.calls[0]?.[1]).toEqual(buildGitArgs(['add', '--', 'caf\u00e9.txt'], { untrackedPathArgs: true }));
+    expect(exec.mock.calls[0]?.[1]).not.toContain(pin);
+
+    await stageFile(app, '/repo', 'cafe\u0301.txt');
+    await stageFile(app, '/repo', 'cafe\u0301.txt', { untracked: false });
+    expect(exec.mock.calls[1]?.[1]).toContain(pin);
+    expect(exec.mock.calls[2]?.[1]).toContain(pin);
+  });
 });

@@ -314,3 +314,26 @@ Config scopes (`repo-safety` T3–T3b, T7b–T7c; run with git 2.50.1 (Apple) an
   and none of those programs is started.
 - R65b: a plain repository under the real system configuration → `trusted`,
   cacheable; the same kind of key in the repository → restricted.
+
+File names byte for byte (`exec` T13; run with git 2.50.1 (Apple) and 2.56.1;
+the "without the pin" proofs only run where git rewrites arguments, i.e.
+macOS):
+
+- R66: repository config `core.precomposeUnicode=true`, index entry with an
+  NFD name, state `MM` → the Staged view is its index blob (not
+  `no-staged-blob`), both diffs are non-empty, file-level stage / unstage
+  (`restore` and `reset`) / discard and hunk-level stage / unstage / discard
+  act on that entry, no NFC twin appears, and the commit holds what the
+  Staged view showed. Without the pin: staged view empty + withheld, and
+  `add` creates an NFC twin.
+- R67: an ordinary repository whose files have decomposed names on disk
+  (accented Latin, Hangul jamo): exactly one row per file (no phantom `??`
+  for the tracked one — `status` keeps the repository setting), tracked file
+  view / stage / unstage / discard work, the untracked file is staged under
+  the name `status` reported (`untracked: true`), then `AM` → stage → unstage
+  round-trips. With the pin applied to the untracked `add`, git exits 0 and
+  stages nothing.
+- R68: the index holds both the NFC and the NFD spelling (one file on APFS,
+  two on a normalization-sensitive file system): each row's view, stage,
+  unstage and discard touch only its own entry.
+

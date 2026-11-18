@@ -53,6 +53,14 @@ invocation against executable settings in an untrusted repository config:
   verbatim from `git status`; as pathspecs a file named `*`, `:(glob)**` or
   `[id].tsx` would make "stage / discard this file" hit other files. Not set
   for `commit` (no path arguments, and its env reaches hooks that use globs).
+- Arguments are passed byte for byte: `-c core.precomposeUnicode=false`
+  (`LITERAL_ARGV_CONFIG`) on every command except `status`, `commit` and an
+  `add` of an untracked path (`untrackedPathArgs`). On macOS a repository
+  config `core.precomposeUnicode=true` makes git rewrite arguments to NFC, so
+  an index entry with an NFD name (reported verbatim by `status`) could not be
+  addressed. `status` and the untracked `add` keep the repository setting
+  because they depend on directory names being converted the same way; `commit`
+  takes no paths and its `-c` values reach hooks.
 - An app shell may carry a guard (see `repo-safety`); a refusal or a guard error
   returns a failed result (exit 128) and git is not spawned (fail-closed).
 
@@ -61,3 +69,4 @@ flags. T3b nested-repository pins/flags on every subcommand. T4 commit keeps hoo
 T6 throwing guard fails closed. T7 passing guard runs the hardened command. T8 every non-commit subcommand disables hooks. T8b … and switches off every hook event; commit carries no `hook.*` argument.
 T9 `GIT_ALLOW_PROTOCOL` is empty (caller env cannot re-enable it) and unset only for a hooks-confirmed commit.
 T11 literal pathspecs for every non-commit call. T12 output pins. T10 `stripTrailingNewline` (used for path-valued git output instead of `trim()`) removes one trailing LF/CRLF only.
+T13 `core.precomposeUnicode=false` on every index-path command, absent from status / untracked add / commit. T13b `gitExec` forwards `untrackedPathArgs` to the argument builder only.

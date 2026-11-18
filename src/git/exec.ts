@@ -14,6 +14,11 @@ export interface GitExecOptions
    * 只有这时 commit 才不注入断网参数 / 环境变量(见 buildGitArgs)。
    */
   readonly repoHooksConfirmed?: boolean;
+  /**
+   * 路径参数是 status 报告的**未跟踪**路径(`??`)——名字来自 git 读目录的结果,不是 index 里的条目。
+   * 此时不固定 core.precomposeUnicode(见 LITERAL_ARGV_CONFIG);只有 `git add -- <未跟踪路径>` 需要。
+   */
+  readonly untrackedPathArgs?: boolean;
 }
 
 // 安全加固(恶意仓库 .git/config 的可执行配置):以下全局选项 / 命令行作用域配置在
@@ -100,12 +105,38 @@ export const PINNED_OUTPUT_CONFIG: ReadonlyArray<readonly [key: string, value: s
   ['apply.ignoreWhitespace', 'no'],
 ];
 
+// 参数逐字节传给 git:除 commit / status 外的每次调用都加(未跟踪路径的 add 例外,见下)。
+// macOS 上 `core.precomposeUnicode=true`(`git init` 默认写进仓库 config)让 git 做两件事:(1) 把**命令行
+// 参数**里可组合的序列转成预组合形式(NFD → NFC);(2) 把**读目录**得到的名字同样转换。index 里的名字不转换。
+// index 里若有 NFD 名字的条目(旧 mac 仓库、Linux 上提交的、压缩包里带来的),status 原样报告 NFD 名,而插件
+// 把它当参数传回去时被 (1) 改成 NFC:`cat-file blob :0:<NFD>` 以 128 退出(Staged 区看不到将要提交的内容)、
+// `diff -- <NFD>` 输出 0 行、`add -- <NFD>` 不更新原条目而是另建一个 NFC 条目(实测 git 2.50.1 / 2.56.1)。
+// 固定为 false 后参数不再被改写,与 status 给出的字节序列一致。对 index 条目只有好处:这些命令按 index 里的
+// 名字匹配、按该名字 lstat(APFS / HFS+ 不区分规范化形式),不依赖读目录。
+// 两个例外(都必须保留仓库自己的设置,否则正常的 mac 仓库会退化——实测):
+// - status:固定为 false 时读目录的名字不再转换。磁盘上是 NFD 名(Finder / 多数 Cocoa 应用创建的文件,
+//   韩文、日文浊音、带重音的拉丁字母都是)、index 里是 NFC 名的已跟踪文件,会多出一条 `?? <NFD 名>`。
+//   status 不带路径参数,不需要固定。
+// - `add -- <未跟踪路径>`(GitExecOptions.untrackedPathArgs):未跟踪路径的名字是 status 按仓库设置读目录
+//   得到的(磁盘 NFD → 报告 NFC)。add 靠读目录找到它;固定为 false 后读到的是 NFD 名,与参数不匹配,
+//   git 以 0 退出却什么都没暂存。这类名字是转换的结果,再转换一次不变,参数本来就不会被改写。
+// commit 不加:没有路径参数,而 `-c` 会传给 hooks(hooks 里的 `git add` 同样依赖读目录转换)。
+// 非 macOS 的 git 不读这个键(precompose 只在 Darwin 上编译)。
+export const LITERAL_ARGV_CONFIG: ReadonlyArray<readonly [key: string, value: string]> = [
+  ['core.precomposeUnicode', 'false'],
+];
+
+/** 不带路径参数、且依赖"读目录得到的名字按仓库设置转换"的子命令(见 LITERAL_ARGV_CONFIG)。 */
+const DIRECTORY_NAME_SUBCOMMANDS: ReadonlySet<string> = new Set(['status']);
+
 const pins = (config: ReadonlyArray<readonly [string, string]>): string[] =>
   config.flatMap(([key, value]) => ['-c', `${key}=${value}`]);
 
 export const GIT_GLOBAL_ARGS: readonly string[] = ['--no-optional-locks', '--no-pager', ...pins(PINNED_CONFIG)];
 
 const OUTPUT_ARGS: readonly string[] = pins(PINNED_OUTPUT_CONFIG);
+
+const LITERAL_ARGV_ARGS: readonly string[] = pins(LITERAL_ARGV_CONFIG);
 
 const NO_NETWORK_ARGS: readonly string[] = ['-c', 'protocol.allow=never'];
 
@@ -199,6 +230,12 @@ function runsHooks(args: readonly string[]): boolean {
 
 export interface GitHardeningOptions {
   readonly repoHooksConfirmed?: boolean;
+  readonly untrackedPathArgs?: boolean;
+}
+
+function literalArgv(args: readonly string[], opts: GitHardeningOptions): boolean {
+  if (runsHooks(args) || opts.untrackedPathArgs === true) return false;
+  return args[0] === undefined || !DIRECTORY_NAME_SUBCOMMANDS.has(args[0]);
 }
 
 /** 只有"用户已确认运行仓库 hooks 的 commit"保留联网能力(hooks 里可能要 fetch)。 */
@@ -212,6 +249,7 @@ export function buildGitArgs(args: readonly string[], opts: GitHardeningOptions 
     ...GIT_GLOBAL_ARGS,
     ...(networkAllowed(args, opts) ? [] : NO_NETWORK_ARGS),
     ...(runsHooks(args) ? [] : [...NO_HOOKS_ARGS, ...OUTPUT_ARGS]),
+    ...(literalArgv(args, opts) ? LITERAL_ARGV_ARGS : []),
   ];
   if (subcommand === undefined) return globals;
   const extra = SUBCOMMAND_HARDENING[subcommand] ?? [];
@@ -260,7 +298,7 @@ export async function gitExecUnguarded(
   args: readonly string[],
   opts: GitExecOptions = {},
 ): Promise<PluginShellExecResult> {
-  const hardening = { repoHooksConfirmed: opts.repoHooksConfirmed };
+  const hardening = { repoHooksConfirmed: opts.repoHooksConfirmed, untrackedPathArgs: opts.untrackedPathArgs };
   return app.shell.exec('git', buildGitArgs(args, hardening), {
     cwd,
     timeoutMs: opts.timeoutMs,

@@ -71,6 +71,8 @@ const NO_NETWORK = [
   '-c', 'i18n.logOutputEncoding=UTF-8',
   '-c', 'apply.ignoreWhitespace=no',
 ];
+// 参数逐字节传递:除 status / commit / 未跟踪路径的 add 外的每次调用(见 T13)
+const LITERAL_ARGV = ['-c', 'core.precomposeUnicode=false'];
 const ENV = {
   GIT_OPTIONAL_LOCKS: '0',
   GIT_TERMINAL_PROMPT: '0',
@@ -112,22 +114,22 @@ describe('gitExec hardened shell wrapper', () => {
 
     expect(exec).toHaveBeenCalledWith(
       'git',
-      [...GLOBALS, ...NO_NETWORK, 'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short', '--no-color'],
+      [...GLOBALS, ...NO_NETWORK, ...LITERAL_ARGV, 'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short', '--no-color'],
       { cwd: '/repo', env: { LANG: 'C', ...ENV } },
     );
   });
 
   it('T3 diff/show/log never run external diff, textconv or signature verification', () => {
     expect(buildGitArgs(['diff', '--cached', '--', 'a.ts'])).toEqual([
-      ...GLOBALS, ...NO_NETWORK,
+      ...GLOBALS, ...NO_NETWORK, ...LITERAL_ARGV,
       'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short', '--no-color', '--cached', '--', 'a.ts',
     ]);
     expect(buildGitArgs(['show', 'HEAD:a.ts'])).toEqual([
-      ...GLOBALS, ...NO_NETWORK,
+      ...GLOBALS, ...NO_NETWORK, ...LITERAL_ARGV,
       'show', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', 'HEAD:a.ts',
     ]);
     expect(buildGitArgs(['log', '-1', '--pretty=%B'])).toEqual([
-      ...GLOBALS, ...NO_NETWORK,
+      ...GLOBALS, ...NO_NETWORK, ...LITERAL_ARGV,
       'log', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', '-1', '--pretty=%B',
     ]);
   });
@@ -235,7 +237,7 @@ describe('gitExec hardened shell wrapper', () => {
     await gitExec(app, '/repo', ['rev-parse', 'HEAD']);
 
     expect(guard).toHaveBeenCalledWith('/repo');
-    expect(exec).toHaveBeenCalledWith('git', [...GLOBALS, ...NO_NETWORK, 'rev-parse', 'HEAD'], expect.anything());
+    expect(exec).toHaveBeenCalledWith('git', [...GLOBALS, ...NO_NETWORK, ...LITERAL_ARGV, 'rev-parse', 'HEAD'], expect.anything());
   });
 
   it('T9 GIT_ALLOW_PROTOCOL is an empty list (beats repo protocol.<name>.allow) and the caller env cannot re-enable it; only a hooks-confirmed commit leaves it unset', () => {
@@ -267,6 +269,39 @@ describe('output-shaping config is pinned', () => {
     // 与安全 / 提交内容有关的固定值对 commit 同样生效
     expect(commit).toEqual(expect.arrayContaining(['i18n.commitEncoding=UTF-8', 'core.protectHFS=true', 'core.protectNTFS=true']));
     for (const sub of ['diff', 'show', 'log']) expect(buildGitArgs([sub])).toContain('--no-color');
+  });
+});
+
+describe('arguments reach git byte for byte (core.precomposeUnicode)', () => {
+  const PIN = 'core.precomposeUnicode=false';
+  const pinned = (args: string[]) => args.flatMap((a, i) => (a === '-c' ? [args[i + 1]!] : []));
+
+  it('T13 every command that takes a path from the index pins core.precomposeUnicode=false, so an NFD name is not rewritten to NFC on the way in; status (names read from the directory), an add of an untracked path, and commit (its -c values reach hooks) keep the repository setting', () => {
+    const nfd = 'cafe\u0301.txt';
+    for (const sub of [['diff', '--', nfd], ['diff', '--cached', '--', nfd], ['cat-file', 'blob', `:0:${nfd}`], ['cat-file', 'blob', `HEAD:${nfd}`],
+      ['add', '--', nfd], ['restore', '--staged', '--', nfd], ['reset', 'HEAD', '--', nfd], ['checkout', '--', nfd],
+      ['apply', '--cached', '-'], ['rev-parse', '--show-prefix'], ['diff', '--numstat', '-z', 'HEAD']]) {
+      const args = buildGitArgs(sub);
+      expect({ sub, pins: pinned(args).filter((p) => p === PIN) }).toEqual({ sub, pins: [PIN] });
+      // 固定参数在子命令之前(全局选项)
+      expect(args.indexOf(PIN)).toBeLessThan(args.indexOf(sub[0]!));
+    }
+    const noPin = (args: string[]) => pinned(args).filter((p) => p.toLowerCase().startsWith('core.precomposeunicode'));
+    expect(noPin(buildGitArgs(['status', '--porcelain=v1', '-z']))).toEqual([]);
+    expect(noPin(buildGitArgs(['add', '--', 'caf\u00e9.txt'], { untrackedPathArgs: true }))).toEqual([]);
+    expect(noPin(buildGitArgs(['commit', '-F', '-']))).toEqual([]);
+    expect(noPin(buildGitArgs(['commit', '-F', '-'], { repoHooksConfirmed: true }))).toEqual([]);
+    // 这个选项只去掉这一个固定参数,其余加固不变
+    const drop = (args: string[]) => args.filter((a, i) => a !== PIN && !(a === '-c' && args[i + 1] === PIN));
+    expect(buildGitArgs(['add', '--', 'x'], { untrackedPathArgs: true })).toEqual(drop(buildGitArgs(['add', '--', 'x'])));
+  });
+
+  it('T13b gitExec forwards untrackedPathArgs to the argument builder and to nothing else', async () => {
+    const { app, exec } = makeApp();
+    await gitExec(app, '/repo', ['add', '--', 'n.txt'], { untrackedPathArgs: true, timeoutMs: 5 });
+    expect(exec.mock.calls[0]?.[1]).toEqual(buildGitArgs(['add', '--', 'n.txt'], { untrackedPathArgs: true }));
+    expect(exec.mock.calls[0]?.[1]).not.toContain(PIN);
+    expect(exec.mock.calls[0]?.[2]).not.toHaveProperty('untrackedPathArgs');
   });
 });
 

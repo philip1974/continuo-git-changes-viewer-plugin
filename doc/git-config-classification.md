@@ -31,6 +31,7 @@ keys git gives no switch for.
 | **Restricted** — repository is not operated on | `filter.<drv>.clean/smudge/process`, `diff.<drv>.textconv/command`, `diff.external`, `merge.<drv>.driver`, `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `core.askPass`, `core.gitProxy`, `core.alternateRefsCommand`, `uploadpack.packObjectsHook`, `remote.<n>.uploadpack/receivepack`, `protocol.<n>.allow`, `trailer.<k>.cmd/command`, `gc.recentObjectsHook`, `hook.*` (config-defined hooks, git ≥ 2.54), `core.worktree`, `core.bare` (unless false), `core.attributesFile`, `core.excludesFile`; by value: `core.fsmonitor` (non-boolean), `diff.submodule` (other than short/log), `extensions.refStorage` (other than files/reftable); plus git-lfs `lfs.extension.*` / `lfs.customtransfer.*` | 21 |
 | **Pinned with `-c`** (every command) | `core.fsmonitor=false`, `log.showSignature=false`, `submodule.recurse=false`, `diff.submodule=short`, `status.submoduleSummary=false`, `maintenance.auto=false`, `gc.auto=0`, `core.protectHFS=true`, `core.protectNTFS=true`, `i18n.commitEncoding=UTF-8`; `fsmonitor.*` (daemon never started) | 12 |
 | **Pinned with `-c`** (every command but `commit`, whose `-c` values reach hooks) | `protocol.allow=never` (also on a commit whose hooks were not confirmed), `core.hooksPath=/dev/null`, `hook.<event>.enabled=false` for every githooks(5) event (git ≥ 2.55), `status.renames=true`, `diff.renames=true`, `color.ui=false`, `color.diff=false`, `diff.noprefix=false`, `diff.mnemonicPrefix=false`, `diff.srcPrefix=a/`, `diff.dstPrefix=b/`, `diff.context=3`, `diff.interHunkContext=0`, `diff.suppressBlankEmpty=false`, `diff.relative=false`, `i18n.logOutputEncoding=UTF-8`, `apply.ignoreWhitespace=no` | 16 |
+| **Pinned with `-c`** (every command but `commit`, `status`, and `add` of an untracked path) | `core.precomposeUnicode=false` — arguments reach git byte for byte (see note) | 1 |
 | **Never triggered** — auto-maintenance is pinned off | remaining `gc.*`, `maintenance.*` | 31 |
 | **Overridden by a fixed flag** | `diff.ignoreSubmodules`, `submodule.<n>.ignore` (`--ignore-submodules=dirty`; a `-c` would lose to `submodule.<n>.ignore`); `core.pager`, `pager.<cmd>` (`--no-pager`); `diff.trustExitCode`, `diff.<drv>.trustExitCode/cachetextconv` (`--no-ext-diff --no-textconv`); `apply.whitespace` (`--whitespace=nowarn`); `format.pretty` (explicit `--pretty`); `status.branch/short/showStash/aheadBehind/relativePaths/displayCommentPrefix`, `column.*` (`--porcelain=v1 -z`); remaining `color.*` (`--no-color`, porcelain, `commit --quiet`); `commit.status/verbose/template` (`-F -`, no editor) | 104 |
 | **Overridden by environment** | `core.editor`, `sequence.editor` (`GIT_EDITOR=:`) | 2 |
@@ -72,6 +73,22 @@ Notes on the last two rows (keys whose names look dangerous):
   switch). Sources: `Documentation/config/hook.adoc`, `git-hook(1)`, `hook.c`
   at v2.54.0 / v2.56.1; behaviour verified with git 2.56.1
   (`repo-safety-real-git` R46–R47).
+- `core.precomposeUnicode` (macOS only; `git init` writes `true` into the
+  repository config): when true git rewrites **command-line arguments** and
+  **names read from directories** to precomposed form (NFD → NFC); names in the
+  index are left alone. An index entry with an NFD name is reported verbatim
+  by `status`, but handed back as an argument it became NFC: `cat-file blob
+  :0:<path>` exited 128 (Staged content invisible while Commit stayed
+  enabled), `diff -- <path>` printed nothing, `add -- <path>` created a second
+  NFC entry. Pinned to `false` so arguments are passed unchanged
+  (`LITERAL_ARGV_CONFIG`). Deliberately **not** pinned for: `status` (with
+  `false`, a tracked NFC entry whose file has an NFD name on disk — what
+  Finder and most Cocoa apps create — gains a phantom `?? <NFD name>` row);
+  `add -- <untracked path>` (`untrackedPathArgs`: the name was produced by the
+  directory conversion and `add` must read the directory the same way, else
+  it exits 0 having staged nothing); `commit` (no path arguments; `-c` values
+  reach hooks). Verified with git 2.50.1 and 2.56.1 (`repo-safety-real-git`
+  R66–R68).
 - `extensions.partialClone` and promisor remotes are deliberately not
   restricted (blobless clones are common); the network block keeps missing
   objects missing, and `commit --quiet` avoids reading them at all.
