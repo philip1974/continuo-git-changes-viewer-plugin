@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { fetchDiff } from '../../git/diff-fetcher';
 import { readStatusHash } from '../../git/status-hash';
 import { scanStatus } from '../../git/status-scanner';
-import { AMEND_HEAD_CHANGED_MESSAGE, REPO_CHANGED_MESSAGE } from '../../panel/CommitEditor';
+import { AMEND_HEAD_CHANGED_MESSAGE, REPO_CHANGED_MESSAGE, VIEW_REFRESHED_MESSAGE, VIEW_REFRESHING_MESSAGE } from '../../panel/CommitEditor';
 import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CoPluginApp, Disposable, PanelApi, PanelVisibilityEvent, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 import type { AutoRefreshTimerOpts } from '../../state/auto-refresh-timer';
@@ -25,9 +25,24 @@ const ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTE
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, env: ENV, encoding: 'utf8' });
 
+// 可控的时序(不靠真实时间):非 null 时,每次 exec 发起时问它一次;它返回 promise 的那次调用,进程照常跑完,
+// 但结果要等这个 promise 兑现才交还给插件——"这次读取还在 await"的状态可以保持任意久。
+let holdExec: ((args: readonly string[]) => Promise<void> | undefined) | null = null;
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => { resolve = r; });
+  return { promise, resolve };
+};
+
 // 对应宿主 shell.exec / fs.lstat 的最小实现(见 repo-safety-real-git.spec.ts 的 realApp)
 function realApp(intervalSec: number): CoPluginApp {
-  const exec = (cmd: string, args: readonly string[], opts: PluginShellExecOptions = {}) =>
+  const exec = async (cmd: string, args: readonly string[], opts: PluginShellExecOptions = {}) => {
+    const held = holdExec?.(args);
+    const result = await run(cmd, args, opts);
+    await held;
+    return result;
+  };
+  const run = (cmd: string, args: readonly string[], opts: PluginShellExecOptions = {}) =>
     new Promise<PluginShellExecResult>((resolve) => {
       const child = spawn(cmd, [...args], { cwd: opts.cwd, env: { ...ENV, ...(opts.env ?? {}) } });
       const out: Buffer[] = [];
@@ -89,6 +104,7 @@ beforeEach(() => {
   git(repo, 'commit', '-qm', 'init');
 });
 afterEach(() => {
+  holdExec = null;
   cleanup();
   rmSync(repo, { recursive: true, force: true });
 });
@@ -227,6 +243,8 @@ describe('Amend rewrites the commit whose message was loaded, or nothing (real p
     await timer.opts!.onTick();
     await waitFor(() => expect(store.getState().statusFingerprint).not.toBe(before.fingerprint));
     expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'init' });
+    // 选中的 Staged 行的 diff 在 refresh 之后重读;它到达之前点 Amend 得到的是"仍在刷新"(T35),不是这里要看的
+    await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
 
     const amend = (await screen.findByRole('button', { name: 'Amend last commit' })) as HTMLButtonElement;
     await waitFor(() => expect(amend.disabled).toBe(false));
@@ -244,10 +262,100 @@ describe('Amend rewrites the commit whose message was loaded, or nothing (real p
     await waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'reworded in a terminal' }));
     const again = (await screen.findByRole('button', { name: 'Amend last commit' })) as HTMLButtonElement;
     await waitFor(() => expect(again.disabled).toBe(false));
+    await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
     fireEvent.click(again);
     await waitFor(() => expect(git(repo, 'status', '--porcelain')).toBe(''));
     expect(headSubject()).toBe('reworded in a terminal');
     expect(git(repo, 'show', 'HEAD:n')).toBe('new file\n');
+    await settled(store);
+  });
+});
+
+// F1:提交前的比较以**点击时**屏幕上的内容为基线。此前基线在读完当前指纹之后才从 store 取——在途的 refresh 在
+// 那次 await 期间落盘,store 与仓库都是新的,比较必然通过(复核者按真实时间扫描,+60/+100 ms 档:点击时屏幕
+// 是 v1,提交了 v2 / 提交里多了 secret.env)。这里用 holdExec 把"读当前指纹"的 await 撑住,不靠时间。
+describe('a commit takes what was on screen at the click, or nothing — a refresh landing mid-click does not slip new content in (real panel, real git)', () => {
+  const rows = () => [...document.querySelectorAll('.cgv-path')].map((el) => el.textContent);
+  const commitButton = () => screen.getByRole('button', { name: 'Commit staged changes' }) as HTMLButtonElement;
+  const isFingerprintRead = (args: readonly string[]) => args.includes('--porcelain=v2');
+  const terminal = {
+    content: () => { writeFileSync(join(repo, 'f'), 'v2 UNREVIEWED\n'); git(repo, 'add', 'f'); },
+    newfile: () => { writeFileSync(join(repo, 'secret.env'), 'TOKEN=1\n'); git(repo, 'add', 'secret.env'); },
+  };
+
+  it.each(['content', 'newfile'] as const)(
+    'P5 (%s) v1 is shown; a terminal stages something else; Commit is clicked; while its fingerprint read is still in flight the auto-refresh tick lands the new list — nothing is committed, the panel says the view was refreshed after the click; the next click commits what is now shown',
+    async (kind) => {
+      writeFileSync(join(repo, 'f'), 'v1 reviewed\n');
+      git(repo, 'add', 'f');
+      const { store, timer, shown } = mount(5);
+      await waitFor(() => expect(timer.starts).toBe(1));
+      await waitFor(() => expect(shown()).toBe('staged:v1 reviewed\n'));
+      store.getState().setCommitMessage('msg');
+      await waitFor(() => expect(commitButton().disabled).toBe(false));
+
+      terminal[kind]();
+      // 点击:屏幕上仍是 v1 / 只有 f。提交前的指纹读取(读到的已是新状态)被撑住
+      const gate = deferred();
+      let reads = 0;
+      holdExec = (args) => (isFingerprintRead(args) && reads++ === 0 ? gate.promise : undefined);
+      expect(rows()).toEqual(['f']);
+      fireEvent.click(commitButton());
+      await waitFor(() => expect(reads).toBe(1));
+
+      // 这期间自动刷新的 tick 发现变化,refresh 落盘:store 与仓库都是新的
+      await timer.opts!.onTick();
+      await waitFor(() => expect(store.getState().isLoading).toBe(false));
+      if (kind === 'content') await waitFor(() => expect(shown()).toBe('staged:v2 UNREVIEWED\n'));
+      else expect(rows()).toEqual(['f', 'secret.env']);
+      expect(await readStatusHash(realApp(0), repo)).toBe(store.getState().statusFingerprint);
+
+      gate.resolve();
+      await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'warn', message: VIEW_REFRESHED_MESSAGE, dismissable: true }));
+      await waitFor(() => expect(commitButton().textContent).toBe('Commit'));
+      expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('init');
+      expect(store.getState().commitMessage).toBe('msg');
+
+      // 用户看过新内容后再点:提交的就是屏幕上的
+      holdExec = null;
+      await waitFor(() => expect(store.getState().diffRefreshingKey).toBeNull());
+      fireEvent.click(commitButton());
+      await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
+      expect(git(repo, 'show', '--format=', '--name-only', 'HEAD').trim().split('\n')).toEqual(kind === 'content' ? ['f'] : ['f', 'secret.env']);
+      expect(git(repo, 'cat-file', 'blob', 'HEAD:f')).toBe(kind === 'content' ? 'v2 UNREVIEWED\n' : 'v1 reviewed\n');
+      await settled(store);
+    },
+  );
+
+  it('P6 a refresh is already in flight at the click (the screen still shows v1, the terminal staged v2): nothing is committed, the panel asks to wait; once the refresh has landed the click commits what is shown', async () => {
+    writeFileSync(join(repo, 'f'), 'v1 reviewed\n');
+    git(repo, 'add', 'f');
+    const { store, shown } = mount(0);
+    await waitFor(() => expect(shown()).toBe('staged:v1 reviewed\n'));
+    await waitFor(() => expect(store.getState().isLoading).toBe(false));
+    store.getState().setCommitMessage('msg');
+    await waitFor(() => expect(commitButton().disabled).toBe(false));
+
+    terminal.content();
+    // refresh 在途:它读列表的那一步被撑住
+    const gate = deferred();
+    let held = 0;
+    holdExec = (args) => (args.includes('--porcelain=v1') && held++ === 0 ? gate.promise : undefined);
+    const refreshing = store.getState().refresh();
+    await waitFor(() => expect(held).toBe(1));
+    expect(shown()).toBe('staged:v1 reviewed\n');
+    fireEvent.click(commitButton());
+    await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'warn', message: VIEW_REFRESHING_MESSAGE, dismissable: true }));
+
+    gate.resolve();
+    await refreshing;
+    expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('init');
+    await waitFor(() => expect(shown()).toBe('staged:v2 UNREVIEWED\n'));
+    await waitFor(() => expect(store.getState().diffRefreshingKey).toBeNull());
+
+    fireEvent.click(commitButton());
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
+    expect(git(repo, 'cat-file', 'blob', 'HEAD:f')).toBe('v2 UNREVIEWED\n');
     await settled(store);
   });
 });

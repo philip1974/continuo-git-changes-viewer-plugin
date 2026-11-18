@@ -47,6 +47,10 @@ fingerprint, which the next comparison reports as a change.
 - T16: refresh stores the fingerprint that came with the list (null when the
   load had none); a superseded refresh does not overwrite a newer one;
   `clear()` resets it.
+- T22: `refreshVersion` counts every refresh that lands (new fingerprint, same
+  fingerprint, or an error) and `clear()`; a superseded refresh does not
+  count. The check before a commit uses it to tell whether the list was
+  replaced after the click (`commit-editor-component` T36–T41).
 
 The diff on screen stays until its replacement arrives. A refresh used to
 empty the whole diff cache, the selected row's entry included, so every

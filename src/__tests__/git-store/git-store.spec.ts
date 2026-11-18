@@ -339,6 +339,36 @@ describe('git viewer store', () => {
       store.getState().clear();
       expect(store.getState().statusFingerprint).toBeNull();
     });
+
+    it('T22 refreshVersion goes up once for every refresh that lands — with a new fingerprint, the same one, or an error — and for clear(); a superseded refresh does not land and does not count', async () => {
+      let resolveSlow!: (value: { repoRoot: string; changes: never[]; statusFingerprint: string }) => void;
+      const slowLoad = new Promise<{ repoRoot: string; changes: never[]; statusFingerprint: string }>((res) => (resolveSlow = res));
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce({ repoRoot: '/repo', changes: [], statusFingerprint: 'fp' })
+        .mockResolvedValueOnce({ repoRoot: '/repo', changes: [], statusFingerprint: 'fp' })
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockReturnValueOnce(slowLoad)
+        .mockResolvedValue({ repoRoot: '/repo', changes: [], statusFingerprint: 'fp' });
+      const store = createGitStore({ load });
+      const v0 = store.getState().refreshVersion;
+      await store.getState().refresh();
+      expect(store.getState().refreshVersion).toBe(v0 + 1);
+      await store.getState().refresh();
+      expect(store.getState().refreshVersion).toBe(v0 + 2);
+      await store.getState().refresh();
+      expect(store.getState()).toMatchObject({ statusError: 'boom', refreshVersion: v0 + 3 });
+
+      const slow = store.getState().refresh();
+      expect(store.getState().refreshVersion).toBe(v0 + 3);
+      await store.getState().refresh();
+      resolveSlow({ repoRoot: '/repo', changes: [], statusFingerprint: 'fp-old' });
+      await slow;
+      expect(store.getState().refreshVersion).toBe(v0 + 4);
+
+      store.getState().clear();
+      expect(store.getState().refreshVersion).toBe(v0 + 5);
+    });
   });
   // 选中的那份 diff:refresh 之后留着旧结果显示,直到新结果到达
   describe('the diff on screen stays until its replacement arrives (stale-while-revalidate)', () => {

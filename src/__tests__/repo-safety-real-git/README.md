@@ -408,6 +408,16 @@ driven by the test; run with git 2.50.1 and 2.56.1):
   the panel now shows v2; the second click commits exactly that
   (`commit-editor-component` T29–T30).
 - P3: with nothing changed in between, the first click commits what is shown.
+- P5 (content / new file): v1 is shown, a terminal stages something else,
+  Commit is clicked; while its fingerprint read is held (the test holds the
+  result of that `git status`, no real-time sleeps) the tick lands the new
+  list. Nothing is committed, the panel says the view was refreshed after the
+  click, and the next click commits what is then shown
+  (`commit-editor-component` T36). Before the fix the first click committed
+  v2 / `secret.env`.
+- P6: a refresh is already in flight at the click (its list read is held):
+  nothing is committed and the panel asks to wait (`commit-editor-component`
+  T38).
 
 Bytes that are not valid UTF-8 (`hunk-patch-builder` T8, `path-utils` T8,
 `status-scanner` T10; run with git 2.50.1 and 2.56.1):

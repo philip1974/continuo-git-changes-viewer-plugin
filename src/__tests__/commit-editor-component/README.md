@@ -32,5 +32,29 @@ Residual: the window between reading the fingerprint and git reading the index
   to wait — an equal fingerprint says the list is current, not that this
   content is. A Changes diff being refreshed does not hold a commit back.
 
-Real panel + real git: `repo-safety-real-git` P2–P3.
+The baseline is what was on screen at the click. It used to be read from the
+store *after* the current fingerprint had been read: a refresh in flight could
+land during that await, store and repository then agreed on the new state and
+the comparison passed — the click saw v1 and v2 was committed. Now a snapshot
+(fingerprint, the store's `refreshVersion`, the selected Staged diff object) is
+taken synchronously on entry, before any await; with repository hooks it is the
+snapshot of the click that opened the confirmation.
+
+- T36: a refresh lands while the fingerprint is being read (store and
+  repository both new) → no commit, "the view was refreshed after you clicked".
+- T37: the same when the refresh brought an identical fingerprint — any landing
+  counts; no extra refresh is made.
+- T38: a refresh is in flight at the click → no read, no commit, "still being
+  refreshed".
+- T39: Amend goes through the same comparison.
+- T40: a refresh landing while the hooks confirmation is open stops the commit
+  after the user confirms.
+- T41: the selected Staged diff was replaced between click and comparison → no
+  commit.
+- T42: nothing landed, same fingerprint → the commit goes through.
+
+Residual (human timing, not handled): a refresh that landed just before the
+click — the new list is in the store, possibly not yet painted or read.
+
+Real panel + real git: `repo-safety-real-git` P2–P3, P5–P6.
 

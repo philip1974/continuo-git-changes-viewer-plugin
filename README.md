@@ -93,6 +93,15 @@ After a refresh the diff you are looking at stays on screen until the new one
 has been read; the header shows "Refreshing diff…" meanwhile, and a commit
 clicked while a Staged diff is in that state is held back.
 
+The comparison is made with what was on screen when you clicked. A click while
+a refresh is in flight is held back ("still being refreshed"), and if a refresh
+lands between the click and the comparison — or while the hooks confirmation
+is open — nothing is committed and the panel asks you to review and commit
+again. What cannot be told apart: a refresh that landed an instant before the
+click, so that the new list was on screen (or about to be painted) without you
+having had time to read it. The click then commits what the panel shows at
+that moment.
+
 ### Amend
 
 The commit editor can amend the last commit. Enable "Amend last commit" to load

@@ -70,6 +70,12 @@ export interface GitViewerState {
    * 指纹与**这一份**比较(自动刷新的 tick、面板 / 窗口重新可见、提交前的确认)——没有别的基线。
    */
   statusFingerprint: string | null;
+  /**
+   * 每有一次 refresh 落盘(成功或失败)、或 clear,就加一。"从某一刻到现在,列表有没有被换过"只看它:
+   * 提交前的确认(CommitEditor)在点击时记下它,比较时不同 → 屏幕上已不是点击时的那份内容。
+   * 指纹相同不说明没换过(换成了同样的),指纹不同也可能只是比较的两边一起变了。
+   */
+  refreshVersion: number;
   refresh(): Promise<void>;
   selectFile(path: string, mode: DiffMode): void;
   loadDiff(path: string, mode: DiffMode): Promise<void>;
@@ -177,6 +183,7 @@ const emptyState = {
   restriction: null,
   statusError: null,
   statusFingerprint: null,
+  refreshVersion: 0,
 } satisfies Pick<
   GitViewerState,
   | 'repoRoot'
@@ -192,6 +199,7 @@ const emptyState = {
   | 'restriction'
   | 'statusError'
   | 'statusFingerprint'
+  | 'refreshVersion'
 >;
 
 export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState> {
@@ -247,6 +255,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
           restriction: loaded.restriction ?? null,
           statusError: loaded.statusError ?? null,
           statusFingerprint: loaded.statusFingerprint ?? null,
+          refreshVersion: prev.refreshVersion + 1,
         });
         if (nextSelected) void get().loadDiff(nextSelected.path, nextSelected.mode);
       } catch (err) {
@@ -255,7 +264,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         deps.onError?.('error', message);
         // refresh 本身失败:当前状态未知(列表是上一次的)。statusError 让面板持续显示原因并禁用
         // Commit / Amend,直到下一次 refresh 成功;不再另设可关闭的 banner(同一条信息)。
-        set({ isLoading: false, statusError: message });
+        set({ isLoading: false, statusError: message, refreshVersion: get().refreshVersion + 1 });
       }
     },
     selectFile(path, mode) {
@@ -329,6 +338,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         restriction: null,
         statusError: null,
         statusFingerprint: null,
+        refreshVersion: get().refreshVersion + 1,
       });
     },
     setBanner(banner) {
