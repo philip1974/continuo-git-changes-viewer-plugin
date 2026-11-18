@@ -23,7 +23,7 @@ restricted verdict at one step skips the later ones.
      diff.external, merge drivers, gpg programs, askpass, gitproxy,
      upload/receive pack, protocol.*.allow, trailer commands, git-lfs
      extensions/custom transfers, gc.recentObjectsHook, non-boolean
-     core.fsmonitor) → restricted.
+     core.fsmonitor, `diff.submodule` other than short/log) → restricted.
    - Redirect keys → restricted: `core.worktree` (any value) and `core.bare`
      unless false.
 2. **Layout** (defense in depth, independent of the key list) — one
@@ -66,6 +66,6 @@ restricted verdict at one step skips the later ones.
   uses includes; a layout / symlink restriction is never cached. Every panel
   refresh re-probes (`fresh: true`).
 
-T1 output parsing. T2–T5 executable key classification. T18–T20 redirect keys.
+T1 output parsing. T2–T5 executable key classification (T4b diff.submodule). T18–T20 redirect keys.
 T6–T9 config probe and fail-closed. L1–L7 layout probe. S1–S7 symlink scan.
 T10–T15b cache. T16–T17 guard wiring into `gitExec`.

@@ -830,3 +830,194 @@ describe('repo safety against redirection outside the workspace (real git)', () 
     expect(await probeRepoSafety(realApp(), repo)).toMatchObject({ kind: 'restricted', reason: 'unsafe-layout' });
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// 整分支终审(F1–F6 + 系统枚举)的 real-git 规范。写法同上:每条先证明"去掉对应防护时攻击成立"。
+
+interface Tamper {
+  /** 去掉这些 `-c key=value`(按 key 匹配,大小写不敏感)。 */
+  readonly dropPins?: readonly string[];
+  /** 去掉这些独立参数(如 `--submodule=short`)。 */
+  readonly dropArgs?: readonly string[];
+  /** 去掉插件 env 里的这些变量。 */
+  readonly dropEnv?: readonly string[];
+  /** 追加 env(如 GIT_TRACE=1)。 */
+  readonly addEnv?: Readonly<Record<string, string>>;
+  /** 每次调用的 stderr 收集到这里。 */
+  readonly stderr?: string[];
+}
+
+// 包一层 app.shell.exec:按需去掉插件加固的某一部分(模拟"未加该防护"),或加 GIT_TRACE 观察子进程。
+function tamperedApp(t: Tamper, inner: CoPluginApp = realApp()): CoPluginApp {
+  const exec = inner.shell.exec.bind(inner.shell);
+  const pins = new Set((t.dropPins ?? []).map((k) => k.toLowerCase()));
+  const dropArgs = new Set(t.dropArgs ?? []);
+  const strip = (args: readonly string[]) => {
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]!;
+      const next = args[i + 1];
+      if (a === '-c' && next !== undefined && pins.has(next.slice(0, next.indexOf('=')).toLowerCase())) {
+        i++;
+        continue;
+      }
+      if (dropArgs.has(a)) continue;
+      out.push(a);
+    }
+    return out;
+  };
+  return {
+    ...inner,
+    shell: {
+      exec: async (cmd: string, args: readonly string[], opts: PluginShellExecOptions = {}) => {
+        const env = { ...(opts.env ?? {}), ...(t.addEnv ?? {}) };
+        for (const k of t.dropEnv ?? []) delete env[k];
+        const r = await exec(cmd, cmd === 'git' ? strip(args) : args, { ...opts, env });
+        t.stderr?.push(r.stderr);
+        return r;
+      },
+    },
+  } as unknown as CoPluginApp;
+}
+
+/** GIT_TRACE 输出里 git 起的子进程(`run_command:` 行)。 */
+const spawned = (stderr: readonly string[]) =>
+  stderr.flatMap((s) => s.split('\n')).filter((l) => l.includes('trace: run_command:'));
+
+describe('nested repositories: no plugin git command may spawn a process inside one (real git)', () => {
+  let sub: string;
+
+  // 外层 index 里有 gitlink `sub`(无需 .gitmodules),sub/ 是嵌套仓库:HEAD 与 gitlink 不同、工作树有改动,
+  // 其**自己的** config 带 diff.external / textconv / filter / fsmonitor(外层 config 的受限检测看不到)。
+  function plantNestedRepo(): void {
+    sub = join(repo, 'sub');
+    mkdirSync(sub);
+    git(sub, 'init', '-q', '-b', 'main');
+    writeFileSync(join(sub, 's.txt'), 's\n');
+    writeFileSync(join(sub, '.gitattributes'), '* filter=x diff=x\n');
+    git(sub, 'add', '.');
+    git(sub, 'commit', '-qm', 's1');
+    git(repo, '-c', 'advice.addEmbeddedRepo=false', 'add', 'sub');
+    git(repo, 'commit', '-qm', 'gitlink');
+    appendFileSync(join(sub, 's.txt'), 's2\n');
+    git(sub, 'commit', '-qam', 's2');
+    appendFileSync(join(sub, 's.txt'), 's3\n');
+    git(sub, 'config', 'diff.external', marker('sub-ext'));
+    git(sub, 'config', 'diff.x.textconv', marker('sub-textconv'));
+    git(sub, 'config', 'diff.x.command', marker('sub-diffcmd'));
+    git(sub, 'config', 'filter.x.clean', marker('sub-clean'));
+    git(sub, 'config', 'filter.x.smudge', marker('sub-smudge'));
+    git(sub, 'config', 'core.fsmonitor', marker('sub-fsmonitor'));
+    plantHooks(join(sub, '.git', 'hooks'));
+    clearMarks();
+  }
+
+  const SUB_CHANGE = { path: 'sub', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' } as const;
+
+  it('R32 outer diff.submodule=diff + nested repo with diff.external: without the pin/flag, auto-selecting ` M sub` executes the nested config; hardened → nothing runs and the gitlink change is still shown', async () => {
+    plantNestedRepo();
+    git(repo, 'config', 'diff.submodule', 'diff');
+
+    // 证明 fixture:去掉 -c diff.submodule=short 与 --submodule=short,其它加固(--no-ext-diff 等)原样保留
+    const bare = tamperedApp({ dropPins: ['diff.submodule'], dropArgs: ['--submodule=short'] });
+    const listed = await scanStatus(bare, repo);
+    expect(listed.map((c) => `${c.statusX}${c.statusY} ${c.path}`)).toEqual([' M sub']);
+    await fetchDiff(bare, repo, listed[0]!);
+    expect(marks().some((m) => m.startsWith('sub-'))).toBe(true);
+    clearMarks();
+
+    // 两道防线各自单独也够(命令行 -c 盖过仓库 config;--submodule=short 盖过两者)
+    for (const t of [{ dropPins: ['diff.submodule'] }, { dropArgs: ['--submodule=short'] }, {}] as Tamper[]) {
+      const app = tamperedApp(t);
+      const changes = await scanStatus(app, repo);
+      expect(changes.map((c) => c.path)).toEqual(['sub']);
+      for (const mode of ['changed', 'staged'] as const) {
+        const d = await fetchDiff(app, repo, changes[0]!, mode);
+        expect(d.ok).toBe(true);
+        if (mode === 'changed') expect(d.ok && d.unifiedDiff).toMatch(/^\+Subproject commit [0-9a-f]{40}$/m);
+      }
+      await gitExec(app, repo, ['log', '-1', '-p']);
+      await gitExec(app, repo, ['show', 'HEAD']);
+      expect(marks()).toEqual([]);
+    }
+
+    // 配置层(双保险):外层 diff.submodule=diff 本身即受限
+    const guarded = realApp();
+    const { guard } = installRepoSafetyGuard(guarded);
+    expect(await guard.check(repo, { fresh: true })).toMatchObject({ kind: 'restricted', keys: ['diff.submodule'] });
+  });
+
+  it('R33 GIT_TRACE: every git command the plugin runs spawns no child process at all in a repo with a hostile nested repository (status / diff / stage / unstage / discard / commit / amend)', async () => {
+    plantNestedRepo();
+    // 让 git 更想进子仓库的外层设置(均不在受限键里,靠命令行中和)
+    git(repo, 'config', 'status.submoduleSummary', 'true');
+    git(repo, 'config', 'diff.ignoreSubmodules', 'none');
+    git(repo, 'config', 'submodule.sub.ignore', 'none');
+    git(repo, 'config', 'submodule.sub.url', join(base, 'nowhere'));
+    writeFileSync(join(repo, '.gitmodules'), `[submodule "sub"]\n\tpath = sub\n\turl = ${join(base, 'nowhere')}\n\tignore = none\n`);
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'config', 'user.email', 't@t');
+
+    const driveAll = async (app: CoPluginApp) => {
+      const changes = await scanStatus(app, repo);
+      await readStatusHash(app, repo);
+      for (const c of changes) await fetchDiff(app, repo, c);
+      await readHeadMessage(app, repo);
+      await hasHeadCommit(app, repo);
+      await detectRepoHooks(app, repo);
+      await gitExec(app, repo, ['rev-parse', '--show-prefix']);
+      expect((await stageFile(app, repo, 'sub')).ok).toBe(true);
+      await fetchDiff(app, repo, { ...SUB_CHANGE, statusX: 'M', statusY: ' ' }, 'staged');
+      _resetRestoreCache();
+      expect((await unstageFile(app, repo, 'sub')).ok).toBe(true);
+      expect((await gitExec(app, repo, ['add', '--', 'sub'])).exitCode).toBe(0);
+      expect((await gitExec(app, repo, ['restore', '--staged', '--', 'sub'])).exitCode).toBe(0);
+      expect((await gitExec(app, repo, ['reset', 'HEAD', '--', 'sub'])).exitCode).toBe(0);
+      expect((await discardFile(app, repo, 'sub')).ok).toBe(true);
+      expect((await stageFile(app, repo, 'sub')).ok).toBe(true);
+      expect(await gitCommit(app, repo, 'bump sub')).toMatchObject({ ok: true });
+      appendFileSync(join(repo, 'f.txt'), 'two\n');
+      expect((await stageFile(app, repo, 'f.txt')).ok).toBe(true);
+      expect(await gitCommit(app, repo, 'amended', { amend: true })).toMatchObject({ ok: true });
+      await gitExec(app, repo, ['status']);
+      await gitExec(app, repo, ['log', '-1', '-p']);
+    };
+
+    const stderr: string[] = [];
+    await driveAll(tamperedApp({ addEnv: { GIT_TRACE: '1' }, stderr }));
+    expect(stderr.join('').includes('trace: built-in: git status')).toBe(true); // trace 确实开着
+    expect(spawned(stderr)).toEqual([]);
+    expect(marks()).toEqual([]);
+
+    // 证明 fixture:去掉子模块相关加固后,同一组操作会在 sub/ 里起 git(`run_command: cd sub; ...`;其 filter 被执行见 R34)
+    git(repo, 'reset', '-q', '--hard', 'HEAD~1');
+    const bareErr: string[] = [];
+    await driveAll(
+      tamperedApp({
+        addEnv: { GIT_TRACE: '1' },
+        stderr: bareErr,
+        dropPins: ['status.submoduleSummary', 'maintenance.auto', 'gc.auto'],
+        dropArgs: ['--ignore-submodules=dirty'],
+      }),
+    );
+    const children = spawned(bareErr);
+    expect(children.some((l) => /run_command: cd sub;.* git status --porcelain=2/.test(l))).toBe(true);
+    expect(children.some((l) => l.includes('git submodule summary'))).toBe(true);
+    expect(children.some((l) => l.includes('git maintenance run --auto'))).toBe(true);
+  });
+
+  it('R34 -c diff.ignoreSubmodules=dirty would not be enough: submodule.<name>.ignore=none outranks it, the command-line flag does not', async () => {
+    plantNestedRepo();
+    git(repo, 'config', 'submodule.sub.ignore', 'none');
+    git(repo, 'config', 'submodule.sub.url', join(base, 'nowhere'));
+    writeFileSync(join(repo, '.gitmodules'), `[submodule "sub"]\n\tpath = sub\n\turl = ${join(base, 'nowhere')}\n`);
+    dirty(sub, 's.txt');
+
+    git(repo, '--no-optional-locks', '-c', 'diff.ignoreSubmodules=dirty', 'status', '--porcelain');
+    expect(marks()).toContain('sub-clean');
+    clearMarks();
+
+    await scanStatus(realApp(), repo);
+    expect(marks()).toEqual([]);
+  });
+});

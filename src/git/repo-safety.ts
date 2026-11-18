@@ -86,6 +86,11 @@ const GIT_BOOLEAN = /^(true|false|yes|no|on|off|1|0|)$/i;
 // core.bare=false 是 git init 的默认写法;其它任何值(含无值 = true)都视为"声明没有工作树"。
 const GIT_FALSE = /^(false|no|off|0|)$/i;
 
+// diff.submodule=diff 让 diff / show / log -p 在子仓库目录里起 `git diff`,执行**子仓库** config 里的
+// diff.external / filter(实测零点击)。exec.ts 已用 `-c diff.submodule=short` + `--submodule=short` 中和,
+// 这里是双保险:只有 short / log(都不起子进程)放行,其余值(含无值、未知值)受限。
+const SAFE_DIFF_SUBMODULE = /^(short|log)$/i;
+
 const UNTRUSTED_SCOPES: ReadonlySet<string> = new Set(['local', 'worktree']);
 
 export interface ConfigEntry {
@@ -126,6 +131,9 @@ export function isUnsafeConfigEntry(entry: ConfigEntry): boolean {
   if (isRedirectConfigEntry(entry)) return true;
   if (/^core\.fsmonitor$/i.test(entry.key)) {
     return !GIT_BOOLEAN.test((entry.value ?? '').trim());
+  }
+  if (/^diff\.submodule$/i.test(entry.key)) {
+    return !SAFE_DIFF_SUBMODULE.test((entry.value ?? '').trim());
   }
   return UNSAFE_KEY_PATTERNS.some((re) => re.test(entry.key));
 }

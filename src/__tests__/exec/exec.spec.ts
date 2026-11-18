@@ -28,6 +28,14 @@ const GLOBALS = [
   'log.showSignature=false',
   '-c',
   'submodule.recurse=false',
+  '-c',
+  'diff.submodule=short',
+  '-c',
+  'status.submoduleSummary=false',
+  '-c',
+  'maintenance.auto=false',
+  '-c',
+  'gc.auto=0',
 ];
 const NO_NETWORK = ['-c', 'protocol.allow=never', '-c', 'core.hooksPath=/dev/null'];
 const ENV = {
@@ -60,7 +68,7 @@ describe('gitExec hardened shell wrapper', () => {
 
     expect(exec).toHaveBeenCalledWith(
       'git',
-      [...GLOBALS, ...NO_NETWORK, 'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty'],
+      [...GLOBALS, ...NO_NETWORK, 'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short'],
       { cwd: '/repo', env: { LANG: 'C', ...ENV } },
     );
   });
@@ -68,16 +76,32 @@ describe('gitExec hardened shell wrapper', () => {
   it('T3 diff/show/log never run external diff, textconv or signature verification', () => {
     expect(buildGitArgs(['diff', '--cached', '--', 'a.ts'])).toEqual([
       ...GLOBALS, ...NO_NETWORK,
-      'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--cached', '--', 'a.ts',
+      'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short', '--cached', '--', 'a.ts',
     ]);
     expect(buildGitArgs(['show', 'HEAD:a.ts'])).toEqual([
       ...GLOBALS, ...NO_NETWORK,
-      'show', '--no-ext-diff', '--no-textconv', '--no-show-signature', 'HEAD:a.ts',
+      'show', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', 'HEAD:a.ts',
     ]);
     expect(buildGitArgs(['log', '-1', '--pretty=%B'])).toEqual([
       ...GLOBALS, ...NO_NETWORK,
-      'log', '--no-ext-diff', '--no-textconv', '--no-show-signature', '-1', '--pretty=%B',
+      'log', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '-1', '--pretty=%B',
     ]);
+  });
+
+  it('T3b nothing may spawn git inside a nested repository: diff.submodule / submoduleSummary / auto-maintenance are pinned for every subcommand, commit included', () => {
+    for (const sub of [['status'], ['diff'], ['show', 'HEAD'], ['log', '-1'], ['add', '--', 'a'], ['commit', '-F', '-'], ['checkout', '--', 'a']]) {
+      const args = buildGitArgs(sub);
+      const before = args.slice(0, args.indexOf(sub[0]!));
+      for (const pin of ['diff.submodule=short', 'status.submoduleSummary=false', 'submodule.recurse=false', 'maintenance.auto=false', 'gc.auto=0']) {
+        expect(before[before.indexOf(pin) - 1]).toBe('-c');
+      }
+    }
+    for (const sub of ['diff', 'show', 'log']) {
+      expect(buildGitArgs([sub])).toContain('--submodule=short');
+    }
+    // 必须是命令行参数:-c diff.ignoreSubmodules 会被 submodule.<name>.ignore 盖过
+    expect(buildGitArgs(['status'])).toContain('--ignore-submodules=dirty');
+    expect(buildGitArgs(['diff'])).toContain('--ignore-submodules=dirty');
   });
 
   it('T4 commit (runs user hooks) keeps hardening but does not inject the network block', async () => {

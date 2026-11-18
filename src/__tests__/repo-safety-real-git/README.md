@@ -81,3 +81,24 @@ proves the leak or the outside write with the guard absent):
   mailmap.file, diff.orderFile, commit.template naming an outside file) stay
   trusted and nothing of that file is shown or committed.
 - R31: `probeRepoSafety` reports reason `unsafe-layout`.
+
+Nested repositories (a gitlink in the outer index is enough, no `.gitmodules`;
+the nested repository's own config is never inspected, so no plugin git command
+may spawn a process inside it):
+
+- R32: outer `diff.submodule=diff` + nested repository with `diff.external` /
+  filters whose HEAD differs from the gitlink → with the pin and the flag
+  stripped, listing and auto-selecting ` M sub` executes the nested config;
+  with either `-c diff.submodule=short` or `--submodule=short` nothing runs and
+  the diff still shows the `Subproject commit` change; the guard also restricts
+  the repository (`diff.submodule`).
+- R33: with `GIT_TRACE=1`, every plugin operation (status, status hash, diffs,
+  head meta, hooks detection, stage / unstage via restore and reset / discard
+  of the gitlink, commit, amend, plain `status`, `log -p`) on a repository
+  that also sets `status.submoduleSummary`, `diff.ignoreSubmodules=none` and
+  `submodule.sub.ignore=none` logs no `run_command` at all; with the submodule
+  hardening stripped the same run spawns `git status` inside `sub/`,
+  `git submodule summary` and `git maintenance run --auto`.
+- R34: `-c diff.ignoreSubmodules=dirty` is outranked by
+  `submodule.<name>.ignore=none` (the nested clean filter runs); the plugin's
+  `--ignore-submodules=dirty` flag is not.

@@ -129,6 +129,17 @@ describe('isUnsafeConfigEntry', () => {
     expect(isUnsafeConfigEntry(local('core.fsmonitor', '/tmp/evil'))).toBe(true);
   });
 
+  it('T4b diff.submodule: short / log stay trusted, diff (spawns git inside the nested repository) or anything else is flagged', () => {
+    for (const value of ['short', 'log', 'SHORT', ' log ']) {
+      expect(isUnsafeConfigEntry(local('diff.submodule', value))).toBe(false);
+    }
+    for (const value of ['diff', 'DIFF', 'bogus', '']) {
+      expect(isUnsafeConfigEntry(local('Diff.Submodule', value))).toBe(true);
+    }
+    expect(isUnsafeConfigEntry({ scope: 'local', key: 'diff.submodule', value: null })).toBe(true);
+    expect(isUnsafeConfigEntry({ scope: 'global', key: 'diff.submodule', value: 'diff' })).toBe(false);
+  });
+
   it.each([
     'core.hookspath',
     'core.sshcommand',

@@ -30,17 +30,35 @@ export interface GitExecOptions
 //   超出"恶意仓库"威胁模型(未在 Windows 实机验证)。commit 照常运行用户 hooks,提交前由
 //   repo-hooks 检测并要求确认。
 // - --no-pager:不启动 core.pager / pager.*。
+// - diff.submodule=short / status.submoduleSummary=false / maintenance.auto=false / gc.auto=0:见 PINNED_CONFIG。
 // 注意:不能用 `-c diff.external=` 置空——实测会让 git diff 报错;改为按子命令追加
 // `--no-ext-diff`(见 SUBCOMMAND_HARDENING)。
+
+// 以 `-c key=value` 固定的配置(命令行作用域优先于仓库 config,不依赖受限键黑名单)。
+// 原则:任何 git 子命令都不得在嵌套仓库 / 子模块里起子进程——子进程读的是**那个**仓库自己的 config
+// (diff.external / filter / textconv ...),不在本插件的受限检测范围内,也不继承 `--no-ext-diff`。
+export const PINNED_CONFIG: ReadonlyArray<readonly [key: string, value: string]> = [
+  ['core.fsmonitor', 'false'],
+  ['log.showSignature', 'false'],
+  ['submodule.recurse', 'false'],
+  // 外层 `diff.submodule=diff` 会让 diff / show / log -p 对有差异的 gitlink 在子仓库目录里起
+  // `git diff --submodule=diff A B`(实测 git 2.50:零点击执行子仓库的 diff.external / filter)。
+  // `log` 取值在进程内读子仓库对象库(可借 gitfile 指向别的仓库),一并固定为 short。
+  ['diff.submodule', 'short'],
+  // 非 porcelain 的 status(commit 在编辑器模板里也会生成)据此运行 `git submodule summary`,
+  // 后者在子仓库里起 `git rev-parse / rev-list / log`。
+  ['status.submoduleSummary', 'false'],
+  // commit 结束后会起 `git maintenance run --auto --detach`(gc / repack 等后台任务,
+  // 行为由仓库的 gc.* / maintenance.* / pack.* / repack.* 决定)。插件的提交不触发它;
+  // 用户在终端里的 git 操作照常触发。gc.auto=0 兼顾没有 maintenance.auto 的旧版 git。
+  ['maintenance.auto', 'false'],
+  ['gc.auto', '0'],
+];
+
 export const GIT_GLOBAL_ARGS: readonly string[] = [
   '--no-optional-locks',
   '--no-pager',
-  '-c',
-  'core.fsmonitor=false',
-  '-c',
-  'log.showSignature=false',
-  '-c',
-  'submodule.recurse=false',
+  ...PINNED_CONFIG.flatMap(([key, value]) => ['-c', `${key}=${value}`]),
 ];
 
 const NO_NETWORK_ARGS: readonly string[] = ['-c', 'protocol.allow=never'];
@@ -55,13 +73,17 @@ export const HOOK_RUNNING_SUBCOMMANDS: ReadonlySet<string> = new Set(['commit'])
 // 子命令级加固,紧跟在子命令名之后插入:
 // - diff/show/log:`--no-ext-diff --no-textconv` 不跑 diff.external / diff.<drv>.command /
 //   diff.<drv>.textconv;log/show 再加 `--no-show-signature`(与 -c log.showSignature=false 双保险)。
+// - diff/show/log:`--submodule=short`(与 -c diff.submodule=short 双保险,见 PINNED_CONFIG)。
 // - status/diff:`--ignore-submodules=dirty`,否则 git 会在嵌套仓库 / 子模块里再起
-//   `git status`,而嵌套仓库的 config 不在本插件检测范围内(实测会触发其 filter)。
+//   `git status --porcelain=2`,而嵌套仓库的 config 不在本插件检测范围内(实测会触发其 filter)。
+//   必须用命令行参数:`-c diff.ignoreSubmodules=dirty` 会被 .gitmodules / 仓库 config 里的
+//   `submodule.<name>.ignore=none` 盖过(实测)。不用 `all`:gitlink 指向的提交变化仍应显示,
+//   而读子仓库 HEAD 是进程内读文件,不起子进程(GIT_TRACE 实测)。
 export const SUBCOMMAND_HARDENING: Readonly<Record<string, readonly string[]>> = {
   status: ['--ignore-submodules=dirty'],
-  diff: ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty'],
-  show: ['--no-ext-diff', '--no-textconv', '--no-show-signature'],
-  log: ['--no-ext-diff', '--no-textconv', '--no-show-signature'],
+  diff: ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short'],
+  show: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short'],
+  log: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short'],
 };
 
 // GIT_TERMINAL_PROMPT=0:不在终端提示凭据;GIT_EDITOR=':':git 把 ':' 视为"不启动编辑器",
