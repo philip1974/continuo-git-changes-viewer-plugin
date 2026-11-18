@@ -126,7 +126,8 @@ disabled.
 
 The commit editor can amend the last commit. Enable "Amend last commit" to load
 the current HEAD message into the editor, then edit the message or stage more
-changes and click Amend. Amend runs `git commit --amend -F -`, then refreshes
+changes and click Amend. If you start typing before the message has loaded,
+your text is kept instead. Amend runs `git commit --amend -F -`, then refreshes
 the panel and clears amend mode on success.
 
 Amend only rewrites the commit whose message it loaded. If HEAD has become a

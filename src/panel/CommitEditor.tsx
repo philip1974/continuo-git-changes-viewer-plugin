@@ -206,6 +206,8 @@ export function CommitEditor({
     amend ? true : null,
   );
   const toggleTokenRef = useRef(0);
+  // 勾选 Amend 之后用户有没有动过编辑框:读 HEAD 的信息要起两个 git 进程,这期间打的字不能被预填覆盖
+  const editedSinceAmendRef = useRef(false);
   const enabled =
     (amend
       ? canAmend(commitMessage, stagedCount, headHasCommit === true)
@@ -236,6 +238,7 @@ export function CommitEditor({
   }, [app, repoRoot, hasHeadCommit]);
 
   const onChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    editedSinceAmendRef.current = true;
     store.getState().setCommitMessage(event.target.value);
   };
 
@@ -250,6 +253,7 @@ export function CommitEditor({
 
     store.getState().setCommitMessage('');
     store.getState().setAmend(true);
+    editedSinceAmendRef.current = false;
     // 先读 HEAD 的提交 id,再读它的信息:两次读取之间 HEAD 若变了,记下的 id 是旧的,Amend 时判为"变了"而中止
     // (反过来——id 新、信息旧——会放行)。
     const headSha = await readHeadSha(app, repoRoot);
@@ -262,7 +266,10 @@ export function CommitEditor({
       return;
     }
 
+    // 照常记下载入的信息(amendMessage):onCommit 拿它判断"预填的信息有没有被改过"。
     store.getState().setAmend(true, headSha, headMessage);
+    // 等待期间用户已经在编辑框里打字:保留用户的文本,不预填(此前预填到达时把它覆盖了)
+    if (editedSinceAmendRef.current) return;
     store.getState().setCommitMessage(headMessage);
     // 提交信息同样经宿主按 UTF-8 解码:不是合法 UTF-8 的字节(没有 encoding 头的 Latin-1 / GBK 提交信息)
     // 已经变成 U+FFFD,Amend 会把预填的文本原样写回去。照常预填并说明;没改过就点 Amend 会被拦下(见 onCommit)。

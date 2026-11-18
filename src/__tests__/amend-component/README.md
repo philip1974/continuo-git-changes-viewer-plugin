@@ -34,3 +34,14 @@ turned off (the text is kept), the view is refreshed and a warning says why.
 - T37: fail-closed when HEAD cannot be read or no id was recorded.
 - T38: an unreadable HEAD id while checking Amend is handled like an
   unreadable message.
+
+Typing while the HEAD message is still being read (two git processes) used to
+be overwritten when the pre-fill arrived (after e6adc86 the wait is visible).
+Now text typed after checking Amend is kept; the loaded message is still
+recorded as `amendMessage` (so the U+FFFD rule treats the typed text as
+edited), and the U+FFFD warning about the pre-filled text is not shown.
+
+- T41: typed during the wait → kept, `amendMessage` recorded, Amend commits the
+  typed text, no U+FFFD warning.
+- T42: nothing typed during the wait (a draft typed before checking Amend does
+  not count) → pre-filled as before.

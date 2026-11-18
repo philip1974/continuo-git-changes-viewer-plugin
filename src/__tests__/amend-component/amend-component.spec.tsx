@@ -390,4 +390,41 @@ describe('CommitEditor amend UI', () => {
       expect(store.getState()).toMatchObject({ amend: false, amendHead: null, amendMessage: null });
     });
   });
+
+  // e6adc86 之后:勾选 Amend 到预填信息到达之间(读 HEAD 要起两个 git 进程)用户已经开始打字,预填到达时把它覆盖了。
+  describe('typing while the HEAD message is still being read', () => {
+    function slowHead(message: string) {
+      let resolve: (value: string | null) => void = () => undefined;
+      const readHeadMessage = vi.fn(async () => new Promise<string | null>((r) => { resolve = r; }));
+      return { readHeadMessage, arrive: () => resolve(message) };
+    }
+
+    it('T41 text typed before the pre-fill arrives is kept (not overwritten); the loaded message is still recorded, so the U+FFFD rule sees the typed text as edited and Amend goes through with it; no U+FFFD warning about a message that is not shown', async () => {
+      const { app, notifications } = appWithShell();
+      const commit = vi.fn(async () => ({ ok: true as const }));
+      const head = slowHead('caf\uFFFD subject');
+      const { store } = renderEditor({ app, commit, readHeadMessage: head.readHeadMessage, message: '' });
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(head.readHeadMessage).toHaveBeenCalledTimes(1));
+      fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'typed while loading' } });
+      head.arrive();
+      await vi.waitFor(() => expect(store.getState().amendMessage).toBe('caf\uFFFD subject'));
+      expect(store.getState()).toMatchObject({ amend: true, amendHead: 'sha-after', commitMessage: 'typed while loading' });
+      expect(notifications.show).not.toHaveBeenCalledWith({ kind: 'warning', message: AMEND_NON_UTF8_MESSAGE });
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(commit).toHaveBeenCalledWith(app, '/repo', 'typed while loading', { amend: true }));
+    });
+
+    it('T42 nothing typed while loading (text typed before checking Amend does not count): the message is pre-filled as before', async () => {
+      const { app } = appWithShell();
+      const head = slowHead('head subject');
+      const { store } = renderEditor({ app, readHeadMessage: head.readHeadMessage, message: '' });
+      fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'a draft typed before' } });
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(head.readHeadMessage).toHaveBeenCalledTimes(1));
+      head.arrive();
+      await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'head subject', amendMessage: 'head subject' }));
+    });
+  });
 });
