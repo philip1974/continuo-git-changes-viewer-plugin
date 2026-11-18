@@ -5,19 +5,20 @@ import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
 import type { FileChange } from './status-scanner';
 
 // v0.1.3 hotfix: MergeView 必须接收两个全文（不是 filter unified diff +/-）。
-// `original` = HEAD 版整个文件；`modified` = 当前 working tree 整个文件。
+// `original` = HEAD 版整个文件；`modified` = 新版整个文件——Changes 区(mode 'changed')是工作树文件,
+// Staged 区(mode 'staged')是 index 里的版本(将要提交的内容),不是工作树。
 // `unifiedDiff` 保留供 hunk 跳转 / 调试 / placeholder 显示用。
 export type DiffResult =
   | {
       ok: true;
       path: string;
       original: string; // HEAD 版全文；新文件为 ""
-      modified: string; // working tree 全文；删除文件为 ""
+      modified: string; // 新版全文(changed:工作树;staged:index);删除文件为 ""
       unifiedDiff: string;
       isUntracked: boolean;
-      /** 工作树全文未读取(modified 为 "")的原因;正常读取时不带此字段。 */
+      /** 新版全文未读取(modified 为 "")的原因;正常读取时不带此字段。 */
       withheld?: WithheldReason;
-      /** 工作树文件超过 MAX_FILE_BYTES:modified 只是开头的那一部分。 */
+      /** 新版文件超过 MAX_FILE_BYTES:modified 只是开头的那一部分。 */
       modifiedTruncated?: true;
     }
   | {
@@ -32,8 +33,10 @@ export type DiffResult =
  * - symlink:路径或其某级父目录是符号链接。
  * - unverified:无法确认不是符号链接(无 app.fs、scope 错误、路径越出仓库根等)。
  * - not-regular:路径存在但不是普通文件(目录、FIFO、设备、socket)。
+ * - no-staged-blob:(仅 staged 模式)index 里这个路径没有 stage 0 的 blob——gitlink(子模块 / 嵌套仓库)、
+ *   未解决的冲突(只有 stage 1–3),或读取失败。
  */
-export type WithheldReason = 'symlink' | 'unverified' | 'not-regular';
+export type WithheldReason = 'symlink' | 'unverified' | 'not-regular' | 'no-staged-blob';
 
 // 读"整个文件"(HEAD 版 blob、工作树全文)的输出上限。不设时用宿主 shell.exec 的默认值(10 MiB,超出部分
 // 丢弃并置 truncated)——新文件 / 未跟踪文件的全文直接渲染进一个 <pre>,10 MiB 既卡又没有任何"被截断"的
@@ -113,9 +116,9 @@ async function checkReadable(
   return results.includes('not-regular') ? 'not-regular' : null;
 }
 
-type WorktreeRead = { readonly content: string; readonly withheld?: WithheldReason; readonly truncated?: boolean };
+type FileRead = { readonly content: string; readonly withheld?: WithheldReason; readonly truncated?: boolean };
 
-const worktreeFlags = (wt: WorktreeRead) => ({
+const readFlags = (wt: FileRead) => ({
   ...(wt.withheld ? { withheld: wt.withheld } : {}),
   ...(wt.truncated ? { modifiedTruncated: true as const } : {}),
 });
@@ -124,7 +127,7 @@ async function readWorktreeFile(
   app: DiffApp,
   repoRoot: string,
   path: string,
-): Promise<WorktreeRead> {
+): Promise<FileRead> {
   const withheld = await checkReadable(app, repoRoot, path);
   if (withheld !== null) return { content: '', withheld };
   // `--`:文件名可以以 `-` 开头(`-n`、`--help`),不能被 cat 当成选项
@@ -132,6 +135,23 @@ async function readWorktreeFile(
   // 被截断时 cat 可能因写端关闭而以非 0 / 信号结束:已读到的开头部分照常使用
   if (r.truncated) return { content: r.stdout, truncated: true };
   return { content: r.exitCode === 0 ? r.stdout : '' };
+}
+
+// 读 index 里的版本(Staged 区显示的"将要提交的内容")。此前 staged 模式也读工作树:`git add n.txt` 之后
+// 再改 n.txt(状态 `AM`),Staged 区显示的是改后的内容而提交的是暂存时的内容;暂存后删掉文件(`AD`)
+// 则显示 "(empty file)"。
+// - `:0:<path>`,不是 `:<path>`:git 把 `:<0-3>:<rest>` 解析成"stage N 的 <rest>",名为 `0:x` 的文件写成
+//   `:0:x` 读到的是 `x`;显式带上 stage 后冒号之后整体是路径(real-git R62)。参数以 `:` 开头,不会被当成选项。
+// - 读的是对象库里的 blob,不经过工作树:不需要符号链接检查(暂存的符号链接得到的是 git 存的目标路径文本)。
+// - 没有 stage 0 的 blob(gitlink、未解决的冲突)→ cat-file 失败 → 'no-staged-blob'。
+async function readIndexBlob(
+  app: Pick<CoPluginApp, 'shell'>,
+  repoRoot: string,
+  path: string,
+): Promise<FileRead> {
+  const r = await gitExec(app, repoRoot, ['cat-file', 'blob', `:0:${path}`], { maxOutputBytes: MAX_FILE_BYTES });
+  if (r.truncated) return { content: r.stdout, truncated: true };
+  return r.exitCode === 0 ? { content: r.stdout } : { content: '', withheld: 'no-staged-blob' };
 }
 
 export async function fetchDiff(
@@ -164,7 +184,7 @@ export async function fetchDiff(
       modified: wt.content,
       unifiedDiff: '',
       isUntracked: true,
-      ...worktreeFlags(wt),
+      ...readFlags(wt),
     };
   }
 
@@ -178,9 +198,13 @@ export async function fetchDiff(
   // 并发跑 3 个 shell 命令
   const [originalRaw, wt, diffR] = await Promise.all([
     gitShowHead(app, repoRoot, headPath),
-    change.status === 'D'
-      ? Promise.resolve<WorktreeRead>({ content: '' })
-      : readWorktreeFile(app, repoRoot, change.path),
+    // 新版一侧没有文件:staged 看 index 一侧(X),changed 看工作树一侧(合并后的 status;`AD` 的 status 是 A,
+    // 工作树读取得到 ENOENT → 空)
+    (mode === 'staged' ? change.statusX === 'D' : change.status === 'D')
+      ? Promise.resolve<FileRead>({ content: '' })
+      : mode === 'staged'
+        ? readIndexBlob(app, repoRoot, change.path)
+        : readWorktreeFile(app, repoRoot, change.path),
     gitExec(app, repoRoot, diffArgs),
   ]);
 
@@ -209,7 +233,7 @@ export async function fetchDiff(
     modified: wt.content,
     unifiedDiff: diffR.stdout,
     isUntracked: false,
-    ...worktreeFlags(wt),
+    ...readFlags(wt),
   };
 }
 

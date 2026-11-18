@@ -28,5 +28,20 @@ no hint that it was cut is neither usable nor honest.
 - T5: a HEAD blob over the limit does not fail the diff; `original` is just
   the part that was read (it is only used to tell "no HEAD version" apart).
 
+Which version the new side is. In the Changes section (`changed` mode)
+`modified` is the working-tree file. In the Staged section (`staged` mode) it
+is the version in the index — what a commit would record — read with `git
+cat-file blob :0:<path>`. (Before, staged mode read the working tree too: after
+`git add n.txt` and a further edit the Staged section showed the edited text
+while the commit contained the staged one, and after deleting the file it
+showed "(empty file)".) The stage number is explicit because git reads
+`:0:x` as "stage 0 of `x`", so a file named `0:x` needs `:0:0:x`.
+
+- T6: staged mode runs `cat-file blob :0:<path>` with the 1 MiB limit and no
+  `cat`; changed mode runs `cat` and no index read.
+- T7: staged deletion → nothing read; `MD` → index version in staged mode,
+  nothing in changed mode; no stage-0 blob (gitlink, unresolved conflict) →
+  `withheld: 'no-staged-blob'` (the panel shows a notice, `render-limits` L9).
+
 Real-git coverage: `repo-safety-real-git` R50–R51c (names, non-blobs,
-symbolic links) and R57–R58 (large files).
+symbolic links), R57–R58 (large files) and R61–R62 (staged content).

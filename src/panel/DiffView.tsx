@@ -44,11 +44,12 @@ function NewFileView({ content, truncated }: { readonly content: string; readonl
   );
 }
 
-// 工作树全文未读取(见 diff-fetcher 的符号链接检查):显示说明,不显示文件内容。
+// 新版全文未读取(见 diff-fetcher 的符号链接检查 / index 读取):显示说明,不显示文件内容。
 const WITHHELD_NOTICE = {
   symlink: 'Symbolic link — contents are not shown',
   unverified: 'Could not verify that this path is not a symbolic link — contents are not shown',
   'not-regular': 'Not a regular file (directory, pipe or device) — contents are not shown',
+  'no-staged-blob': 'No staged file content to show (submodule entry or unresolved merge conflict)',
 } as const;
 
 function TooLargePlaceholder({ exactCommand }: { readonly exactCommand: string }) {
@@ -372,7 +373,7 @@ export function DiffView({
     showError(message);
   };
 
-  // Untracked / Added (HEAD 无版本) → NewFileView 显示 modified 全文
+  // Untracked / Added (HEAD 无版本) → NewFileView 显示 modified 全文(Staged 区是 index 版本,见 diff-fetcher)
   if (diff.isUntracked || (diff.original === '' && change.status === 'A')) {
     if (diff.withheld) {
       return <main className="cgv-diff-empty">{WITHHELD_NOTICE[diff.withheld]}</main>;

@@ -267,3 +267,20 @@ nor the per-event switch; also run with 2.56.1):
 - R59b: `-c hook.<event>.enabled=false` for a real and for a made-up event
   name → `git status` exits 0 with empty output on a git that knows the key
   and on one that does not.
+
+Staged content (`diff-fetcher` T6–T7): the Staged section shows the index
+version, read with `git cat-file blob :0:<path>`.
+
+- R61: `A ` / `AM` / `AD` / `MM` / `RM` → the staged view's new side equals
+  `git cat-file blob :0:<path>` for each (`AM`: "staged", not the later
+  "other"; `AD`: the staged text, not "(empty file)"); the unstaged view of
+  the same files still carries the working-tree file.
+- R61b: after staging, the path becomes a symbolic link to an outside file, a
+  directory, or disappears → the staged view is unchanged (it never touches
+  the working tree); the unstaged view of the link is still withheld.
+- R61c: a staged symbolic link shows the stored target path, not the target's
+  content; a staged gitlink and an unmerged `AA` path have no stage-0 blob →
+  `withheld: 'no-staged-blob'`.
+- R62: the R50 names plus `0:x`, `2:x`, `0:0:x` next to `x`, staged as new
+  files and then edited → each staged view is that file's own index blob
+  (`:0:x` alone would read `x` for the file named `0:x`).

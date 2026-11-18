@@ -2104,3 +2104,145 @@ describe('whole-file reads are size-limited (real git, host-like output cap)', (
     expect(git(repo, 'status', '--porcelain')).toBe('M  f.txt\n');
   });
 });
+
+describe('the Staged section shows what is in the index, not what is in the working tree (real git)', () => {
+  const stagedBlob = (path: string) => execFileSync('git', ['cat-file', 'blob', `:0:${path}`], { cwd: repo, env: ENV, encoding: 'utf8' });
+  const staged = (changes: Awaited<ReturnType<typeof scanStatus>>, path: string) => {
+    const change = changes.find((c) => c.path === path);
+    if (!change) throw new Error(`no status entry for ${path}`);
+    return change;
+  };
+
+  it('R61 AM / AD / plain A / MM / staged rename (RM): the staged view carries exactly `git show :<path>`; the unstaged view of the same file still carries the working-tree file', async () => {
+    // AM:暂存后又改;AD:暂存后从工作树删除;A:普通新增;MM:已暂存修改后再改
+    writeFileSync(join(repo, 'am.txt'), 'staged\n');
+    writeFileSync(join(repo, 'ad.txt'), 'staged then deleted\n');
+    writeFileSync(join(repo, 'a.txt'), 'plain add\n');
+    writeFileSync(join(repo, 'f.txt'), 'one\nstaged edit\n');
+    git(repo, 'mv', 'g.txt', 'moved.txt');
+    git(repo, 'add', '-A');
+    writeFileSync(join(repo, 'am.txt'), 'other\n');
+    rmSync(join(repo, 'ad.txt'));
+    writeFileSync(join(repo, 'f.txt'), 'one\nstaged edit\nunstaged edit\n');
+    writeFileSync(join(repo, 'moved.txt'), 'edited after the staged rename\n');
+    expect(git(repo, 'status', '--porcelain')).toBe('A  a.txt\nAD ad.txt\nAM am.txt\nMM f.txt\nRM g.txt -> moved.txt\n');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const changes = await scanStatus(app, repo);
+    const view = async (path: string, mode: 'staged' | 'changed') => {
+      const d = await fetchDiff(app, repo, staged(changes, path), mode);
+      if (!d.ok) throw new Error(`${path}: ${d.message}`);
+      return d;
+    };
+
+    expect((await view('am.txt', 'staged')).modified).toBe('staged\n');
+    expect((await view('ad.txt', 'staged')).modified).toBe('staged then deleted\n');
+    expect((await view('a.txt', 'staged')).modified).toBe('plain add\n');
+    expect((await view('f.txt', 'staged')).modified).toBe('one\nstaged edit\n');
+    expect((await view('moved.txt', 'staged')).modified).toBe('gee\n');
+    for (const path of ['am.txt', 'ad.txt', 'a.txt', 'f.txt', 'moved.txt']) {
+      const d = await view(path, 'staged');
+      expect({ path, modified: d.modified }).toEqual({ path, modified: stagedBlob(path) });
+      expect(d).not.toHaveProperty('withheld');
+    }
+    // 重命名的 original 仍是 HEAD 里原路径的内容
+    expect((await view('moved.txt', 'staged')).original).toBe('gee\n');
+
+    // Changes 区(unstaged)不变:读工作树
+    expect((await view('am.txt', 'changed')).modified).toBe('other\n');
+    expect((await view('f.txt', 'changed')).modified).toBe('one\nstaged edit\nunstaged edit\n');
+    expect((await view('moved.txt', 'changed')).modified).toBe('edited after the staged rename\n');
+  });
+
+  it('R61b the staged version is read from the object store, so it does not depend on what the path is in the working tree: a symbolic link to an outside file, a directory, nothing at all', async () => {
+    const secret = join(base, 'secret.txt');
+    writeFileSync(secret, 'OUTSIDE-SECRET\n');
+    for (const name of ['link.txt', 'dir.txt', 'gone.txt']) writeFileSync(join(repo, name), `staged ${name}\n`);
+    git(repo, 'add', '-A');
+    rmSync(join(repo, 'link.txt'));
+    symlinkSync(secret, join(repo, 'link.txt'));
+    rmSync(join(repo, 'dir.txt'));
+    mkdirSync(join(repo, 'dir.txt'));
+    rmSync(join(repo, 'gone.txt'));
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const changes = await scanStatus(app, repo);
+    for (const name of ['link.txt', 'dir.txt', 'gone.txt']) {
+      const d = await fetchDiff(app, repo, staged(changes, name), 'staged');
+      expect({ name, modified: d.ok && d.modified, withheld: d.ok && d.withheld }).toEqual({ name, modified: `staged ${name}\n`, withheld: undefined });
+    }
+    // 未暂存视图读工作树:符号链接仍不读
+    const link = await fetchDiff(app, repo, staged(changes, 'link.txt'), 'changed');
+    expect(link).toMatchObject({ ok: true, modified: '', withheld: 'symlink' });
+    expect(JSON.stringify(link)).not.toContain('OUTSIDE-SECRET');
+  });
+
+  it('R61c a staged symbolic link shows the link target text git stores; a staged gitlink and an unmerged path have no staged blob → flagged no-staged-blob instead of "(empty file)"', async () => {
+    const secret = join(base, 'secret.txt');
+    writeFileSync(secret, 'OUTSIDE-SECRET\n');
+    symlinkSync(secret, join(repo, 'ln'));
+    const sub = join(repo, 'sub');
+    mkdirSync(sub);
+    git(sub, 'init', '-q', '-b', 'main');
+    writeFileSync(join(sub, 'inner.txt'), 'INNER-CONTENT\n');
+    git(sub, 'add', '.');
+    git(sub, 'commit', '-qm', 'inner');
+    git(repo, '-c', 'advice.addEmbeddedRepo=false', 'add', '-A');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    let changes = await scanStatus(app, repo);
+    const ln = await fetchDiff(app, repo, staged(changes, 'ln'), 'staged');
+    expect(ln).toMatchObject({ ok: true, modified: secret });
+    expect(JSON.stringify(ln)).not.toContain('OUTSIDE-SECRET');
+    const gitlink = await fetchDiff(app, repo, staged(changes, 'sub'), 'staged');
+    expect(gitlink).toMatchObject({ ok: true, modified: '', withheld: 'no-staged-blob' });
+    expect(JSON.stringify(gitlink)).not.toContain('INNER-CONTENT');
+
+    // 冲突:两边都新增同名文件(AA)——index 里只有 stage 2 / 3,没有 stage 0
+    git(repo, 'commit', '-qm', 'base');
+    git(repo, 'checkout', '-q', '-b', 'side');
+    writeFileSync(join(repo, 'both.txt'), 'theirs\n');
+    git(repo, 'add', 'both.txt');
+    git(repo, 'commit', '-qm', 'side');
+    git(repo, 'checkout', '-q', 'main');
+    writeFileSync(join(repo, 'both.txt'), 'ours\n');
+    git(repo, 'add', 'both.txt');
+    git(repo, 'commit', '-qm', 'main');
+    expect(() => git(repo, 'merge', '-q', 'side')).toThrow();
+    changes = await scanStatus(app, repo);
+    expect(staged(changes, 'both.txt')).toMatchObject({ statusX: 'A', statusY: 'A' });
+    expect(await fetchDiff(app, repo, staged(changes, 'both.txt'), 'staged')).toMatchObject({ ok: true, modified: '', withheld: 'no-staged-blob' });
+  });
+
+  // 与 R50 同一组名字,另加 `<数字>:<名字>`:`:0:x` 在 git 里是"stage 0 的 x",不是名为 `0:x` 的文件
+  const NAMES = ['a..b', 'a...b', 'a@{1}', 'a^{tree}', 'a~1', 'a^', ':(top)x', '-x', '-n', '--help', 'ab:c', ':x', '@{u}', 'a b', 'd/e..b', '中文 文件.txt', 'd/名字 带 空格.md', '0:x', '2:x', 'x', '0:0:x'];
+
+  it('R62 staged new files whose names look like revision / stage syntax: each staged view is that file\'s index blob (`0:x` is not confused with stage 0 of `x`)', async () => {
+    writeFileSync(join(repo, 'a'), 'plain a\n');
+    mkdirSync(join(repo, 'd'));
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'LOG-OUTPUT-MARKER');
+    git(repo, 'branch', 'b');
+    for (const name of NAMES) writeFileSync(join(repo, name), `index content of [${name}]\n`);
+    git(repo, 'add', '-A');
+    for (const name of NAMES) writeFileSync(join(repo, name), `working tree content of [${name}]\n`);
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const changes = await scanStatus(app, repo);
+    expect(changes.map((c) => c.path).sort()).toEqual([...NAMES].sort());
+    for (const change of changes) {
+      expect(change).toMatchObject({ statusX: 'A', statusY: 'M' });
+      const d = await fetchDiff(app, repo, change, 'staged');
+      expect({ path: change.path, original: d.ok && d.original, modified: d.ok && d.modified }).toEqual({
+        path: change.path,
+        original: '',
+        modified: `index content of [${change.path}]\n`,
+      });
+    }
+  });
+});
+

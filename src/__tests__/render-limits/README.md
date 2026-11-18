@@ -18,5 +18,8 @@ both are capped; nothing is dropped from the underlying data.
   (`MAX_FILE_BYTES`, 1 MiB) shows the part that was read followed by "File too
   large — showing the first 1 MB. Open the file in an editor to see the rest."
 - L8: a file within the limit shows no notice.
+- L9: a staged new entry without a staged blob (`withheld:
+  'no-staged-blob'`: submodule entry, unresolved conflict) shows "No staged
+  file content to show (…)" instead of "(empty file)".
 - L6: a status output truncated by the host output limit loses only its last,
   possibly partial record — it is never parsed into a bogus entry.

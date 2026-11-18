@@ -82,7 +82,8 @@ describe('tracked diff fetcher', () => {
     const lstat = vi.fn().mockResolvedValue({ size: 1, mtimeMs: 0, isFile: true, isDirectory: false, isSymlink: false });
     return { app: { shell: { exec }, fs: { lstat } } as unknown as CoPluginApp, exec };
   }
-  const isHeadRead = (cmd: string, args: readonly string[]) => cmd === 'git' && args.includes('cat-file');
+  const isHeadRead = (cmd: string, args: readonly string[]) => cmd === 'git' && args.includes('cat-file') && args.some((a) => a.startsWith('HEAD:'));
+  const isIndexRead = (cmd: string, args: readonly string[]) => cmd === 'git' && args.includes('cat-file') && args.some((a) => a.startsWith(':0:'));
 
   it('T3 whole-file reads carry an explicit size limit (1 MiB) instead of relying on the host default; the unified diff keeps the host default', async () => {
     expect(MAX_FILE_BYTES).toBe(1024 * 1024);
@@ -100,7 +101,9 @@ describe('tracked diff fetcher', () => {
     await expect(fetchDiff(big.app, '/repo', { path: 'big.bin', status: 'U', statusX: '?', statusY: '?', kind: 'text' })).resolves.toEqual({
       ok: true, path: 'big.bin', original: '', modified: 'first part', unifiedDiff: '', isUntracked: true, modifiedTruncated: true,
     });
-    await expect(fetchDiff(big.app, '/repo', { path: 'big.bin', status: 'A', statusX: 'A', statusY: ' ', kind: 'text' }, 'staged')).resolves.toMatchObject({
+    // staged 模式的新版来自 index(T6):同样的上限与标记
+    const bigStaged = appWith((cmd, args) => (isIndexRead(cmd, args) ? { stdout: 'first part', truncated: true } : { stdout: '' }));
+    await expect(fetchDiff(bigStaged.app, '/repo', { path: 'big.bin', status: 'A', statusX: 'A', statusY: ' ', kind: 'text' }, 'staged')).resolves.toMatchObject({
       ok: true, modified: 'first part', modifiedTruncated: true,
     });
 
@@ -113,6 +116,44 @@ describe('tracked diff fetcher', () => {
     const { app } = appWith((cmd, args) => (isHeadRead(cmd, args) ? { stdout: 'head part', truncated: true } : cmd === 'cat' ? { stdout: 'wt' } : { stdout: 'diff --git a/a b/a\n' }));
     await expect(fetchDiff(app, '/repo', { path: 'a', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' })).resolves.toEqual({
       ok: true, path: 'a', original: 'head part', modified: 'wt', unifiedDiff: 'diff --git a/a b/a\n', isUntracked: false,
+    });
+  });
+
+  it('T6 staged mode reads the new side from the index (`cat-file blob :0:<path>`, 1 MiB limit) and never runs cat on the working tree; changed mode keeps reading the working tree', async () => {
+    const byCommand = (cmd: string, args: readonly string[]) =>
+      isIndexRead(cmd, args) ? { stdout: 'INDEX' } : isHeadRead(cmd, args) ? { stdout: 'HEAD' } : cmd === 'cat' ? { stdout: 'WORKTREE' } : { stdout: 'diff\n' };
+    const change = { path: 'src/n.txt', status: 'A', statusX: 'A', statusY: 'M', kind: 'text' } as const;
+
+    const staged = appWith(byCommand);
+    await expect(fetchDiff(staged.app, '/repo', change, 'staged')).resolves.toMatchObject({ ok: true, original: 'HEAD', modified: 'INDEX' });
+    expect(staged.exec.mock.calls.filter(([cmd]) => cmd === 'cat')).toEqual([]);
+    expect(staged.exec).toHaveBeenCalledWith(
+      'git',
+      buildGitArgs(['cat-file', 'blob', ':0:src/n.txt']),
+      expect.objectContaining({ cwd: '/repo', maxOutputBytes: MAX_FILE_BYTES }),
+    );
+
+    const changed = appWith(byCommand);
+    await expect(fetchDiff(changed.app, '/repo', change, 'changed')).resolves.toMatchObject({ ok: true, modified: 'WORKTREE' });
+    expect(changed.exec.mock.calls.filter(([cmd, args]) => isIndexRead(cmd, args))).toEqual([]);
+  });
+
+  it('T7 staged mode: a staged deletion reads nothing for the new side; a path without a stage-0 blob (cat-file fails) is flagged no-staged-blob; a worktree-only deletion (` D` shown in Changes) reads nothing from the working tree', async () => {
+    const del = appWith(() => ({ stdout: 'x' }));
+    const d = await fetchDiff(del.app, '/repo', { path: 'gone.txt', status: 'D', statusX: 'D', statusY: ' ', kind: 'text' }, 'staged');
+    expect(d).toMatchObject({ ok: true, modified: '' });
+    expect(d).not.toHaveProperty('withheld');
+    expect(del.exec.mock.calls.filter(([cmd, args]) => cmd === 'cat' || isIndexRead(cmd, args))).toEqual([]);
+
+    // `MD`:已暂存修改、工作树删除——合并后的 status 是 D,但 Staged 区仍有 index 版本
+    const md = appWith((cmd, args) => (isIndexRead(cmd, args) ? { stdout: 'INDEX' } : { stdout: 'x' }));
+    await expect(fetchDiff(md.app, '/repo', { path: 'm.txt', status: 'D', statusX: 'M', statusY: 'D', kind: 'text' }, 'staged')).resolves.toMatchObject({ ok: true, modified: 'INDEX' });
+    await expect(fetchDiff(md.app, '/repo', { path: 'm.txt', status: 'D', statusX: 'M', statusY: 'D', kind: 'text' }, 'changed')).resolves.toMatchObject({ ok: true, modified: '' });
+    expect(md.exec.mock.calls.filter(([cmd]) => cmd === 'cat')).toEqual([]);
+
+    const none = appWith((cmd, args) => (isIndexRead(cmd, args) ? { exitCode: 128, stderr: 'fatal: path is in the index, but not at stage 0' } : { stdout: 'x' }));
+    await expect(fetchDiff(none.app, '/repo', { path: 'sub', status: 'A', statusX: 'A', statusY: ' ', kind: 'text' }, 'staged')).resolves.toMatchObject({
+      ok: true, modified: '', withheld: 'no-staged-blob',
     });
   });
 });

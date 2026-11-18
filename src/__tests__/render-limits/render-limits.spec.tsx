@@ -75,7 +75,7 @@ describe('diff rendering is capped', () => {
 
 describe('whole-file view of a new / untracked file is capped', () => {
   const untracked: FileChange = { path: 'huge.log', status: 'U', statusX: '?', statusY: '?', kind: 'text' };
-  const renderNew = (extra: { modifiedTruncated?: true }) =>
+  const renderNew = (extra: { modifiedTruncated?: true; modified?: string; withheld?: 'no-staged-blob' }) =>
     render(
       <DiffView
         store={createGitStore()}
@@ -95,6 +95,12 @@ describe('whole-file view of a new / untracked file is capped', () => {
   it('L8 a file within the limit shows no notice', () => {
     renderNew({});
     expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('L9 a staged new entry without a staged blob (submodule, unresolved conflict) shows a notice instead of "(empty file)"', () => {
+    const { container } = renderNew({ modified: '', withheld: 'no-staged-blob' });
+    expect(container.querySelector('.cgv-new-file')).toBeNull();
+    expect(container.textContent).toBe('No staged file content to show (submodule entry or unresolved merge conflict)');
   });
 });
 
