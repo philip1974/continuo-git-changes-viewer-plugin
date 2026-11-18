@@ -146,8 +146,9 @@ detect whether HEAD is already on a remote branch.
   is already staged the row says so, because a commit will include it.
 - Files with an unresolved merge conflict are listed with a CONFLICT badge.
   They have no Unstage or Discard here (unstaging would silently drop the
-  conflict; discarding cannot work); resolve them in an editor or a terminal.
-  Where Stage is offered on such a row it marks the conflict as resolved. A
+  conflict; discarding cannot work); resolve them in an editor or a terminal
+  and mark them resolved with `git add` in a terminal. Only the deleted-side
+  conflicts (`UD`, `DD`) offer Stage, which marks the conflict as resolved. A
   file added with `git add -N` (intent to add) is shown but has no actions.
 - Text that is not valid UTF-8 (Latin-1, GBK, …) is displayed with the
   replacement character `�`. Files whose diff contains it have no hunk

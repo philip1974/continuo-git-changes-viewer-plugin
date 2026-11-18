@@ -114,9 +114,11 @@ describe('FileList row action buttons', () => {
       expect(badge.textContent).toBe('CONFLICT');
       expect(badge.getAttribute('title')).toBe(UNMERGED_NOTE);
     }
+    // 文案不说"然后 stage 结果":AA / UU / AU / UA 行上没有 Stage 按钮,标记为已解决要在终端里 `git add`
     expect(UNMERGED_NOTE).toBe(
-      'Unresolved merge conflict. Unstage and Discard are not available for it here: resolve the conflict in an editor or a terminal, then stage the result.',
+      'Unresolved merge conflict. Unstage and Discard are not available for it here: resolve the conflict in an editor or a terminal, then mark it resolved by running `git add` on it in a terminal.',
     );
+    expect(screen.queryByRole('button', { name: 'Stage file both.ts' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Unstage file both.ts' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Unstage file theirs-deleted.ts' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Discard file theirs-deleted.ts' })).toBeNull();

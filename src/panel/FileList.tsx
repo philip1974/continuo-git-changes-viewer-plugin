@@ -40,8 +40,9 @@ export const INOPERABLE_STAGED_NOTE =
   'Unsupported file name — cannot be viewed or changed here, but it is staged and a commit will include it. Use git in a terminal.';
 
 // 未合并的行(冲突):没有 Unstage / Discard(见 can-unstage-file / can-discard-file)。行上的标记说明原因。
+// 不说"然后在这里 stage":UU / AA / AU / UA 行没有 Stage 按钮(只有 UD / DD 有,见 can-stage-file)——如实指向终端。
 export const UNMERGED_NOTE =
-  'Unresolved merge conflict. Unstage and Discard are not available for it here: resolve the conflict in an editor or a terminal, then stage the result.';
+  'Unresolved merge conflict. Unstage and Discard are not available for it here: resolve the conflict in an editor or a terminal, then mark it resolved by running `git add` on it in a terminal.';
 
 function rowLabel(change: FileChange): string {
   return change.oldPath ? `${change.oldPath} -> ${change.path}` : change.path;
