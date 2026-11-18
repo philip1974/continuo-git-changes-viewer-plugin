@@ -5,7 +5,9 @@ import { isForgedIndexPath, isSafeRepoRelativePath } from './path-utils';
 
 export type FileStatus = 'M' | 'A' | 'D' | 'R' | 'U';
 export type FileKind = 'text' | 'binary';
-export type PorcelainStatusCode = ' ' | 'M' | 'A' | 'D' | 'R' | 'C' | '?' | 'U';
+// `T`:类型变更(普通文件 ↔ 符号链接 ↔ 子模块)。必须原样保留:它的 diff 是"删除 + 新增"两段,不能按 hunk
+// 拆(见 hunk-patch 的 isHunkPatchableDiff);归一成 `M` 会让 hunk 操作对它放开。显示上仍算修改(FileStatus 'M')。
+export type PorcelainStatusCode = ' ' | 'M' | 'A' | 'D' | 'R' | 'C' | '?' | 'U' | 'T';
 
 export interface FileChange {
   readonly path: string;
@@ -35,7 +37,8 @@ function normalizeStatusCode(code: string): PorcelainStatusCode {
     code === 'R' ||
     code === 'C' ||
     code === '?' ||
-    code === 'U'
+    code === 'U' ||
+    code === 'T'
   ) {
     return code;
   }

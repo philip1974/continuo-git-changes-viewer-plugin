@@ -3,7 +3,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { chmodSync, existsSync, readFileSync, renameSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, renameSync, mkdtempSync, readdirSync, rmSync, writeFileSync, appendFileSync, statSync, lstatSync, mkdirSync, readlinkSync, realpathSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { createElement } from 'react';
@@ -16,6 +16,9 @@ import { DISABLED_HOOKS_PATH, gitExec, KNOWN_HOOK_EVENTS, LITERAL_ARGV_CONFIG } 
 import { detectRepoHooks } from '../../git/repo-hooks';
 import { stageHunk } from '../../git/stage-hunk';
 import { extractHunkPatchFromUnifiedDiff } from '../../git/hunk-patch';
+import { canDiscardFile } from '../../git/can-discard-file';
+import { canStageFile } from '../../git/can-stage-file';
+import { canUnstageFile } from '../../git/can-unstage-file';
 import { PINNED_OUTPUT_CONFIG } from '../../git/exec';
 import { _resetRestoreCache, unstageFile } from '../../git/unstage-file';
 import { unstageHunk } from '../../git/unstage-hunk';
@@ -2710,23 +2713,23 @@ describe('a staged version that cannot be read is not blamed on a submodule or a
   });
 });
 
-describe('each section shows its own side of a file that is in both (real git)', () => {
-  // 面板对一行的呈现:按 (change, 区) 取 diff,再渲染 DiffView(静态标记,足以区分全文视图 / unified diff / hunk 按钮)
-  const rendered = async (app: CoPluginApp, change: Awaited<ReturnType<typeof scanStatus>>[number], mode: 'staged' | 'changed') => {
-    const diff = await fetchDiff(app, repo, change, mode);
-    const html = renderToStaticMarkup(createElement(DiffView, { store: createGitStore(), change, diff, mode }));
-    const text = (cls: string) =>
-      [...html.matchAll(new RegExp(`<div class="cgv-line ${cls}"[^>]*><span class="cgv-line-num">[^<]*</span><span class="cgv-line-text">([^<]*)</span>`, 'g'))].map((m) => m[1]);
-    return {
-      diff,
-      html,
-      whole: /<pre class="cgv-new-file">([\s\S]*?)<\/pre>/.exec(html)?.[1] ?? null,
-      added: text('cgv-line-add'),
-      removed: text('cgv-line-del'),
-      buttons: [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]),
-    };
+// 面板对一行的呈现:按 (change, 区) 取 diff,再渲染 DiffView(静态标记,足以区分全文视图 / unified diff / hunk 按钮)
+const rendered = async (app: CoPluginApp, change: Awaited<ReturnType<typeof scanStatus>>[number], mode: 'staged' | 'changed') => {
+  const diff = await fetchDiff(app, repo, change, mode);
+  const html = renderToStaticMarkup(createElement(DiffView, { store: createGitStore(), change, diff, mode }));
+  const text = (cls: string) =>
+    [...html.matchAll(new RegExp(`<div class="cgv-line ${cls}"[^>]*><span class="cgv-line-num">[^<]*</span><span class="cgv-line-text">([^<]*)</span>`, 'g'))].map((m) => m[1]);
+  return {
+    diff,
+    html,
+    whole: /<pre class="cgv-new-file">([\s\S]*?)<\/pre>/.exec(html)?.[1] ?? null,
+    added: text('cgv-line-add'),
+    removed: text('cgv-line-del'),
+    buttons: [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]),
   };
+};
 
+describe('each section shows its own side of a file that is in both (real git)', () => {
   it('R70 AM / AD / MM / staged new symbolic link / untracked: Staged shows the index version (whole file for a new entry), Changes shows the index → working-tree increment with working hunk actions, a deletion is a deletion, and a link is labelled as one', async () => {
     const secret = join(base, 'secret.txt');
     writeFileSync(secret, 'OUTSIDE-SECRET\n');
@@ -2829,5 +2832,119 @@ describe('one path, two status records: `git rm --cached` leaves `D  f` and `?? 
     await store.getState().refresh();
     expect(store.getState().changes).toEqual([]);
     expect(store.getState().selected).toBeNull();
+  });
+});
+
+describe('a type change (file ↔ symbolic link) is one entry replaced by another, never hunks of one file (real git)', () => {
+  const lsFiles = (path: string) => git(repo, 'ls-files', '-s', '--', path).split('\t')[0];
+  const hunkIndexes = (unifiedDiff: string) =>
+    unifiedDiff.split('\n').map((l, i) => (l.startsWith('@@') ? i : -1)).filter((i) => i >= 0);
+
+  it('R72 AT / ` T` (both directions) / `T ` / MT keep their status code, show the deletion + addition without hunk buttons and yield no hunk patch; file-level stage / unstage / discard act on the entry and keep its content; chmod + edit still has working hunk actions', async () => {
+    writeFileSync(join(repo, 'base'), 'base\n');
+    writeFileSync(join(repo, 'mt'), 'two\n');
+    writeFileSync(join(repo, 'ch.sh'), 'x\n');
+    symlinkSync('base', join(repo, 'lnk'));
+    symlinkSync('base', join(repo, 'l2'));
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'more');
+    const toLink = (name: string) => {
+      rmSync(join(repo, name));
+      symlinkSync('base', join(repo, name));
+    };
+    const toFile = (name: string, content: string) => {
+      rmSync(join(repo, name));
+      writeFileSync(join(repo, name), content);
+    };
+    // AT:暂存的新文件,之后工作树里换成符号链接
+    writeFileSync(join(repo, 'at'), 'content\n');
+    git(repo, 'add', 'at');
+    toLink('at');
+    toLink('f.txt'); // ` T` 文件 → 链接
+    toFile('l2', 'now a file\n'); // ` T` 链接 → 文件
+    toFile('lnk', 'staged file\n'); // `T ` 链接 → 文件,已暂存
+    git(repo, 'add', 'lnk');
+    writeFileSync(join(repo, 'mt'), 'two2\n'); // MT
+    git(repo, 'add', 'mt');
+    toLink('mt');
+    chmodSync(join(repo, 'ch.sh'), 0o755); // chmod + 内容修改:不是类型变更
+    appendFileSync(join(repo, 'ch.sh'), 'y\n');
+    expect(git(repo, 'status', '--porcelain')).toBe('AT at\n M ch.sh\n T f.txt\n T l2\nT  lnk\nMT mt\n');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const scan = async () => (await scanStatus(app, repo)).map((c) => `${c.statusX}${c.statusY} ${c.path}`);
+    const changes = await scanStatus(app, repo);
+    expect(await scan()).toEqual(['AT at', ' M ch.sh', ' T f.txt', ' T l2', 'T  lnk', 'MT mt']);
+    const row = (path: string) => changes.find((c) => c.path === path)!;
+
+    // Changes 区的类型变更:两段(删除 + 新增)都显示,没有 hunk 按钮,也构造不出 hunk 补丁
+    for (const path of ['at', 'f.txt', 'l2', 'mt']) {
+      const view = await rendered(app, row(path), 'changed');
+      if (!view.diff.ok) throw new Error(`${path}: diff failed`);
+      expect(view.diff.unifiedDiff, path).toBe(git(repo, 'diff', '--', path));
+      expect(view.diff.unifiedDiff.match(/^diff --git /gm), path).toHaveLength(2);
+      expect(view.html, path).toContain('deleted file mode');
+      expect(view.html, path).toContain('new file mode');
+      expect(view.buttons, path).toEqual([]);
+      const hunks = hunkIndexes(view.diff.unifiedDiff);
+      expect(hunks, path).toHaveLength(2);
+      for (const i of hunks) expect(extractHunkPatchFromUnifiedDiff(path, view.diff.unifiedDiff, i), path).toBeNull();
+    }
+    // Staged 区:`T ` 同样;`AT` 是新条目的 index 全文;`MT` 的暂存一侧是普通修改,Unstage hunk 照常
+    const lnkStaged = await rendered(app, row('lnk'), 'staged');
+    expect(lnkStaged.buttons).toEqual([]);
+    expect(lnkStaged.html).toContain('deleted file mode 120000');
+    expect(lnkStaged.added).toEqual(['+staged file']);
+    expect((await rendered(app, row('at'), 'staged')).whole).toBe('content\n');
+    expect(await rendered(app, row('mt'), 'staged')).toMatchObject({ added: ['+two2'], removed: ['-two'], buttons: ['Unstage'] });
+
+    // 文件级操作可用
+    for (const path of ['at', 'f.txt', 'l2', 'mt']) {
+      expect(canStageFile(row(path), 'changed'), path).toBe(true);
+      expect(canDiscardFile(row(path), 'changed'), path).toBe(true);
+    }
+    expect(canUnstageFile(row('lnk'), 'staged')).toBe(true);
+
+    // ` T` 文件 → 链接:stage 记下链接,unstage 回到 ` T`,discard 还原成原来的普通文件
+    expect(await stageFile(app, repo, 'f.txt')).toEqual({ ok: true });
+    expect(lsFiles('f.txt')).toMatch(/^120000 /);
+    expect(git(repo, 'show', ':f.txt')).toBe('base');
+    _resetRestoreCache();
+    expect(await unstageFile(app, repo, 'f.txt')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain', '--', 'f.txt')).toBe(' T f.txt\n');
+    expect(await discardFile(app, repo, 'f.txt')).toEqual({ ok: true });
+    expect(lstatSync(join(repo, 'f.txt')).isFile()).toBe(true);
+    expect(readFileSync(join(repo, 'f.txt'), 'utf8')).toBe('one\n');
+    // ` T` 链接 → 文件:discard 还原成链接
+    expect(await discardFile(app, repo, 'l2')).toEqual({ ok: true });
+    expect(readlinkSync(join(repo, 'l2'))).toBe('base');
+    // `T `:unstage 之后 index 回到链接,工作树的文件不动
+    expect(await unstageFile(app, repo, 'lnk')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain', '--', 'lnk')).toBe(' T lnk\n');
+    expect(readFileSync(join(repo, 'lnk'), 'utf8')).toBe('staged file\n');
+    // AT / MT:discard 把工作树还原成 index 里的版本;暂存的内容始终没动
+    expect(await discardFile(app, repo, 'at')).toEqual({ ok: true });
+    expect(readFileSync(join(repo, 'at'), 'utf8')).toBe('content\n');
+    expect(await discardFile(app, repo, 'mt')).toEqual({ ok: true });
+    expect(readFileSync(join(repo, 'mt'), 'utf8')).toBe('two2\n');
+    expect(git(repo, 'show', ':at')).toBe('content\n');
+    expect(lsFiles('at')).toMatch(/^100644 /);
+    expect(await scan()).toEqual(['A  at', ' M ch.sh', ' T lnk', 'M  mt']);
+
+    // chmod + 内容修改:hunk 操作只动内容,mode 变更留给文件级操作
+    const ch = await rendered(app, row('ch.sh'), 'changed');
+    expect(ch.buttons).toEqual(['Stage', 'Discard']);
+    if (!ch.diff.ok) throw new Error('ch.sh diff failed');
+    expect(ch.diff.unifiedDiff).toContain('old mode 100644\nnew mode 100755\n');
+    const patch = extractHunkPatchFromUnifiedDiff('ch.sh', ch.diff.unifiedDiff, hunkIndexes(ch.diff.unifiedDiff)[0]!);
+    expect(await stageHunk(app, repo, patch!)).toEqual({ ok: true });
+    expect(git(repo, 'show', ':ch.sh')).toBe('x\ny\n');
+    expect(lsFiles('ch.sh')).toMatch(/^100644 /);
+    expect(await unstageHunk(app, repo, patch!)).toEqual({ ok: true });
+    expect(git(repo, 'show', ':ch.sh')).toBe('x\n');
+    expect(await discardHunk(app, repo, patch!)).toEqual({ ok: true });
+    expect(readFileSync(join(repo, 'ch.sh'), 'utf8')).toBe('x\n');
+    expect(statSync(join(repo, 'ch.sh')).mode & 0o111).not.toBe(0);
   });
 });

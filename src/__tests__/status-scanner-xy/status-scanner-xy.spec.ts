@@ -23,4 +23,10 @@ describe('porcelain X/Y parsing', () => {
       },
     ]);
   });
+
+  it('T15 keeps the type-change code `T` in either column instead of folding it into `M`', () => {
+    expect(
+      parsePorcelainStatus('AT at\0 T f\0T  lnk\0MT mt\0').map((c) => `${c.statusX}${c.statusY} ${c.path} ${c.status}`),
+    ).toEqual(['AT at A', ' T f M', 'T  lnk M', 'MT mt M']);
+  });
 });

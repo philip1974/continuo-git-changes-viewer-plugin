@@ -70,4 +70,13 @@ describe('file-level write-op eligibility', () => {
     expect(canDiscardFile(change({ kind: 'binary', statusY: 'M' }), 'changed')).toBe(true);
     expect(canStageFile(change({ kind: 'binary', status: 'D', statusY: 'D' }), 'changed')).toBe(true);
   });
+
+  it('T30 a type change (`T`) keeps the file-level actions of a modification: Stage / Discard in Changes, Unstage in Staged', () => {
+    for (const row of [change({ statusX: ' ', statusY: 'T' }), change({ status: 'A', statusX: 'A', statusY: 'T' }), change({ statusX: 'M', statusY: 'T' })]) {
+      expect(canStageFile(row, 'changed')).toBe(true);
+      expect(canDiscardFile(row, 'changed')).toBe(true);
+    }
+    expect(canUnstageFile(change({ statusX: 'T', statusY: ' ' }), 'staged')).toBe(true);
+    expect(canUnstageFile(change({ statusX: 'T', statusY: 'M' }), 'staged')).toBe(true);
+  });
 });

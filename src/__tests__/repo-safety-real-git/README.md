@@ -362,3 +362,12 @@ One path, two records (`git-store-mode-selection` T20–T23, P1):
   (`isUntracked`), the staged row the deletion diff; a refresh keeps the
   untracked row selected; staging the untracked row removes both records.
 
+Type changes (`status-scanner-xy` T15, `hunk-patch-builder` T5–T7,
+`can-*-hunk` T20–T21, `can-file-ops` T30; run with git 2.50.1 and 2.56.1):
+
+- R72: `AT`, ` T` (file → link and link → file), `T ` and `MT` keep their
+  codes; the Changes / Staged views show both halves (deletion + addition)
+  with no hunk buttons, and no hunk patch can be built from them; file-level
+  stage / unstage / discard replace the entry and keep its content (the staged
+  blob of `AT` is never emptied); chmod + edit keeps working Stage / Unstage /
+  Discard hunk actions that touch content only.
