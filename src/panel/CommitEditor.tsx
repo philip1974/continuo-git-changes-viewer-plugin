@@ -256,15 +256,23 @@ export function CommitEditor({
     store.getState().setCommitMessage(event.target.value);
   };
 
+  // 关掉 Amend 并放回勾选前的草稿(没有记下草稿时为空)
+  const restoreDraft = () => {
+    store.getState().setCommitMessage(store.getState().amendDraft ?? '');
+    store.getState().setAmend(false);
+  };
+
   const onAmendToggle = async (next: boolean) => {
     const token = ++toggleTokenRef.current;
     if (!next) {
-      store.getState().setCommitMessage('');
-      store.getState().setAmend(false);
+      // 取消勾选:放回勾选前的草稿(Amend 模式下改过的文本不保留——它是 HEAD 的信息,不是草稿;见 README)
+      restoreDraft();
       return;
     }
     if (!app || !repoRoot) return;
 
+    // 勾选前的草稿先记下(store 里,面板关掉再打开也在),编辑框换成 HEAD 的信息
+    store.getState().setAmendDraft(commitMessage);
     store.getState().setCommitMessage('');
     store.getState().setAmend(true);
     editedSinceAmendRef.current = false;
@@ -275,7 +283,7 @@ export function CommitEditor({
     if (token !== toggleTokenRef.current) return;
 
     if (headMessage === null) {
-      store.getState().setAmend(false);
+      restoreDraft();
       showError(app, store, 'Failed to read HEAD commit message');
       return;
     }

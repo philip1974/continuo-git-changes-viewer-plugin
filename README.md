@@ -135,6 +135,11 @@ changes and click Amend. If you start typing before the message has loaded,
 your text is kept instead. Amend runs `git commit --amend -F -`, then refreshes
 the panel and clears amend mode on success.
 
+A draft written before checking "Amend last commit" is kept aside: unchecking
+Amend (or HEAD's message failing to load) puts that draft back into the editor.
+Text edited while Amend was checked is not kept when you uncheck it — the draft
+from before checking comes back. After a successful amend the editor is empty.
+
 Amend only rewrites the commit whose message it loaded. If HEAD has become a
 different commit since "Amend last commit" was checked (you committed or
 amended in a terminal), clicking Amend changes nothing: Amend is turned off

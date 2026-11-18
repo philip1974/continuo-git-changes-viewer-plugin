@@ -67,6 +67,11 @@ export interface GitViewerState {
    * 不 Amend(见 CommitEditor 的 AMEND_NON_UTF8_UNEDITED_MESSAGE)。
    */
   amendMessage: string | null;
+  /**
+   * 勾选 Amend 前编辑框里的草稿(勾选时换成 HEAD 的信息)。用户取消勾选时放回编辑框(见 CommitEditor)。
+   * 放在 store 里:面板关掉再打开也还在。amend 为 false 时是 null。
+   */
+  amendDraft: string | null;
   restriction: string | null;
   /** 最近一次 refresh 没拿到可信的 status(原因);下一次成功的 refresh 清除。非 null 时禁用 Commit / Amend。 */
   statusError: string | null;
@@ -110,7 +115,10 @@ export interface GitViewerState {
   setBanner(banner: BannerState): void;
   dismissBanner(): void;
   setCommitMessage(message: string): void;
+  /** 打开 / 关闭 Amend。打开时保留已记下的草稿(amendDraft),关闭时连同它一起清掉。 */
   setAmend(value: boolean, headSha?: string | null, loadedMessage?: string | null): void;
+  /** 记下勾选 Amend 前的草稿(勾选 Amend 时调用)。 */
+  setAmendDraft(draft: string | null): void;
 }
 
 interface ChangeSlice {
@@ -208,6 +216,7 @@ const emptyState = {
   amend: false,
   amendHead: null,
   amendMessage: null,
+  amendDraft: null,
   restriction: null,
   statusError: null,
   statusFingerprint: null,
@@ -229,6 +238,7 @@ const emptyState = {
   | 'amend'
   | 'amendHead'
   | 'amendMessage'
+  | 'amendDraft'
   | 'restriction'
   | 'statusError'
   | 'statusFingerprint'
@@ -373,6 +383,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         amend: false,
         amendHead: null,
         amendMessage: null,
+        amendDraft: null,
         restriction: null,
         statusError: null,
         statusFingerprint: null,
@@ -409,7 +420,15 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
       set({ commitMessage: message });
     },
     setAmend(value, headSha = null, loadedMessage = null) {
-      set({ amend: value, amendHead: value ? headSha : null, amendMessage: value ? loadedMessage : null });
+      set({
+        amend: value,
+        amendHead: value ? headSha : null,
+        amendMessage: value ? loadedMessage : null,
+        amendDraft: value ? get().amendDraft : null,
+      });
+    },
+    setAmendDraft(draft) {
+      set({ amendDraft: draft });
     },
   }));
 }

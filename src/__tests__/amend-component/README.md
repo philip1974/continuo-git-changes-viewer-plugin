@@ -45,3 +45,19 @@ edited), and the U+FFFD warning about the pre-filled text is not shown.
   typed text, no U+FFFD warning.
 - T42: nothing typed during the wait (a draft typed before checking Amend does
   not count) → pre-filled as before.
+
+Checking Amend replaces the editor's text with HEAD's message. Unchecking used
+to clear the editor, so a draft written before checking Amend was lost. The
+draft is now kept aside in the store (`amendDraft`) when Amend is checked and
+put back when the user unchecks Amend — also when the HEAD message cannot be
+read and Amend goes back off. Text edited in Amend mode is not kept on
+unchecking (it started as HEAD's message, not as the draft). Other ways Amend
+turns off (a successful amend, HEAD changed at the click) forget the draft.
+
+- T43: checked → draft kept in the store; unchecked → draft back.
+- T44: edited in Amend mode, then unchecked → the draft, not the edit.
+- T45: HEAD message unreadable → Amend off, draft back.
+- T46: successful amend → editor empty, draft forgotten.
+- T24 (changed): checking and at once unchecking now leaves the draft
+  (`'draft'`) instead of an empty editor; the late HEAD message still does not
+  overwrite it.

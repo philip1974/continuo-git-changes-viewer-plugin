@@ -141,9 +141,10 @@ describe('CommitEditor amend UI', () => {
     fireEvent.click(checkbox);
     resolveHead('late head message');
 
+    // 取消勾选恢复勾选前的草稿(T43);迟到的 HEAD 信息不会覆盖它
     await vi.waitFor(() => {
       expect(store.getState().amend).toBe(false);
-      expect(store.getState().commitMessage).toBe('');
+      expect(store.getState().commitMessage).toBe('draft');
     });
   });
 
@@ -426,5 +427,52 @@ describe('CommitEditor amend UI', () => {
       head.arrive();
       await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'head subject', amendMessage: 'head subject' }));
     });
+  });
+});
+
+// 勾选 Amend 会把编辑框换成 HEAD 的信息;此前取消勾选清空编辑框,勾选前写的草稿丢了。
+describe('the draft written before checking Amend', () => {
+  it('T43 checking Amend keeps the draft aside (in the store); unchecking puts it back', async () => {
+    const { app } = appWithShell();
+    const { store } = renderEditor({ app, message: '' });
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'my draft' } });
+    const checkbox = await screen.findByRole('checkbox', { name: 'Amend last commit' });
+    fireEvent.click(checkbox);
+    await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'head subject\n\nhead body', amendDraft: 'my draft' }));
+    fireEvent.click(checkbox);
+    expect(store.getState()).toMatchObject({ amend: false, commitMessage: 'my draft', amendDraft: null });
+  });
+
+  it('T44 the message edited in Amend mode is not kept when Amend is unchecked: the draft from before checking comes back', async () => {
+    const { app } = appWithShell();
+    const { store } = renderEditor({ app, message: '' });
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'my draft' } });
+    const checkbox = await screen.findByRole('checkbox', { name: 'Amend last commit' });
+    fireEvent.click(checkbox);
+    await vi.waitFor(() => expect(store.getState().commitMessage).toBe('head subject\n\nhead body'));
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'edited amend message' } });
+    fireEvent.click(checkbox);
+    expect(store.getState()).toMatchObject({ amend: false, commitMessage: 'my draft' });
+  });
+
+  it('T45 the HEAD message cannot be read: Amend goes back off and the draft comes back', async () => {
+    const { app, notifications } = appWithShell();
+    const { store } = renderEditor({ app, message: '', readHeadMessage: vi.fn(async () => null) });
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'my draft' } });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'error', message: 'Failed to read HEAD commit message' }));
+    expect(store.getState()).toMatchObject({ amend: false, commitMessage: 'my draft', amendDraft: null });
+  });
+
+  it('T46 after a successful amend the editor is empty: the draft is not brought back and is forgotten', async () => {
+    const { app } = appWithShell();
+    const commit = vi.fn(async () => ({ ok: true as const }));
+    const { store } = renderEditor({ app, commit, message: '' });
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'my draft' } });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(store.getState().commitMessage).toBe('head subject\n\nhead body'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: false, commitMessage: '', amendDraft: null }));
   });
 });
