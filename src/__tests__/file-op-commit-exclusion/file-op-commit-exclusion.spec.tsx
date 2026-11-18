@@ -6,6 +6,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  COMMIT_ALREADY_RUNNING_MESSAGE,
   COMMIT_WAITS_FOR_FILE_OP_TITLE,
   CommitEditor,
   FILE_OP_DURING_COMMIT_MESSAGE,
@@ -14,6 +15,7 @@ import {
 import { COMMIT_IN_PROGRESS_MESSAGE, COMMIT_IN_PROGRESS_TITLE } from '../../panel/FileList';
 import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CommitResult } from '../../git/git-commit';
+import type { RepoHooks } from '../../git/repo-hooks';
 import type { FileChange } from '../../git/status-scanner';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { createGitStore } from '../../state/git-store';
@@ -55,15 +57,27 @@ describe('the store counts the panel’s own file writes', () => {
     expect(store.getState()).toMatchObject({ writesInFlight: 1, writeVersion: 2 });
     endB();
     expect(store.getState()).toMatchObject({ writesInFlight: 0, writeVersion: 2 });
-    store.getState().setCommitInFlight(true);
+  });
+
+  it('X1b beginCommit: commitInFlight is true while any commit that began has not ended; each returned end() takes back only its own commit, once — the end of one commit (or a second call of its end) does not clear another that is still running', () => {
+    const store = createGitStore({ load: async () => ({ repoRoot: '/r', changes: [] }) });
+    const endA = store.getState().beginCommit();
+    const endB = store.getState().beginCommit();
     expect(store.getState().commitInFlight).toBe(true);
-    store.getState().setCommitInFlight(false);
+    endA();
+    endA();
+    expect(store.getState().commitInFlight).toBe(true);
+    store.getState().clear();
+    expect(store.getState().commitInFlight).toBe(true);
+    endB();
     expect(store.getState().commitInFlight).toBe(false);
   });
 });
 
 function renderEditor(opts: {
   readonly fileOpInFlight?: boolean;
+  readonly commitInFlight?: boolean;
+  readonly detectHooks?: () => Promise<RepoHooks>;
   readonly readFingerprint?: () => Promise<string>;
   readonly commit?: () => Promise<CommitResult>;
 } = {}) {
@@ -81,11 +95,12 @@ function renderEditor(opts: {
       commitMessage="subject"
       stagedCount={1}
       fileOpInFlight={opts.fileOpInFlight}
+      commitInFlight={opts.commitInFlight}
       commit={commit}
       readSubject={async () => 'subject'}
       hasHeadCommit={async () => true}
       readHeadSha={async () => 'sha'}
-      detectHooks={async () => ({ kind: 'none' as const })}
+      detectHooks={opts.detectHooks ?? (async () => ({ kind: 'none' as const }))}
       readFingerprint={opts.readFingerprint ?? (async () => 'fp')}
     />,
   );
@@ -144,6 +159,42 @@ describe('Commit / Amend wait for the panel’s own file writes', () => {
     await act(async () => { gate.resolve({ ok: true }); });
     await vi.waitFor(() => expect(store.getState().commitInFlight).toBe(false));
   });
+
+  // 面板关掉再打开:新的 CommitEditor 没有上一个的局部状态,只能从 store 知道还有提交在途。
+  it('X9 a commit started by an earlier mount of the panel is still running: the Commit button is disabled, shows it is committing and says why', () => {
+    const { button } = renderEditor({ commitInFlight: true });
+    expect(button().disabled).toBe(true);
+    expect(button().textContent).toBe('Committing...');
+    expect(button().title).toBe(COMMIT_IN_PROGRESS_TITLE);
+  });
+
+  it('X10 a commit is already in flight in the store at the click (the button had not re-rendered yet): nothing is read or committed, the warning says a commit is running, and the other commit stays marked in flight', async () => {
+    const readFingerprint = vi.fn(async () => 'fp');
+    const detectHooks = vi.fn(async () => ({ kind: 'none' as const }));
+    const { store, commit, notifications, button } = renderEditor({ readFingerprint, detectHooks });
+    store.getState().beginCommit();
+    expect(button().disabled).toBe(false);
+    fireEvent.click(button());
+    await act(async () => { await Promise.resolve(); });
+    expect(detectHooks).not.toHaveBeenCalled();
+    expect(readFingerprint).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+    expect(notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: COMMIT_ALREADY_RUNNING_MESSAGE });
+    expect(store.getState().commitInFlight).toBe(true);
+  });
+
+  it('X11 the click that only opens the hooks prompt ends its own in-flight mark and nobody else’s: a commit that began meanwhile stays marked in flight', async () => {
+    const hooks = deferred<RepoHooks>();
+    const { store, button } = renderEditor({ detectHooks: () => hooks.promise });
+    fireEvent.click(button());
+    expect(store.getState().commitInFlight).toBe(true);
+    const endOther = store.getState().beginCommit();
+    await act(async () => { hooks.resolve({ kind: 'unknown', reason: 'test' }); });
+    await screen.findByRole('button', { name: 'Commit and run hooks' });
+    expect(store.getState().commitInFlight).toBe(true);
+    endOther();
+    expect(store.getState().commitInFlight).toBe(false);
+  });
 });
 
 // 面板:文件写操作的计数覆盖 git 命令与随后的 refresh;Commit 在途时文件写操作不可用。
@@ -198,7 +249,8 @@ describe('the panel: file writes and Commit exclude each other', () => {
 
   it('X8 while a commit is in flight the file-level Stage / Unstage buttons are disabled (with the reason); a click that slips through is refused without running git', async () => {
     const { store, exec, notifications } = renderPanel(() => undefined);
-    act(() => store.getState().setCommitInFlight(true));
+    let endCommit!: () => void;
+    act(() => { endCommit = store.getState().beginCommit(); });
     const stage = screen.getByRole('button', { name: 'Stage file x.txt' }) as HTMLButtonElement;
     const unstage = screen.getByRole('button', { name: 'Unstage file f.txt' }) as HTMLButtonElement;
     expect(stage.disabled).toBe(true);
@@ -207,12 +259,12 @@ describe('the panel: file writes and Commit exclude each other', () => {
 
     // 按钮还没重新渲染时的点击(store 已经标记,DOM 还是可用的):拒绝,不起任何 git。
     // 先拿到"可用时"那一版的 onClick,再标记——等价于标记与点击之间 React 还没重新渲染。
-    act(() => store.getState().setCommitInFlight(false));
+    act(() => endCommit());
     exec.mockClear();
     const enabledStage = screen.getByRole('button', { name: 'Stage file x.txt' }) as HTMLButtonElement;
     const propsKey = Object.keys(enabledStage).find((key) => key.startsWith('__reactProps$'))!;
     const onClick = (enabledStage as unknown as Record<string, { onClick: () => void }>)[propsKey]!.onClick;
-    store.getState().setCommitInFlight(true);
+    endCommit = store.getState().beginCommit();
     await act(async () => { onClick(); await Promise.resolve(); });
     expect(exec).not.toHaveBeenCalled();
     expect(notifications.show).toHaveBeenCalledWith({ kind: 'error', message: COMMIT_IN_PROGRESS_MESSAGE });

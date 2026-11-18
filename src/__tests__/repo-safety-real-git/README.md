@@ -432,6 +432,15 @@ driven by the test; run with git 2.50.1 and 2.56.1):
   button are disabled; the commit holds only f. P12: a pre-commit hook opens
   the prompt, Stage x runs meanwhile → "Commit and run hooks" commits nothing;
   the next attempt commits f and x.
+- P14–P15 (`file-op-commit-exclusion`): a commit still running when the panel
+  is closed and opened again. Found by the reviewer with git 2.50: git does not
+  hold `index.lock` while the pre-commit hook runs, so a `git add` during the
+  hook goes into that commit; the reopened panel's Commit was enabled, and the
+  hooks prompt it opened cleared the store's in-flight flag, enabling Stage —
+  HEAD then held f and x. P14: the hook waits for the test → in the reopened
+  panel Commit ("Committing...") and Stage / Discard x are disabled; the commit
+  holds only f. P15: the first `git commit` held before it starts → the
+  reopened panel cannot start a second one; exactly one commit, holding f.
 
 Bytes that are not valid UTF-8 (`hunk-patch-builder` T8, `path-utils` T8,
 `status-scanner` T10; run with git 2.50.1 and 2.56.1):

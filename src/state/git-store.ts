@@ -88,11 +88,21 @@ export interface GitViewerState {
   writesInFlight: number;
   /** 每开始一次面板写操作就加一,只增不减(refresh / clear 不重置):提交前比较"点击之后有没有写操作开始过"。 */
   writeVersion: number;
-  /** 面板的 Commit / Amend 正在进行(从点击到结束):此时文件写操作不可用——它会让提交的内容不确定。 */
+  /**
+   * 面板的 Commit / Amend 正在进行(从点击到结束;commitsInFlight > 0):此时文件写操作与再一次 Commit 不可用——
+   * 它们会让提交的内容不确定。放在 store 里而不是 CommitEditor 的局部状态:面板关掉再打开,新挂载的 CommitEditor
+   * 也得知道上一个发起的提交还没结束。
+   */
   commitInFlight: boolean;
+  /** 正在进行的 Commit / Amend 数(beginCommit 加、它返回的函数减);commitInFlight 由它派生。 */
+  commitsInFlight: number;
   /** 开始一次面板写操作;返回的函数结束它(只生效一次)。 */
   beginWrite(): () => void;
-  setCommitInFlight(value: boolean): void;
+  /**
+   * 开始一次 Commit / Amend;返回的函数结束它(只生效一次)。每次提交只结束自己的那一份——一次提交(或打开 hooks
+   * 确认框的那次点击)结束时,不会清掉另一次仍在进行的提交。
+   */
+  beginCommit(): () => void;
   refresh(): Promise<void>;
   selectFile(path: string, mode: DiffMode): void;
   loadDiff(path: string, mode: DiffMode): Promise<void>;
@@ -205,6 +215,7 @@ const emptyState = {
   writesInFlight: 0,
   writeVersion: 0,
   commitInFlight: false,
+  commitsInFlight: 0,
 } satisfies Pick<
   GitViewerState,
   | 'repoRoot'
@@ -225,6 +236,7 @@ const emptyState = {
   | 'writesInFlight'
   | 'writeVersion'
   | 'commitInFlight'
+  | 'commitsInFlight'
 >;
 
 export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState> {
@@ -376,8 +388,16 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         set({ writesInFlight: Math.max(0, get().writesInFlight - 1) });
       };
     },
-    setCommitInFlight(value) {
-      set({ commitInFlight: value });
+    beginCommit() {
+      const count = get().commitsInFlight + 1;
+      set({ commitsInFlight: count, commitInFlight: true });
+      let ended = false;
+      return () => {
+        if (ended) return;
+        ended = true;
+        const rest = Math.max(0, get().commitsInFlight - 1);
+        set({ commitsInFlight: rest, commitInFlight: rest > 0 });
+      };
     },
     setBanner(banner) {
       set({ banner });

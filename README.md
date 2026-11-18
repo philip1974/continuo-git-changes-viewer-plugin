@@ -120,7 +120,12 @@ command and the refresh after it are done — Commit and Amend are disabled; a
 click that slips in anyway, or a stage that ran while the hooks confirmation
 was open, commits nothing and asks you to review and commit again. While a
 commit or amend is running, the stage / unstage / discard buttons are
-disabled.
+disabled, and so are Commit and Amend — also in a panel that was closed and
+opened again while the commit was still running (for example during a slow
+pre-commit hook): it shows "Committing..." until that commit has finished, and
+cannot start a second one. The hooks confirmation itself does not hold the
+commit: stage / unstage / discard stay usable while it is open, and confirming
+afterwards commits nothing (see above).
 
 ### Amend
 

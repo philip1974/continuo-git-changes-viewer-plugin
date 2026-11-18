@@ -403,6 +403,7 @@ export function GitViewerPanel({
         amend={state.amend}
         statusUnavailable={state.statusError !== null}
         fileOpInFlight={state.writesInFlight > 0}
+        commitInFlight={state.commitInFlight}
       />
       <div className="cgv-body">
         <FileList

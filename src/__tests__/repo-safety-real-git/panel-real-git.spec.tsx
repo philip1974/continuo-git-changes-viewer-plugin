@@ -30,6 +30,8 @@ const git = (cwd: string, ...args: string[]) =>
 // 可控的时序(不靠真实时间):非 null 时,每次 exec 发起时问它一次;它返回 promise 的那次调用,进程照常跑完,
 // 但结果要等这个 promise 兑现才交还给插件——"这次读取还在 await"的状态可以保持任意久。
 let holdExec: ((args: readonly string[]) => Promise<void> | undefined) | null = null;
+// 同上,但在起进程**之前**等:这次调用的 git 进程要等 promise 兑现才启动(仓库此时还没被它改动)。
+let holdBeforeExec: ((args: readonly string[]) => Promise<void> | undefined) | null = null;
 // 非 null 时,它返回结果的那次调用不起进程、直接得到这个结果(模拟宿主报告的超时)。
 let stubExec: ((args: readonly string[]) => PluginShellExecResult | undefined) | null = null;
 const deferred = () => {
@@ -43,6 +45,7 @@ function realApp(intervalSec: number): CoPluginApp {
   const exec = async (cmd: string, args: readonly string[], opts: PluginShellExecOptions = {}) => {
     const stubbed = stubExec?.(args);
     if (stubbed) return stubbed;
+    await holdBeforeExec?.(args);
     const held = holdExec?.(args);
     const result = await run(cmd, args, opts);
     await held;
@@ -111,6 +114,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   holdExec = null;
+  holdBeforeExec = null;
   stubExec = null;
   cleanup();
   rmSync(repo, { recursive: true, force: true });
@@ -136,22 +140,28 @@ function mount(intervalSec: number) {
   });
   const timer = { opts: null as AutoRefreshTimerOpts | null, starts: 0 };
   const panelApi = panelApiStub();
-  render(
+  const ui = () => (
     <GitViewerPanel
       app={app}
       store={store}
       panelApi={panelApi}
       timer={{ start: (opts) => { timer.opts = opts; timer.starts += 1; }, stop: () => { timer.opts = null; } }}
       pluginId="git-viewer"
-    />,
+    />
   );
+  let view = render(ui());
+  // 关掉面板再打开:卸载这个 GitViewerPanel,用同一个 store(插件实例持有的那份)挂一个新的
+  const remount = () => {
+    view.unmount();
+    view = render(ui());
+  };
   // 面板里实际渲染出来的 Staged 行内容(index 版本)
   const shown = () => {
     const { selected, diffCache } = store.getState();
     const diff = selected ? diffCache.get(cacheKey(selected.path, selected.mode)) : undefined;
     return diff?.ok ? `${selected!.mode}:${diff.modified}` : null;
   };
-  return { app, store, timer, panelApi, shown };
+  return { app, store, timer, panelApi, shown, remount };
 }
 
 // 提交之后面板自己的收尾(清空提交信息、refresh)做完,再让 afterEach 删仓库
@@ -575,6 +585,96 @@ describe('the panel’s own file writes and Commit exclude each other (real pane
     await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
     expect(committed()).toEqual(['f', 'x']);
     await settled(store);
+  });
+});
+
+// 提交在途时关掉再打开面板:新面板的 CommitEditor 没有上一个的局部状态。此前它只看自己的 `committing`——Commit 可点,
+// 点出的 hooks 确认框那一步结束时把 store 的"提交在途"清掉,Stage 随之可用;而 git(实测 2.50)跑 pre-commit hook 时
+// 不持有 index.lock,hook 期间 `git add` 的文件进了这次提交(复核者实测:f 已暂存、x 未暂存,HEAD 含 f 与 x)。
+describe('a commit still running when the panel is closed and opened again (real panel, real git)', () => {
+  const commitButton = () => screen.getByRole('button', { name: 'Commit staged changes' }) as HTMLButtonElement;
+  const committed = () => git(repo, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n');
+  const setup = async () => {
+    writeFileSync(join(repo, 'x'), 'x0\n');
+    git(repo, 'add', 'x');
+    git(repo, 'commit', '-qm', 'x');
+    writeFileSync(join(repo, 'f'), 'v1 reviewed\n');
+    git(repo, 'add', 'f');
+    writeFileSync(join(repo, 'x'), 'x1 not staged\n');
+    const mounted = mount(0);
+    await waitFor(() => expect(mounted.store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
+    mounted.store.getState().setCommitMessage('msg');
+    await waitFor(() => expect(commitButton().disabled).toBe(false));
+    return mounted;
+  };
+  // 新挂载的面板读完列表、渲染稳定
+  const remounted = async (m: Awaited<ReturnType<typeof setup>>) => {
+    m.remount();
+    await waitFor(() => expect(m.store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stage file x' })).toBeTruthy());
+  };
+
+  it('P14 the pre-commit hook is running (it waits until the test lets it finish) when the panel is closed and opened again: in the new panel Commit is disabled and shows the commit is running, Stage x and Discard x are disabled; the commit holds only f, x stays unstaged, and afterwards the new panel is usable again', async () => {
+    const m = await setup();
+    // hook 等到用例放行才结束(最多约 20 s;仓库被删掉也结束——用例失败时不留下进程)
+    const started = join(repo, '.git', 'hook-started');
+    const release = join(repo, '.git', 'hook-release');
+    writeFileSync(
+      join(repo, '.git', 'hooks', 'pre-commit'),
+      `#!/bin/sh\n: > '${started}'\ni=0\nwhile [ ! -e '${release}' ] && [ -d '${join(repo, '.git')}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    fireEvent.click(commitButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit and run hooks' }));
+    await waitFor(() => expect(lstatSync(started).isFile()).toBe(true));
+    expect(m.store.getState().commitInFlight).toBe(true);
+
+    await remounted(m);
+    expect(m.store.getState().commitInFlight).toBe(true);
+    expect(commitButton().disabled).toBe(true);
+    expect(commitButton().textContent).toBe('Committing...');
+    fireEvent.click(commitButton());
+    expect(screen.queryByRole('button', { name: 'Commit and run hooks' })).toBeNull();
+    const stage = screen.getByRole('button', { name: 'Stage file x' }) as HTMLButtonElement;
+    expect(stage.disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Discard file x' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(stage);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(git(repo, 'diff', '--cached', '--name-only').trim().split('\n')).toEqual(['f']);
+
+    writeFileSync(release, '');
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
+    await settled(m.store);
+    expect(committed()).toEqual(['f']);
+    expect(git(repo, 'status', '--porcelain')).toBe(' M x\n');
+    expect(m.store.getState().commitInFlight).toBe(false);
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Stage file x' }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('P15 `git commit` (no hooks) has been started but has not run yet when the panel is closed and opened again: the new panel cannot start a second `git commit` — exactly one commit is made, holding only f', async () => {
+    const m = await setup();
+    const gate = deferred();
+    let commits = 0;
+    // 第一次 `git commit` 在起进程之前停住:暂存区里仍是 f,新面板照样显示 f 已暂存
+    holdBeforeExec = (args) => (args.includes('commit') && commits++ === 0 ? gate.promise : undefined);
+    fireEvent.click(commitButton());
+    await waitFor(() => expect(commits).toBe(1));
+
+    await remounted(m);
+    expect(screen.getByText('1 file(s) staged')).toBeTruthy();
+    m.store.getState().setCommitMessage('second');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(commitButton().disabled).toBe(true);
+    fireEvent.click(commitButton());
+    await new Promise((r) => setTimeout(r, 300));
+    expect(commits).toBe(1);
+
+    gate.resolve();
+    await waitFor(() => expect(m.store.getState().commitInFlight).toBe(false));
+    await settled(m.store);
+    expect(commits).toBe(1);
+    expect(git(repo, 'log', '--format=%s').trim().split('\n')).toEqual(['msg', 'x', 'init']);
+    expect(committed()).toEqual(['f']);
   });
 });
 

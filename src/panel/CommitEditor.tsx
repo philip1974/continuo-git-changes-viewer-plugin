@@ -20,6 +20,7 @@ import {
 } from '../git/repo-hooks';
 import { readStatusHash } from '../git/status-hash';
 import { visibleText } from '../lib/visible-text';
+import { COMMIT_IN_PROGRESS_TITLE } from './FileList';
 import type { CoPluginApp } from '../sdk/types';
 import { cacheKey, type GitViewerState } from '../state/git-store';
 import type { DiffResult } from '../git/diff-fetcher';
@@ -53,6 +54,11 @@ interface CommitEditorProps {
    * Commit / Amend 禁用。点击时以 store 为准再查一次(见 onCommit)。
    */
   readonly fileOpInFlight?: boolean;
+  /**
+   * 有 Commit / Amend 正在进行(git-store 的 commitInFlight)——也可能是面板关掉之前、上一个 CommitEditor 发起的。
+   * 此时 Commit / Amend 禁用;点击时以 store 为准再查一次(见 onCommit)。
+   */
+  readonly commitInFlight?: boolean;
   readonly commit?: CommitFn;
   readonly readSubject?: ReadSubjectFn;
   readonly readHeadMessage?: ReadSubjectFn;
@@ -107,6 +113,11 @@ export const FILE_OP_DURING_COMMIT_MESSAGE =
   'A stage, unstage or discard ran after you clicked, so the staged changes may not be what you reviewed. Nothing was committed — review the view and commit again.';
 
 export const COMMIT_WAITS_FOR_FILE_OP_TITLE = 'Wait for the stage / unstage / discard to finish';
+
+// 已有一次 Commit / Amend 在进行(例如面板关掉之前发起、还没结束的那次)。按钮此时本是禁用的;这是点击与重新渲染
+// 之间的兜底。不起第二个 `git commit`。
+export const COMMIT_ALREADY_RUNNING_MESSAGE =
+  'A commit is already running. Nothing else was committed — wait for it to finish, review the view and commit again.';
 
 /**
  * 点击 Commit / Amend 那一刻屏幕上的内容的身份。必须在 onCommit 里**任何 await 之前**同步取:之后每一个
@@ -187,6 +198,7 @@ export function CommitEditor({
   amend = false,
   statusUnavailable = false,
   fileOpInFlight = false,
+  commitInFlight = false,
   commit = gitCommit as CommitFn,
   readSubject = readLastCommitSubject as ReadSubjectFn,
   readHeadMessage = defaultReadHeadMessage as ReadSubjectFn,
@@ -196,6 +208,8 @@ export function CommitEditor({
   readFingerprint = readStatusHash,
 }: CommitEditorProps) {
   const [committing, setCommitting] = useState(false);
+  // 这个 CommitEditor 自己的提交在进行,或别处(面板关掉之前的那个 CommitEditor)发起的提交还没结束
+  const busy = committing || commitInFlight;
   // 提交前 hooks 确认:非 null 时显示提示,用户点确认才真正提交(每次提交都重新检测与确认)。
   // `shown`:打开确认框的那次点击时屏幕上的内容——确认之后拿它比较(确认框开着的时候有 refresh 落盘 → 中止)。
   const [hooksPrompt, setHooksPrompt] = useState<{
@@ -212,7 +226,7 @@ export function CommitEditor({
     (amend
       ? canAmend(commitMessage, stagedCount, headHasCommit === true)
       : canCommit(commitMessage, stagedCount)) &&
-    !committing &&
+    !busy &&
     !statusUnavailable &&
     !fileOpInFlight &&
     repoRoot !== null &&
@@ -283,6 +297,12 @@ export function CommitEditor({
     // 用户看到的是渲染出来的列表与 diff;这里取的是 store 此刻的状态。refresh 在点击前一瞬间落盘、React 还没
     // 渲染(或刚渲染、用户不可能看过)的情形分辨不了——人机时序,见 README 的残余。
     const atClick = store.getState();
+    // 已有提交在进行(按钮还没来得及禁用;或面板关掉之前发起的那次):不起第二个 `git commit`,也不打开确认框
+    if (atClick.commitInFlight) {
+      setHooksPrompt(null);
+      showWarning(app, store, COMMIT_ALREADY_RUNNING_MESSAGE);
+      return;
+    }
     // 预填的信息含 U+FFFD 且一字未改:不 Amend(见 AMEND_NON_UTF8_UNEDITED_MESSAGE)。比较的是将要提交的文本。
     if (amend && atClick.amendMessage !== null && atClick.amendMessage.includes('\uFFFD') && commitMessage === atClick.amendMessage) {
       setHooksPrompt(null);
@@ -307,9 +327,10 @@ export function CommitEditor({
     }
 
     // 从这里起直到结束,面板的文件写操作不可用(见 GitViewerPanel / FileList / DiffView)——与上面的检查在同一个
-    // 同步段里:两次点击谁先到,另一方就看得到它。
+    // 同步段里:两次点击谁先到,另一方就看得到它。结束时只结束这一次(endCommit),不清掉别处的提交——
+    // 包括只打开了 hooks 确认框就 return 的这条路径。
     setCommitting(true);
-    store.getState().setCommitInFlight(true);
+    const endCommit = store.getState().beginCommit();
     try {
       if (!hooksConfirmed) {
         let hooks: RepoHooks;
@@ -434,7 +455,7 @@ export function CommitEditor({
       }
     } finally {
       setCommitting(false);
-      store.getState().setCommitInFlight(false);
+      endCommit();
     }
   };
 
@@ -452,14 +473,14 @@ export function CommitEditor({
         onChange={onChange}
         rows={2}
         spellCheck={false}
-        disabled={committing}
+        disabled={busy}
       />
       <div className="cgv-amend-row">
         <label className="cgv-amend-label">
           <input
             type="checkbox"
             checked={amend}
-            disabled={headHasCommit !== true || committing}
+            disabled={headHasCommit !== true || busy}
             onChange={(event) => void onAmendToggle(event.target.checked)}
           />
           <span>Amend last commit</span>
@@ -478,7 +499,7 @@ export function CommitEditor({
               type="button"
               className="cgv-commit-btn"
               onClick={() => setHooksPrompt(null)}
-              disabled={committing}
+              disabled={busy}
             >
               Cancel
             </button>
@@ -508,14 +529,16 @@ export function CommitEditor({
           disabled={!enabled}
           aria-label={amend ? 'Amend last commit' : 'Commit staged changes'}
           title={
-            fileOpInFlight
+            commitInFlight && !committing
+              ? COMMIT_IN_PROGRESS_TITLE
+              : fileOpInFlight
               ? COMMIT_WAITS_FOR_FILE_OP_TITLE
               : amend
                 ? 'Amend rewrites HEAD - avoid pushed commits'
                 : 'Commit staged changes'
           }
         >
-          {committing ? (amend ? 'Amending...' : 'Committing...') : (amend ? 'Amend' : 'Commit')}
+          {busy ? (amend ? 'Amending...' : 'Committing...') : (amend ? 'Amend' : 'Commit')}
         </button>
       </div>
     </section>
