@@ -8,8 +8,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { fetchDiff, FILE_READ_TIMEOUT_MS, MAX_FILE_BYTES } from '../../git/diff-fetcher';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fetchDiff, FILE_READ_TIMEOUT_MS, isWorktreeDiffStale, MAX_FILE_BYTES } from '../../git/diff-fetcher';
 import { discardFile } from '../../git/discard-file';
 import { discardHunk } from '../../git/discard-hunk';
 import { DISABLED_HOOKS_PATH, gitExec, KNOWN_HOOK_EVENTS, LITERAL_ARGV_CONFIG } from '../../git/exec';
@@ -2946,5 +2946,98 @@ describe('a type change (file ↔ symbolic link) is one entry replaced by anothe
     expect(await discardHunk(app, repo, patch!)).toEqual({ ok: true });
     expect(readFileSync(join(repo, 'ch.sh'), 'utf8')).toBe('x\n');
     expect(statSync(join(repo, 'ch.sh')).mode & 0o111).not.toBe(0);
+  });
+});
+
+describe('the panel shows what a commit would take, without a manual Refresh (real git)', () => {
+  it('R73 a staged file edited and staged again (status still `M `), and an unstaged file edited again (still ` M`): after the next auto-refresh tick the selected row and the rows looked at earlier all show the new content, and the commit holds exactly what the Staged rows showed', async () => {
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'config', 'user.email', 't@t');
+    writeFileSync(join(repo, 'w.txt'), 'w0\n');
+    writeFileSync(join(repo, 'w2.txt'), 'w2-0\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'w');
+    writeFileSync(join(repo, 'f.txt'), 'f staged v1\n');
+    writeFileSync(join(repo, 'g.txt'), 'g staged v1\n');
+    git(repo, 'add', 'f.txt', 'g.txt');
+    writeFileSync(join(repo, 'w.txt'), 'w edit v1\n');
+    writeFileSync(join(repo, 'w2.txt'), 'w2 edit v1\n');
+    const STATUS = 'M  f.txt\nM  g.txt\n M w.txt\n M w2.txt\n';
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const store = createGitStore({
+      load: async () => ({ repoRoot: repo, changes: await scanStatus(app, repo) }),
+      fetchDiff: (root, change, mode) => fetchDiff(app, root, change, mode),
+    });
+    const shownDiff = () => {
+      const { selected, diffCache } = store.getState();
+      return selected ? diffCache.get(`${selected.mode}:${selected.path}`) : undefined;
+    };
+    // refresh 之后选中项的 diff 是异步重读的:等它到位
+    const settle = () => vi.waitFor(() => expect(shownDiff()).toBeDefined(), { timeout: 4000, interval: 10 });
+    const shown = () => {
+      const diff = shownDiff();
+      return diff?.ok ? diff.modified : undefined;
+    };
+    const click = async (path: string, mode: 'staged' | 'changed') => {
+      store.getState().selectFile(path, mode);
+      await store.getState().loadDiff(path, mode);
+      return shown();
+    };
+    // 面板的自动刷新 tick(GitViewerPanel onTick 的比较):status 指纹变了,或选中的工作树 diff 过期 → refresh
+    let lastHash = '';
+    const tick = async () => {
+      const next = await readStatusHash(app, repo);
+      const { selected } = store.getState();
+      const stale = next !== lastHash || (selected?.mode === 'changed' && (await isWorktreeDiffStale(app, repo, shownDiff())));
+      lastHash = next;
+      if (stale) {
+        await store.getState().refresh();
+        await settle();
+      }
+      return stale;
+    };
+
+    await store.getState().refresh();
+    await settle();
+    lastHash = await readStatusHash(app, repo);
+    expect(await click('g.txt', 'staged')).toBe('g staged v1\n');
+    expect(await click('w2.txt', 'changed')).toBe('w2 edit v1\n');
+    expect(await click('f.txt', 'staged')).toBe('f staged v1\n');
+    expect(await tick()).toBe(false);
+
+    // 终端里:两个已暂存的文件各自再改一次并 add;status 的字母没有变
+    writeFileSync(join(repo, 'f.txt'), 'f staged v2 !\n');
+    writeFileSync(join(repo, 'g.txt'), 'g staged v2 !\n');
+    git(repo, 'add', 'f.txt', 'g.txt');
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+    expect(await tick()).toBe(true);
+    // 选中的 f:不点击就已是新内容;之前看过的 g:点回去也是新内容
+    expect(shown()).toBe('f staged v2 !\n');
+    expect(await click('g.txt', 'staged')).toBe('g staged v2 !\n');
+    expect(await tick()).toBe(false);
+
+    // 未暂存的文件再编辑一次(仍是 ` M`):选中的那个由 tick 发现
+    expect(await click('w.txt', 'changed')).toBe('w edit v1\n');
+    expect(await tick()).toBe(false);
+    writeFileSync(join(repo, 'w.txt'), 'w edit v2 !!\n');
+    writeFileSync(join(repo, 'w2.txt'), 'w2 edit v2 !!\n');
+    expect(git(repo, 'status', '--porcelain')).toBe(STATUS);
+    expect(await tick()).toBe(true);
+    expect(shown()).toBe('w edit v2 !!\n');
+    expect(shownDiff()).toMatchObject({ unifiedDiff: git(repo, 'diff', '--', 'w.txt') });
+    // 没选中的 w2(之前看过 v1):点回去时重新读取
+    expect(await click('w2.txt', 'changed')).toBe('w2 edit v2 !!\n');
+    // 两次 tick 之间编辑并立刻点击:显示的不早于点击
+    writeFileSync(join(repo, 'w.txt'), 'w edit v3 !!!\n');
+    expect(await click('w.txt', 'changed')).toBe('w edit v3 !!!\n');
+    expect(await tick()).toBe(false);
+
+    // 提交的正是 Staged 行显示的内容
+    const stagedShown = { f: await click('f.txt', 'staged'), g: await click('g.txt', 'staged') };
+    expect(await gitCommit(app, repo, 'c')).toMatchObject({ ok: true });
+    expect({ f: git(repo, 'show', 'HEAD:f.txt'), g: git(repo, 'show', 'HEAD:g.txt') }).toEqual(stagedShown);
   });
 });

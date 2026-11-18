@@ -67,7 +67,7 @@ describe('git store refresh reconciliation', () => {
     expect(store.getState().selected).toEqual({ path: 'changed.ts', mode: 'changed' });
   });
 
-  it('T19 refresh preserves non-current mode cache entries and evicts current selection key', async () => {
+  it('T19 refresh drops every cache entry: the other mode of the selected path, other paths and vanished paths alike (see git-store T7)', async () => {
     const store = createGitStore({
       load: vi.fn(async () => ({ repoRoot: '/repo', changes: [changed, partial] })),
     });
@@ -76,14 +76,14 @@ describe('git store refresh reconciliation', () => {
       diffCache: new Map<string, DiffResult>([
         [cacheKey('changed.ts', 'changed'), diffA],
         [cacheKey('partial.ts', 'staged'), diffB],
+        [cacheKey('partial.ts', 'changed'), diffB],
         [cacheKey('gone.ts', 'changed'), { ...diffA, path: 'gone.ts' }],
       ]),
     });
 
     await store.getState().refresh();
 
-    expect(store.getState().diffCache.get(cacheKey('changed.ts', 'changed'))).toBe(diffA);
-    expect(store.getState().diffCache.has(cacheKey('partial.ts', 'staged'))).toBe(false);
-    expect(store.getState().diffCache.has(cacheKey('gone.ts', 'changed'))).toBe(false);
+    expect(store.getState().selected).toEqual({ path: 'partial.ts', mode: 'staged' });
+    expect(store.getState().diffCache.size).toBe(0);
   });
 });

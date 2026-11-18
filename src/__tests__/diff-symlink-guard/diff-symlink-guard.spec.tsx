@@ -157,6 +157,7 @@ describe('diff symlink guard (real git)', () => {
       modified: 'fresh\n',
       unifiedDiff: '',
       isUntracked: true,
+      worktreeStamp: expect.stringMatching(/^f:6:\d/),
     });
   });
 });
@@ -215,6 +216,7 @@ describe('diff symlink guard (fail-closed)', () => {
       modified: '',
       unifiedDiff: '',
       isUntracked: true,
+      worktreeStamp: 'missing',
     });
   });
 

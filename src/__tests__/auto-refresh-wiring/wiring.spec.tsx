@@ -280,4 +280,47 @@ describe('GitViewerPanel auto-refresh wiring', () => {
       expect(refresh).toHaveBeenCalledTimes(1);
     });
   });
+
+  // status 指纹不含工作树内容:选中的 Changes 文件再次被编辑(XY 不变)要靠 diff 自带的 worktreeStamp 发现
+  describe('the shown working-tree diff is checked even when the status fingerprint is unchanged', () => {
+    const stat = (mtimeMs: number) => ({ size: 3, mtimeMs, isFile: true, isDirectory: false, isSymlink: false });
+    async function harnessWithShownDiff(mode: 'changed' | 'staged') {
+      const h = await renderHarness();
+      const lstat = vi.fn(async () => stat(100));
+      (h.app as unknown as { fs: unknown }).fs = { lstat };
+      const refresh = vi.fn(async () => {});
+      h.store.setState({
+        refresh,
+        changes: [{ path: 'src/a.ts', status: 'M', statusX: mode === 'staged' ? 'M' : ' ', statusY: mode === 'staged' ? ' ' : 'M', kind: 'text' }],
+        selected: { path: 'src/a.ts', mode },
+        diffCache: new Map([[`${mode}:src/a.ts`, {
+          ok: true as const, path: 'src/a.ts', original: '', modified: '', unifiedDiff: '', isUntracked: false,
+          ...(mode === 'changed' ? { worktreeStamp: 'f:3:100' } : {}),
+        }]]),
+      });
+      await waitFor(() => expect(h.timer.start).toHaveBeenCalled());
+      const onTick = h.timer.start.mock.calls[0]![0].onTick;
+      readStatusHashMock.mockResolvedValue('initial');
+      return { ...h, lstat, refresh, onTick };
+    }
+
+    it('T19 same fingerprint, selected Changes file edited again (its stamp differs from the one the shown diff was read under) → the tick refreshes; unchanged stamp → it does not', async () => {
+      const { lstat, refresh, onTick } = await harnessWithShownDiff('changed');
+      await onTick();
+      expect(lstat).toHaveBeenCalledWith('/repo/src/a.ts');
+      expect(refresh).not.toHaveBeenCalled();
+
+      lstat.mockResolvedValue(stat(200));
+      await onTick();
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('T20 a Staged selection is covered by the fingerprint alone: the working tree is not looked at', async () => {
+      const { lstat, refresh, onTick } = await harnessWithShownDiff('staged');
+      lstat.mockResolvedValue(stat(200));
+      await onTick();
+      expect(lstat).not.toHaveBeenCalled();
+      expect(refresh).not.toHaveBeenCalled();
+    });
+  });
 });

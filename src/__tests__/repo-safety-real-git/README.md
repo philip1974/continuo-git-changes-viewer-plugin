@@ -371,3 +371,15 @@ Type changes (`status-scanner-xy` T15, `hunk-patch-builder` T5–T7,
   stage / unstage / discard replace the entry and keep its content (the staged
   blob of `AT` is never emptied); chmod + edit keeps working Stage / Unstage /
   Discard hunk actions that touch content only.
+
+Shown = what a commit takes (`status-hash` T6, `git-store` T7–T8,
+`diff-fetcher` T13–T15, `auto-refresh-wiring` T19–T20; run with git 2.50.1 and
+2.56.1):
+
+- R73: two staged files are edited and staged again — `git status
+  --porcelain` (v1) is byte-identical, the v2 fingerprint is not — and after
+  one auto-refresh tick the selected Staged row and the one looked at earlier
+  both show the second version. An unstaged file edited again (still ` M`) is
+  noticed through the shown diff's working-tree stamp; a row that is not
+  selected is read again when clicked, also between two ticks. The commit
+  holds exactly what the Staged rows showed.

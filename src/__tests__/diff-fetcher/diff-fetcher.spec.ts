@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchDiff, FILE_READ_TIMEOUT_MS, MAX_FILE_BYTES } from '../../git/diff-fetcher';
+import { fetchDiff, FILE_READ_TIMEOUT_MS, isWorktreeDiffStale, MAX_FILE_BYTES, readWorktreeStamp } from '../../git/diff-fetcher';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { buildGitArgs } from '../../git/exec';
 
@@ -43,6 +43,7 @@ describe('tracked diff fetcher', () => {
       modified: 'diff --git a/a.ts b/a.ts\n', // shared mock; real impl returns WT content
       unifiedDiff: 'diff --git a/a.ts b/a.ts\n',
       isUntracked: false,
+      worktreeStamp: 'f:1:0', // 来自 lstat 的 mock:普通文件、size 1、mtime 0
     });
     // v0.3.0 spawns 3 parallel calls: git cat-file blob HEAD:<path>, cat <path>, git diff -- <path>
     // (cat-file, not show: `git show HEAD:a..b` parses the argument as a revision range)
@@ -100,7 +101,7 @@ describe('tracked diff fetcher', () => {
   it('T4 a working-tree file over the limit: the part that was read is returned and flagged modifiedTruncated (new / untracked files show it with a notice); a file within the limit carries no flag', async () => {
     const big = appWith((cmd) => (cmd === 'cat' ? { stdout: 'first part', truncated: true } : { stdout: '' }));
     await expect(fetchDiff(big.app, '/repo', { path: 'big.bin', status: 'U', statusX: '?', statusY: '?', kind: 'text' })).resolves.toEqual({
-      ok: true, path: 'big.bin', original: '', modified: 'first part', unifiedDiff: '', isUntracked: true, modifiedTruncated: true,
+      ok: true, path: 'big.bin', original: '', modified: 'first part', unifiedDiff: '', isUntracked: true, worktreeStamp: 'f:1:0', modifiedTruncated: true,
     });
     // staged 模式的新版来自 index(T6):同样的上限与标记
     const bigStaged = appWith((cmd, args) => (isIndexRead(cmd, args) ? { stdout: 'first part', truncated: true } : { stdout: '' }));
@@ -116,7 +117,7 @@ describe('tracked diff fetcher', () => {
   it('T5 a HEAD blob over the limit does not fail the diff: the original is only the part that was read (the panel uses it to tell "no HEAD version" apart), the unified diff decides what is shown', async () => {
     const { app } = appWith((cmd, args) => (isHeadRead(cmd, args) ? { stdout: 'head part', truncated: true } : cmd === 'cat' ? { stdout: 'wt' } : { stdout: 'diff --git a/a b/a\n' }));
     await expect(fetchDiff(app, '/repo', { path: 'a', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' })).resolves.toEqual({
-      ok: true, path: 'a', original: 'head part', modified: 'wt', unifiedDiff: 'diff --git a/a b/a\n', isUntracked: false,
+      ok: true, path: 'a', original: 'head part', modified: 'wt', unifiedDiff: 'diff --git a/a b/a\n', isUntracked: false, worktreeStamp: 'f:1:0',
     });
   });
 
@@ -254,7 +255,7 @@ describe('tracked diff fetcher', () => {
     const killed = { stdout: 'read so far', exitCode: null, signal: 'SIGTERM', timedOut: true };
     const wt = appWith((cmd) => (cmd === 'cat' ? killed : { stdout: '' }));
     await expect(fetchDiff(wt.app, '/repo', { path: 'slow.bin', status: 'U', statusX: '?', statusY: '?', kind: 'text' })).resolves.toEqual({
-      ok: true, path: 'slow.bin', original: '', modified: 'read so far', unifiedDiff: '', isUntracked: true, modifiedTruncated: true, modifiedTimedOut: true,
+      ok: true, path: 'slow.bin', original: '', modified: 'read so far', unifiedDiff: '', isUntracked: true, worktreeStamp: 'f:1:0', modifiedTruncated: true, modifiedTimedOut: true,
     });
 
     const idx = appWith((cmd, args) => (isIndexRead(cmd, args) ? killed : { stdout: '' }));
@@ -264,10 +265,70 @@ describe('tracked diff fetcher', () => {
 
     const head = appWith((cmd, args) => (isHeadRead(cmd, args) ? killed : cmd === 'cat' ? { stdout: 'wt' } : { stdout: 'diff --git a/a b/a\n' }));
     const d = await fetchDiff(head.app, '/repo', { path: 'a', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' });
-    expect(d).toEqual({ ok: true, path: 'a', original: 'read so far', modified: 'wt', unifiedDiff: 'diff --git a/a b/a\n', isUntracked: false });
+    expect(d).toEqual({ ok: true, path: 'a', original: 'read so far', modified: 'wt', unifiedDiff: 'diff --git a/a b/a\n', isUntracked: false, worktreeStamp: 'f:1:0' });
 
     // 只是超过大小上限(未超时):不带 modifiedTimedOut
     const big = appWith((cmd) => (cmd === 'cat' ? { stdout: 'first part', truncated: true } : { stdout: '' }));
     expect(await fetchDiff(big.app, '/repo', { path: 'big.bin', status: 'U', statusX: '?', statusY: '?', kind: 'text' })).not.toHaveProperty('modifiedTimedOut');
+  });
+
+  // 工作树文件再次被编辑时 status 的 XY 不变(` M` 还是 ` M`):status 指纹看不出来,面板靠这个标记发现
+  describe('working-tree stamp: noticing that the shown working-tree diff is out of date', () => {
+    const st = (size: number, mtimeMs: number, extra: object = {}) => ({ size, mtimeMs, isFile: true, isDirectory: false, isSymlink: false, ...extra });
+    const appWith = (lstat: ReturnType<typeof vi.fn>) =>
+      ({ shell: { exec: vi.fn().mockResolvedValue(result({ stdout: 'x' })) }, fs: { lstat } }) as unknown as CoPluginApp;
+    const changed = { path: 'src/a.ts', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' } as const;
+
+    it('T13 a Changes / untracked diff carries the stamp (kind, size, mtime from lstat — the link itself, never its target) taken before the file is read; a Staged diff has none', async () => {
+      const order: string[] = [];
+      const lstat = vi.fn(async (p: string) => {
+        order.push(`lstat ${p}`);
+        return st(7, 1234.5);
+      });
+      const app = appWith(lstat);
+      (app.shell.exec as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+        order.push(cmd);
+        return result({ stdout: 'x' });
+      });
+
+      expect(await fetchDiff(app, '/repo', changed, 'changed')).toMatchObject({ ok: true, worktreeStamp: 'f:7:1234.5' });
+      expect(order).toContain('cat');
+      expect(order.indexOf('lstat /repo/src/a.ts')).toBeLessThan(order.indexOf('cat'));
+      expect(await fetchDiff(app, '/repo', { path: 'n.txt', status: 'U', statusX: '?', statusY: '?', kind: 'text' }, 'changed')).toMatchObject({ isUntracked: true, worktreeStamp: 'f:7:1234.5' });
+      expect(await fetchDiff(app, '/repo', { ...changed, statusX: 'M' }, 'staged')).not.toHaveProperty('worktreeStamp');
+
+      expect(await readWorktreeStamp(appWith(vi.fn(async () => st(3, 9, { isFile: false, isSymlink: true }))), '/repo', 'l')).toBe('l:3:9');
+      expect(await readWorktreeStamp(appWith(vi.fn(async () => st(3, 9, { isFile: false, isDirectory: true }))), '/repo', 'd/')).toBe('o:3:9');
+      expect(await readWorktreeStamp(appWith(vi.fn().mockRejectedValue(new Error('ENOENT: no such file or directory, lstat'))), '/repo', 'gone')).toBe('missing');
+    });
+
+    it('T14 no stamp when it cannot be taken (no app.fs, a scope error, an unsafe path) — the diff is still returned, and such a diff is never reported stale', async () => {
+      const denied = appWith(vi.fn().mockRejectedValue(new Error('ScopeError: path is outside granted scopes')));
+      expect(await readWorktreeStamp(denied, '/repo', 'a')).toBeUndefined();
+      expect(await readWorktreeStamp({ shell: { exec: vi.fn() } } as unknown as CoPluginApp, '/repo', 'a')).toBeUndefined();
+      const lstat = vi.fn(async () => st(1, 1));
+      expect(await readWorktreeStamp(appWith(lstat), '/repo', '../outside')).toBeUndefined();
+      expect(lstat).not.toHaveBeenCalled();
+
+      const diff = await fetchDiff(denied, '/repo', changed, 'changed');
+      expect(diff.ok).toBe(true);
+      expect(diff).not.toHaveProperty('worktreeStamp');
+      expect(await isWorktreeDiffStale(appWith(vi.fn(async () => st(1, 1))), '/repo', diff)).toBe(false);
+    });
+
+    it('T15 isWorktreeDiffStale: true only when the diff has a stamp and the file now has a different one (edited, replaced, deleted); false when unchanged, when the check itself fails, for a failed diff and for no diff', async () => {
+      const diff = await fetchDiff(appWith(vi.fn(async () => st(7, 100))), '/repo', changed, 'changed');
+      const now = (lstat: ReturnType<typeof vi.fn>) => isWorktreeDiffStale(appWith(lstat), '/repo', diff);
+      expect(await now(vi.fn(async () => st(7, 100)))).toBe(false);
+      expect(await now(vi.fn(async () => st(7, 101)))).toBe(true);
+      expect(await now(vi.fn(async () => st(8, 100)))).toBe(true);
+      expect(await now(vi.fn(async () => st(7, 100, { isFile: false, isSymlink: true })))).toBe(true);
+      expect(await now(vi.fn().mockRejectedValue(new Error('ENOENT: no such file or directory')))).toBe(true);
+      expect(await now(vi.fn().mockRejectedValue(new Error('EACCES: permission denied')))).toBe(false);
+      const lstat = vi.fn(async () => st(1, 1));
+      expect(await isWorktreeDiffStale(appWith(lstat), '/repo', undefined)).toBe(false);
+      expect(await isWorktreeDiffStale(appWith(lstat), '/repo', { ok: false, reason: 'too-large', path: 'a', exactCommand: null })).toBe(false);
+      expect(lstat).not.toHaveBeenCalled();
+    });
   });
 });

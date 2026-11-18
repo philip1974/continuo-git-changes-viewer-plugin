@@ -1,7 +1,7 @@
-import type { CoPluginApp, PluginShellExecResult } from '../sdk/types';
+import type { CoPluginApp, FsStat, PluginShellExecResult } from '../sdk/types';
 import { gitExec } from './exec';
 import { isNotFoundError } from './fs-errors';
-import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
+import { isSafeRepoRelativePath, joinRepoPath, UNSAFE_PATH_ERROR } from './path-utils';
 import { shellQuotePath } from './shell-quote';
 import type { FileChange } from './status-scanner';
 
@@ -28,6 +28,11 @@ export type DiffResult =
        * 不是文件内容。面板据此标注 "Symbolic link → <target>"。
        */
       modifiedIsSymlink?: true;
+      /**
+       * 读了工作树文件(mode 'changed',且工作树一侧不是删除)时,读取之前该文件的标记,见 readWorktreeStamp;
+       * 取不到时不带此字段。
+       */
+      worktreeStamp?: string;
     }
   | {
       ok: false;
@@ -108,35 +113,83 @@ async function checkReadable(
   app: DiffApp,
   repoRoot: string,
   path: string,
-): Promise<WithheldReason | null> {
+): Promise<{ readonly withheld: WithheldReason | null; readonly stamp?: string }> {
   const fs = app.fs;
-  if (!fs || typeof fs.lstat !== 'function') return 'unverified';
+  if (!fs || typeof fs.lstat !== 'function') return { withheld: 'unverified' };
   const segments = path.split('/').filter((s) => s !== '' && s !== '.');
   if (path.startsWith('/') || segments.length === 0 || segments.includes('..')) {
-    return 'unverified';
+    return { withheld: 'unverified' };
   }
   const root = repoRoot.replace(/[\\/]+$/, '');
   const levels = segments.map((_, i) => `${root}/${segments.slice(0, i + 1).join('/')}`);
   const last = levels.length - 1;
+  // 末级的 lstat 顺带给出 worktreeStamp(见 readWorktreeStamp):在读内容之前取——两者之间文件若被改动,
+  // 标记是旧的,下一个 tick 判为过期并重读(反过来会漏掉)。
+  let stamp: string | undefined;
   const results = await Promise.all(
     levels.map(async (level, i): Promise<WithheldReason | null> => {
       try {
         const st = await fs.lstat(level);
+        if (i === last) stamp = stampOf(st);
         if (st.isSymlink) return 'symlink';
         // 只认明确的 isFile === true;宿主没给出该字段也按"不是普通文件"处理(fail-closed)
         return i === last && st.isFile !== true ? 'not-regular' : null;
       } catch (err) {
-        return isNotFoundError(err) ? null : 'unverified';
+        if (!isNotFoundError(err)) return 'unverified';
+        if (i === last) stamp = MISSING_STAMP;
+        return null;
       }
     }),
   );
-  if (results.includes('symlink')) return 'symlink';
-  if (results.includes('unverified')) return 'unverified';
-  return results.includes('not-regular') ? 'not-regular' : null;
+  const withheld = results.includes('symlink')
+    ? 'symlink'
+    : results.includes('unverified')
+      ? 'unverified'
+      : results.includes('not-regular')
+        ? 'not-regular'
+        : null;
+  return { withheld, ...(stamp === undefined ? {} : { stamp }) };
+}
+
+const MISSING_STAMP = 'missing';
+const stampOf = (st: FsStat): string => `${st.isSymlink ? 'l' : st.isFile === true ? 'f' : 'o'}:${st.size}:${st.mtimeMs}`;
+
+/**
+ * 工作树文件的标记:类型 + 大小 + mtime(app.fs.lstat——看链接本身,不跟随、不读内容);文件不存在是 'missing'。
+ * 用途:同一个未暂存文件再次被编辑时 status 的 XY 不变,status 指纹(status-hash)看不出来;diff 记下读取时的
+ * 标记,自动刷新的 tick 拿它与现在的比较(isWorktreeDiffStale)。取不到(无 app.fs、scope 错误、路径不规范)→
+ * undefined:不比较,行为与没有这个标记时相同。
+ */
+export async function readWorktreeStamp(
+  app: DiffApp,
+  repoRoot: string,
+  path: string,
+): Promise<string | undefined> {
+  const fs = app.fs;
+  const abs = joinRepoPath(repoRoot, path);
+  if (!fs || typeof fs.lstat !== 'function' || abs === null) return undefined;
+  try {
+    return stampOf(await fs.lstat(abs));
+  } catch (err) {
+    return isNotFoundError(err) ? MISSING_STAMP : undefined;
+  }
+}
+
+/** 这份(工作树)diff 读取之后文件又变了。没有标记、现在取不到标记、diff 失败或没有 diff → false。 */
+export async function isWorktreeDiffStale(
+  app: DiffApp,
+  repoRoot: string,
+  diff: DiffResult | null | undefined,
+): Promise<boolean> {
+  if (!diff || !diff.ok || diff.worktreeStamp === undefined) return false;
+  const now = await readWorktreeStamp(app, repoRoot, diff.path);
+  return now !== undefined && now !== diff.worktreeStamp;
 }
 
 type FileRead = {
   readonly content: string;
+  /** 读工作树文件时顺带取得的 worktreeStamp。 */
+  readonly stamp?: string;
   readonly withheld?: WithheldReason;
   readonly truncated?: boolean;
   readonly timedOut?: boolean;
@@ -146,6 +199,7 @@ const readFlags = (wt: FileRead) => ({
   ...(wt.withheld ? { withheld: wt.withheld } : {}),
   ...(wt.truncated ? { modifiedTruncated: true as const } : {}),
   ...(wt.timedOut ? { modifiedTimedOut: true as const } : {}),
+  ...(wt.stamp === undefined ? {} : { worktreeStamp: wt.stamp }),
 });
 
 // 整文件读取的结果 → 内容。超过大小上限(truncated:宿主丢弃了多余的输出,进程通常仍以 0 退出)与超时
@@ -161,11 +215,12 @@ async function readWorktreeFile(
   repoRoot: string,
   path: string,
 ): Promise<FileRead> {
-  const withheld = await checkReadable(app, repoRoot, path);
-  if (withheld !== null) return { content: '', withheld };
+  const { withheld, stamp } = await checkReadable(app, repoRoot, path);
+  const stamped = stamp === undefined ? {} : { stamp };
+  if (withheld !== null) return { content: '', withheld, ...stamped };
   // `--`:文件名可以以 `-` 开头(`-n`、`--help`),不能被 cat 当成选项
   const r = await app.shell.exec('cat', ['--', path], { cwd: repoRoot, ...FILE_READ_LIMITS });
-  return partialOrWhole(r) ?? { content: '' };
+  return { ...(partialOrWhole(r) ?? { content: '' }), ...stamped };
 }
 
 // 读 index 里的版本(Staged 区显示的"将要提交的内容")。此前 staged 模式也读工作树:`git add n.txt` 之后

@@ -178,28 +178,13 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
           ? await deps.load()
           : { repoRoot: null, changes: [] };
 
-        // v0.3.0 fix (post-GUI verify): preserve user selection + diffCache
-        // across polling refresh. Previously every tick wiped diffCache and
-        // reset selectedPath via firstSelectablePath → entire panel
-        // re-rendered (DiffView re-mounted, file selection jumped, 3-section
-        // UI flicker). Now only invalidate the diff for files whose presence
-        // changed; keep selection if the file is still tracked.
+        // 选择跨 refresh 保留(v0.3.0:每个 tick 重置选择会让整个面板跳动);diff 缓存不保留。
+        // 缓存里的 diff 是上一次 status 时读的:已暂存的文件再次修改并 `git add`(XY 仍是 `M `)之后,
+        // 留着非选中文件的缓存,点回去显示的是旧版本,而 Commit 提交的是新版本。refresh 之后只有当前
+        // 选中的那份会被重新读取(下面的 loadDiff),其余的等用户点到时再读(selectFile 总是重读)。
         const prev = get();
         const nextSelected = reconcileSelected(prev.selected, loaded.changes);
-
-        // Keep cached diffs for files still in the list; invalidate the
-        // currently selected file (its content may have changed — that's
-        // why the polling tick fired).
         const nextDiffCache = new Map<string, DiffResult>();
-        const presentPaths = new Set(loaded.changes.map((c) => c.path));
-        const currentKey = nextSelected
-          ? cacheKey(nextSelected.path, nextSelected.mode)
-          : null;
-        for (const [path, diff] of prev.diffCache) {
-          if (presentPaths.has(diff.path) && path !== currentKey) {
-            nextDiffCache.set(path, diff);
-          }
-        }
 
         set({
           repoRoot: loaded.repoRoot,
@@ -221,7 +206,11 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
     },
     selectFile(path, mode) {
       if (findChange(get().changes, path, mode)?.inoperable) return;
-      set({ selected: { path, mode } });
+      // 点击总是重读:缓存的那份可能早于最近一次外部改动(两次自动刷新之间,或 status 指纹覆盖不到的
+      // 未选中工作树文件)。显示的内容不早于这次点击。
+      const diffCache = new Map(get().diffCache);
+      diffCache.delete(cacheKey(path, mode));
+      set({ selected: { path, mode }, diffCache });
       void get().loadDiff(path, mode);
     },
     async loadDiff(path, mode) {

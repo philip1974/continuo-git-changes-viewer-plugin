@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'r
 import type { StoreApi } from 'zustand/vanilla';
 import { discardFile } from '../git/discard-file';
 import { discardHunk } from '../git/discard-hunk';
-import type { DiffResult } from '../git/diff-fetcher';
+import { isWorktreeDiffStale, type DiffResult } from '../git/diff-fetcher';
 import { readStatusHash } from '../git/status-hash';
 import { stageFile } from '../git/stage-file';
 import { stageHunk } from '../git/stage-hunk';
@@ -147,9 +147,19 @@ export function GitViewerPanel({
 
           const currentRoot = store.getState().repoRoot;
           if (!currentRoot) return;
+          // 两项比较,任一变了就刷新:
+          // - status 指纹(porcelain v2:含 HEAD / index 的对象 id,覆盖一切已暂存内容的变化);
+          // - 当前显示的是工作树 diff 时,文件的标记与读取那份 diff 时是否相同(status 不含工作树内容:
+          //   同一个未暂存文件再次被编辑,XY 不变)。
           const nextHash = await readStatusHash(app, currentRoot);
-          if (nextHash === lastHashRef.current) return;
+          const hashChanged = nextHash !== lastHashRef.current;
           lastHashRef.current = nextHash;
+          if (!hashChanged) {
+            // Staged 区的 diff 不读工作树、不带标记:isWorktreeDiffStale 对它直接是 false
+            const { selected: shown, diffCache } = store.getState();
+            const shownDiff = shown ? diffCache.get(cacheKey(shown.path, shown.mode)) : undefined;
+            if (!(await isWorktreeDiffStale(app, currentRoot, shownDiff))) return;
+          }
           await store.getState().refresh();
         },
         onError: (err) => {

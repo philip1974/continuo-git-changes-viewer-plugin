@@ -43,6 +43,7 @@ describe('untracked diff fetcher', () => {
       modified: 'hello untracked\n',
       unifiedDiff: '',
       isUntracked: true,
+      worktreeStamp: 'f:1:0',
     });
     expect(exec).toHaveBeenCalledWith(
       'cat',
@@ -63,6 +64,7 @@ describe('untracked diff fetcher', () => {
       modified: '',
       unifiedDiff: '',
       isUntracked: true,
+      worktreeStamp: 'f:1:0',
     });
   });
 });

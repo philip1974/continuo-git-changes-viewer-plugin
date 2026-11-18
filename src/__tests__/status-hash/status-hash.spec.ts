@@ -16,18 +16,18 @@ function result(overrides: Partial<PluginShellExecResult>): PluginShellExecResul
 }
 
 describe('readStatusHash', () => {
-  it('T6 returns raw porcelain stdout through the read-only git wrapper', async () => {
+  it('T6 returns raw porcelain v2 stdout (it carries the HEAD / index object ids of every entry) through the read-only git wrapper', async () => {
     const exec = vi
       .fn()
-      .mockResolvedValue(result({ stdout: ' M src/a.ts\0?? notes.txt\0' }));
+      .mockResolvedValue(result({ stdout: '1 .M N... 100644 100644 100644 aaa aaa src/a.ts\0? notes.txt\0' }));
     const app = { shell: { exec } } as unknown as CoPluginApp;
 
     await expect(readStatusHash(app, '/repo')).resolves.toBe(
-      ' M src/a.ts\0?? notes.txt\0',
+      '1 .M N... 100644 100644 100644 aaa aaa src/a.ts\0? notes.txt\0',
     );
     expect(exec).toHaveBeenCalledWith(
       'git',
-      buildGitArgs(['status', '--porcelain=v1', '-z']),
+      buildGitArgs(['status', '--porcelain=v2', '-z']),
       expect.objectContaining({
         cwd: '/repo',
         env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),
