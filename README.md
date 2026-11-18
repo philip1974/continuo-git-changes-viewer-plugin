@@ -86,7 +86,9 @@ Commit hooks run normally; this plugin does not pass `--no-verify`. If a hook
 fails, the hook output is shown and the message draft stays in the editor. On
 success, the plugin clears the draft, refreshes the working tree, and reads the
 real subject from `git log -1 --pretty=%s` so commit-msg hook rewrites are
-reflected in the toast.
+reflected in the toast. If Continuo refuses to run git for the commit (for
+example too many git processes running in the window at once), the panel shows
+"Commit failed" (or "Amend failed") with the reason and keeps the message.
 
 Right before committing, the plugin checks that the repository is still in
 the state the panel last read (the same fingerprint the auto-refresh uses:
@@ -136,7 +138,10 @@ your text is kept instead. Amend runs `git commit --amend -F -`, then refreshes
 the panel and clears amend mode on success.
 
 A draft written before checking "Amend last commit" is kept aside: unchecking
-Amend (or HEAD's message failing to load) puts that draft back into the editor.
+Amend (or HEAD's message failing to load, including Continuo refusing to run
+git) puts that draft back into the editor. If checking whether there is a last
+commit fails, "Amend last commit" stays disabled and its tooltip says why;
+Amend mode that is already on can still be unchecked.
 Text edited while Amend was checked is not kept when you uncheck it — the draft
 from before checking comes back. After a successful amend the editor is empty.
 

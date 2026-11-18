@@ -176,6 +176,10 @@
 
 - [`head-meta-shell.spec.ts`](./head-meta-shell/head-meta-shell.spec.ts)
 
+## [host-exec-rejection](./host-exec-rejection/README.md)
+
+- [`commit-editor-rejection.spec.tsx`](./host-exec-rejection/commit-editor-rejection.spec.tsx)
+
 ## [Hunk patch builder](./hunk-patch-builder/README.md)
 
 - [`hunk-patch-builder.spec.ts`](./hunk-patch-builder/hunk-patch-builder.spec.ts)

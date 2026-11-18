@@ -185,6 +185,11 @@ function showError(app: CoPluginApp, store: StoreApi<GitViewerState>, message: s
   store.getState().setBanner({ kind: 'error', message, dismissable: true });
 }
 
+/** rejection 的原因(宿主拒绝执行时是 Error)。 */
+function reasonOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function truncateSubject(subject: string): string {
   return subject.length > 60 ? `${subject.slice(0, 60)}...` : subject;
 }
@@ -219,6 +224,9 @@ export function CommitEditor({
   const [headHasCommit, setHeadHasCommit] = useState<boolean | null>(
     amend ? true : null,
   );
+  // 检查"有没有上一个提交"被宿主拒绝(并发 exec 上限、插件被吊销):原因写进复选框的 title。
+  // headHasCommit 此时是 null——Amend 不可勾选、不可提交(fail-closed)。
+  const [headCheckError, setHeadCheckError] = useState<string | null>(null);
   const toggleTokenRef = useRef(0);
   // 勾选 Amend 之后用户有没有动过编辑框:读 HEAD 的信息要起两个 git 进程,这期间打的字不能被预填覆盖
   const editedSinceAmendRef = useRef(false);
@@ -243,9 +251,18 @@ export function CommitEditor({
     }
 
     let cancelled = false;
-    void hasHeadCommit(app, repoRoot).then((hasHead) => {
-      if (!cancelled) setHeadHasCommit(hasHead);
-    });
+    setHeadCheckError(null);
+    hasHeadCommit(app, repoRoot).then(
+      (hasHead) => {
+        if (!cancelled) setHeadHasCommit(hasHead);
+      },
+      (err: unknown) => {
+        // 宿主拒绝执行:HEAD 状态未知(null)——不放开 Amend;原因显示在复选框上
+        if (cancelled) return;
+        setHeadHasCommit(null);
+        setHeadCheckError(reasonOf(err));
+      },
+    );
     return () => {
       cancelled = true;
     };
@@ -278,8 +295,19 @@ export function CommitEditor({
     editedSinceAmendRef.current = false;
     // 先读 HEAD 的提交 id,再读它的信息:两次读取之间 HEAD 若变了,记下的 id 是旧的,Amend 时判为"变了"而中止
     // (反过来——id 新、信息旧——会放行)。
-    const headSha = await readHeadSha(app, repoRoot);
-    const headMessage = headSha === null ? null : await readHeadMessage(app, repoRoot);
+    let headSha: string | null;
+    let headMessage: string | null;
+    try {
+      headSha = await readHeadSha(app, repoRoot);
+      headMessage = headSha === null ? null : await readHeadMessage(app, repoRoot);
+    } catch (err) {
+      // 宿主拒绝执行(并发 exec 上限、插件被吊销):与读不到同样处理——关掉 Amend、放回草稿,并说明原因。
+      // 已被更新的一次勾选 / 取消勾选取代时什么都不做。
+      if (token !== toggleTokenRef.current) return;
+      restoreDraft();
+      showError(app, store, `Failed to read HEAD commit message: ${reasonOf(err)}`);
+      return;
+    }
     if (token !== toggleTokenRef.current) return;
 
     if (headMessage === null) {
@@ -427,9 +455,15 @@ export function CommitEditor({
         return;
       }
 
+      // 以下是提交已经成功之后:读不到(含宿主拒绝执行)只影响提示文案,不报告为失败
       let noOp = false;
       if (amend && headBefore !== null) {
-        const headAfter = await readHeadSha(app, repoRoot);
+        let headAfter: string | null;
+        try {
+          headAfter = await readHeadSha(app, repoRoot);
+        } catch {
+          headAfter = null;
+        }
         noOp = headAfter !== null && headAfter === headBefore;
       }
 
@@ -461,6 +495,10 @@ export function CommitEditor({
       } else {
         showInfo(app, store, `Committed: ${truncateSubject(subject ?? 'staged changes')}`);
       }
+    } catch (err) {
+      // 宿主拒绝执行(每窗口并发 exec 上限、插件被吊销……)以 rejection 到这里:读 HEAD、读指纹之外的 git 调用
+      // 与 `git commit` 本身。照常报告,不留未处理的 rejection;信息与 Amend 状态保留,可以重试。
+      showError(app, store, `${amend ? 'Amend' : 'Commit'} failed: ${reasonOf(err)}`);
     } finally {
       setCommitting(false);
       endCommit();
@@ -488,7 +526,13 @@ export function CommitEditor({
           <input
             type="checkbox"
             checked={amend}
-            disabled={headHasCommit !== true || busy}
+            // 已勾选时总可以取消(放回草稿)——包括 HEAD 状态未知(null)的时候;勾选仍要求确知有上一个提交
+            disabled={(!amend && headHasCommit !== true) || busy}
+            title={
+              headCheckError !== null
+                ? visibleText(`Could not check for a last commit (${headCheckError}). Reopen the panel to try again.`)
+                : undefined
+            }
             onChange={(event) => void onAmendToggle(event.target.checked)}
           />
           <span>Amend last commit</span>
