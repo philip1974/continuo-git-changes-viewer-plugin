@@ -383,3 +383,14 @@ Shown = what a commit takes (`status-hash` T6, `git-store` T7–T8,
   noticed through the shown diff's working-tree stamp; a row that is not
   selected is read again when clicked, also between two ticks. The commit
   holds exactly what the Staged rows showed.
+
+Submodule entries (`hunk-patch-builder` T5, `discard-file-shell` T12–T13; run
+with git 2.50.1 and 2.56.1):
+
+- R74: ` M sub` and `AM sub2` show the gitlink change (`index … 160000`,
+  `Subproject commit …`) without hunk buttons, and no hunk patch can be built
+  — a patch put together the old way is "applied" by git with exit 0 and
+  changes nothing. File-level Stage / Unstage act on the entry; file-level
+  Discard answers that the entry is a submodule instead of running a checkout
+  that does nothing and reporting success. R33 keeps proving that `checkout
+  -- sub` itself starts no process in the nested repository.

@@ -1,6 +1,7 @@
 import type { CoPluginApp, FsStat, PluginShellExecResult } from '../sdk/types';
 import { gitExec } from './exec';
 import { isNotFoundError } from './fs-errors';
+import { GITLINK_MODE, readIndexEntries } from './index-entry';
 import { isSafeRepoRelativePath, joinRepoPath, UNSAFE_PATH_ERROR } from './path-utils';
 import { shellQuotePath } from './shell-quote';
 import type { FileChange } from './status-scanner';
@@ -250,25 +251,17 @@ function isUnmerged(change: FileChange): boolean {
 // - 未合并:status 已经给出(不再起命令);
 // - `ls-files -s -z -- <path>` 里该路径的记录是 gitlink(mode 160000)或只有 stage 1–3。
 // 其余(含 ls-files 本身失败 / 超时 / 输出不完整 / 没有这条记录)一律 'staged-unreadable'。
-// ls-files -s 只读 index:不刷新、不碰工作树、不起子进程。只在读取失败后才运行。
+// 只在读取失败后才运行(readIndexEntries:只读 index)。
 async function stagedReadFailure(
   app: Pick<CoPluginApp, 'shell'>,
   repoRoot: string,
   change: FileChange,
 ): Promise<WithheldReason> {
   if (isUnmerged(change)) return 'no-staged-blob';
-  const r = await gitExec(app, repoRoot, ['ls-files', '-s', '-z', '--', change.path], { timeoutMs: FILE_READ_TIMEOUT_MS });
-  if (r.exitCode !== 0 || r.timedOut || r.truncated) return 'staged-unreadable';
-  // 每条记录:`<mode> <oid> <stage>\t<path>`。只看这个路径自己的记录(路径是目录前缀时会列出其下的条目)。
-  const own = r.stdout
-    .split('\0')
-    .map((record) => /^(\d{6}) [0-9a-f]+ ([0-3])\t([\s\S]*)$/.exec(record))
-    .filter((m): m is RegExpExecArray => m !== null && m[3] === change.path);
-  const noBlob = own.some((m) => m[1] === GITLINK_MODE || m[2] !== '0');
+  const own = await readIndexEntries(app, repoRoot, change.path, FILE_READ_TIMEOUT_MS);
+  const noBlob = own !== null && own.some((entry) => entry.mode === GITLINK_MODE || entry.stage !== '0');
   return noBlob ? 'no-staged-blob' : 'staged-unreadable';
 }
-
-const GITLINK_MODE = '160000';
 
 export async function fetchDiff(
   app: DiffApp,

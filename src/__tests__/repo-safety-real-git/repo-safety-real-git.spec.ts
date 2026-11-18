@@ -10,7 +10,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchDiff, FILE_READ_TIMEOUT_MS, isWorktreeDiffStale, MAX_FILE_BYTES } from '../../git/diff-fetcher';
-import { discardFile } from '../../git/discard-file';
+import { discardFile, SUBMODULE_DISCARD_ERROR } from '../../git/discard-file';
 import { discardHunk } from '../../git/discard-hunk';
 import { DISABLED_HOOKS_PATH, gitExec, KNOWN_HOOK_EVENTS, LITERAL_ARGV_CONFIG } from '../../git/exec';
 import { detectRepoHooks } from '../../git/repo-hooks';
@@ -1043,7 +1043,9 @@ describe('nested repositories: no plugin git command may spawn a process inside 
       expect((await gitExec(app, repo, ['add', '--', 'sub'])).exitCode).toBe(0);
       expect((await gitExec(app, repo, ['restore', '--staged', '--', 'sub'])).exitCode).toBe(0);
       expect((await gitExec(app, repo, ['reset', 'HEAD', '--', 'sub'])).exitCode).toBe(0);
-      expect((await discardFile(app, repo, 'sub')).ok).toBe(true);
+      // 子模块条目的文件级 Discard 被如实拒绝(R74);checkout 本身照样验证不起子进程
+      expect(await discardFile(app, repo, 'sub')).toEqual({ ok: false, error: SUBMODULE_DISCARD_ERROR });
+      expect((await gitExec(app, repo, ['checkout', '--', 'sub'])).exitCode).toBe(0);
       expect((await stageFile(app, repo, 'sub')).ok).toBe(true);
       expect(await gitCommit(app, repo, 'bump sub')).toMatchObject({ ok: true });
       appendFileSync(join(repo, 'f.txt'), 'two\n');
@@ -1964,7 +1966,7 @@ describe('the fixed arguments are harmless on a git that predates some of them (
 
     // 每个子命令都真的跑过,而且带着固定参数
     expect([...new Set(calls.map((c) => c.sub))].sort()).toEqual(
-      ['add', 'apply', 'cat-file', 'checkout', 'commit', 'config', 'diff', 'help', 'log', 'reset', 'restore', 'rev-parse', 'status'],
+      ['add', 'apply', 'cat-file', 'checkout', 'commit', 'config', 'diff', 'help', 'log', 'ls-files', 'reset', 'restore', 'rev-parse', 'status'],
     );
     const hookSwitches = (c: Call) => c.args.filter((a) => /^hook\.[a-z0-9-]+\.enabled=false$/.test(a)).length;
     expect(KNOWN_HOOK_EVENTS).toHaveLength(28);
@@ -3039,5 +3041,75 @@ describe('the panel shows what a commit would take, without a manual Refresh (re
     const stagedShown = { f: await click('f.txt', 'staged'), g: await click('g.txt', 'staged') };
     expect(await gitCommit(app, repo, 'c')).toMatchObject({ ok: true });
     expect({ f: git(repo, 'show', 'HEAD:f.txt'), g: git(repo, 'show', 'HEAD:g.txt') }).toEqual(stagedShown);
+  });
+});
+
+describe('a submodule entry has no hunks and no file content to discard (real git)', () => {
+  const nested = (name: string) => {
+    const dir = join(repo, name);
+    mkdirSync(dir);
+    git(dir, 'init', '-q', '-b', 'main');
+    writeFileSync(join(dir, 'inner.txt'), 'inner 1\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', 'inner 1');
+    return dir;
+  };
+  const advance = (dir: string) => {
+    appendFileSync(join(dir, 'inner.txt'), 'inner 2\n');
+    git(dir, 'commit', '-qam', 'inner 2');
+    return git(dir, 'rev-parse', 'HEAD').trim();
+  };
+
+  it('R74 ` M sub` and `AM sub2`: the gitlink change is shown without hunk buttons and yields no hunk patch (applying one by hand "succeeds" and changes nothing); Stage / Unstage work on the entry; Discard says it is a submodule instead of reporting success', async () => {
+    const sub = nested('sub');
+    git(repo, 'add', 'sub');
+    git(repo, 'commit', '-qm', 'add sub');
+    const subHead = advance(sub);
+    const sub2 = nested('sub2');
+    git(repo, 'add', 'sub2');
+    advance(sub2);
+    expect(git(repo, 'status', '--porcelain')).toBe(' M sub\nAM sub2\n');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const changes = await scanStatus(app, repo);
+    const row = (path: string) => changes.find((c) => c.path === path)!;
+
+    for (const path of ['sub', 'sub2']) {
+      const view = await rendered(app, row(path), 'changed');
+      if (!view.diff.ok) throw new Error(`${path}: diff failed`);
+      expect(view.diff.unifiedDiff, path).toMatch(/^index [0-9a-f]+\.\.[0-9a-f]+ 160000$/m);
+      expect(view.added.join(), path).toContain('+Subproject commit ');
+      expect(view.buttons, path).toEqual([]);
+      const at = view.diff.unifiedDiff.split('\n').findIndex((l) => l.startsWith('@@'));
+      expect(extractHunkPatchFromUnifiedDiff(path, view.diff.unifiedDiff, at), path).toBeNull();
+
+      // 为什么不能有 Discard hunk:照旧的方式拼出的补丁,git 说应用成功,而条目原样还在
+      const lines = view.diff.unifiedDiff.split('\n');
+      const byHand = [`diff --git a/${path} b/${path}`, `--- a/${path}`, `+++ b/${path}`, ...lines.slice(at).filter((l) => l !== '')].join('\n') + '\n';
+      const before = git(repo, 'status', '--porcelain');
+      expect(await discardHunk(app, repo, byHand), path).toEqual({ ok: true });
+      expect(git(repo, 'status', '--porcelain'), path).toBe(before);
+    }
+
+    // 文件级 Discard:如实说明,不运行 checkout(它同样以 0 退出而什么都不做)
+    for (const path of ['sub', 'sub2']) {
+      expect(canDiscardFile(row(path), 'changed'), path).toBe(true);
+      expect(await discardFile(app, repo, path), path).toEqual({ ok: false, error: SUBMODULE_DISCARD_ERROR });
+    }
+    expect(git(repo, 'status', '--porcelain')).toBe(' M sub\nAM sub2\n');
+    // 普通文件不受影响
+    appendFileSync(join(repo, 'f.txt'), 'two\n');
+    expect(await discardFile(app, repo, 'f.txt')).toEqual({ ok: true });
+    expect(readFileSync(join(repo, 'f.txt'), 'utf8')).toBe('one\n');
+
+    // 文件级 Stage / Unstage 作用于这个条目
+    expect(canStageFile(row('sub'), 'changed')).toBe(true);
+    expect(await stageFile(app, repo, 'sub')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain', '--', 'sub')).toBe('M  sub\n');
+    expect(git(repo, 'ls-files', '-s', '--', 'sub')).toBe(`160000 ${subHead} 0\tsub\n`);
+    _resetRestoreCache();
+    expect(await unstageFile(app, repo, 'sub')).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain', '--', 'sub')).toBe(' M sub\n');
   });
 });
