@@ -153,6 +153,8 @@
 
 .cgv-hooks-warning {
   color: var(--text-fg);
+  /* visibleText 的输出可以是一长串没有断点的 <U+…>:允许任意处换行,不横向溢出 */
+  overflow-wrap: anywhere;
 }
 
 .cgv-hooks-actions {
@@ -376,6 +378,8 @@
   place-items: center;
   color: var(--text-fg);
   background: var(--bg-canvas);
+  /* visibleText 的输出可以是一长串没有断点的 <U+…>:允许任意处换行,不横向溢出 */
+  overflow-wrap: anywhere;
 }
 
 .cgv-line-jump,
@@ -570,6 +574,8 @@
 .cgv-preview-error {
   color: var(--danger);
   font-size: 12px;
+  /* visibleText 的输出可以是一长串没有断点的 <U+…>:允许任意处换行,不横向溢出 */
+  overflow-wrap: anywhere;
 }
 
 .cgv-preview-warning {
@@ -681,6 +687,8 @@
   padding: 8px 10px;
   border-top: 1px solid var(--border-line);
   background: var(--bg-panel);
+  /* visibleText 的输出可以是一长串没有断点的 <U+…>:允许任意处换行,不横向溢出 */
+  overflow-wrap: anywhere;
 }
 
 .cgv-banner--info {

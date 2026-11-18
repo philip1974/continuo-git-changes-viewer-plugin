@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 // 错误 / 提示文案里的 git 输出与仓库可控文本(stderr、hooksPath、hook 文件名\u2026\u2026)可以带控制字符与双向控制字符:
 // 终端转义、把后半句倒过来显示的 U+202E、看不见的零宽字符。显示前一律可见化。文件列表里的文件名不在此列。
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -67,16 +70,48 @@ describe('visibleText', () => {
     expect(visibleText(text)).toBe(text);
   });
 
-  it('V16 the text is cut before invisible characters are replaced: no half-written <U+…> at the end, and the limit counts the original code points', () => {
+  // 9282e46 先截断、后替换,上限按原文码点计:每个不可见码点展开成 8–9 个字符,输出最多约 4500 字符(600 个 U+E0041 → 4501),
+  // 超过宿主通知的上限(4096,超出部分被截掉,结尾停在半个 `<U+E00` 上)。上限改按**输出**计。
+  it('V16 the limit counts the output (after invisible characters are replaced): no half-written <U+…> at the end', () => {
     const rlo = String.fromCodePoint(0x202e);
-    expect(visibleText(`${'a'.repeat(MAX_VISIBLE_TEXT - 1)}${rlo}${'b'.repeat(100)}`)).toBe(`${'a'.repeat(MAX_VISIBLE_TEXT - 1)}<U+202E>\u2026`);
+    // 'a' × 499 之后的 `<U+202E>`(8 个字符)放不下:整个不要,不留半截
+    expect(visibleText(`${'a'.repeat(MAX_VISIBLE_TEXT - 1)}${rlo}${'b'.repeat(100)}`)).toBe(`${'a'.repeat(MAX_VISIBLE_TEXT - 1)}\u2026`);
+    expect(visibleText(`${'a'.repeat(MAX_VISIBLE_TEXT - 8)}${rlo}${'b'.repeat(100)}`)).toBe(`${'a'.repeat(MAX_VISIBLE_TEXT - 8)}<U+202E>\u2026`);
     const zwsp = String.fromCodePoint(0x200b);
-    expect(visibleText(zwsp.repeat(600))).toBe(`${'<U+200B>'.repeat(MAX_VISIBLE_TEXT)}\u2026`);
+    expect(visibleText(zwsp.repeat(600))).toBe(`${'<U+200B>'.repeat(Math.floor(MAX_VISIBLE_TEXT / 8))}\u2026`);
     const tag = String.fromCodePoint(0xe0041);
     // tag 字符是组合性的(Extend):整串是一个字形簇,超过上限 → 按码点截断;五位十六进制的码位同样不出现半截
-    expect(visibleText(tag.repeat(600))).toBe(`${'<U+E0041>'.repeat(MAX_VISIBLE_TEXT)}\u2026`);
+    expect(visibleText(tag.repeat(600))).toBe(`${'<U+E0041>'.repeat(Math.floor(MAX_VISIBLE_TEXT / 9))}\u2026`);
     // 跟在基字符后面的 tag 字符与它同属一个簇:簇放不下就整簇不要
     expect(visibleText(`${'a'.repeat(MAX_VISIBLE_TEXT - 1)}${tag}${tag}`)).toBe(`${'a'.repeat(MAX_VISIBLE_TEXT - 2)}\u2026`);
+  });
+
+  it('V19 whatever the input, the output is at most MAX_VISIBLE_TEXT code points plus the ellipsis, never ends in a half-written <U+…>, and keeps whole grapheme clusters', () => {
+    const cp = (...points: number[]) => String.fromCodePoint(...points);
+    const acute = cp(0x301);
+    const inputs = [
+      cp(0x200b).repeat(600),
+      cp(0xe0041).repeat(600),
+      `error: ${cp(0x200b).repeat(600)}`,
+      // 可见字符、不可见字符、组合附加符、emoji 混排,各种对齐
+      ...[0, 1, 2, 3, 5, 7, 8].map((pad) =>
+        `${'x'.repeat(pad)}${`ab${cp(0x202e)}c${cp(0x1b)}[2J e${acute}${cp(0x1f44d, 0x1f3fd)}${cp(0xe0041)}${cp(0xfeff)}中`.repeat(80)}`),
+    ];
+    for (const input of inputs) {
+      const out = visibleText(input);
+      expect(out.endsWith('\u2026'), input.slice(0, 20)).toBe(true);
+      expect(Array.from(out).length).toBeLessThanOrEqual(MAX_VISIBLE_TEXT + 1);
+      // 去掉省略号后,每个 `<` 都开始一个完整的 `<U+XXXX>`(原文里没有 `<`)
+      const body = out.slice(0, -1);
+      expect(body.replace(/<U\+[0-9A-F]{4,6}>/g, '')).not.toContain('<');
+      expect(body.endsWith('<U+')).toBe(false);
+      // 组合附加符不与它的基字符分开:输出里每个 U+0301 前面都是 e
+      expect(body.split(acute).slice(0, -1).every((part) => part.endsWith('e'))).toBe(true);
+      // 不切开 emoji 的肤色修饰
+      expect(body.endsWith(cp(0x1f44d))).toBe(false);
+    }
+    // 宿主通知的上限(4096 个 UTF-16 码元)之内,截断不会由宿主再做一次
+    expect(visibleText(cp(0xe0041).repeat(600)).length).toBeLessThanOrEqual(MAX_VISIBLE_TEXT + 1);
   });
 
   it('V17 the cut does not separate a base character from its combining marks; a single cluster longer than the limit is still cut (by code points)', () => {
@@ -257,5 +292,20 @@ describe('the "Diff too large" placeholder', () => {
     expect(container.querySelector('.cgv-placeholder code')!.textContent).toBe(`git diff -- 'a<U+202E>txt.exe'`);
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
     expect(writeText).toHaveBeenCalledWith(command);
+  });
+});
+
+describe('long unbreakable text in the panel wraps instead of overflowing sideways', () => {
+  // 可见化之后的文本可以是一长串没有断点的 `<U+200B><U+200B>…`(或一个很长的路径):容器允许在任意处换行
+  const css = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../styles/index.css'), 'utf-8');
+  const declarationsFor = (className: string): string[] =>
+    [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .filter((m) => (m[1] ?? '').split(',').some((sel) => sel.trim() === className))
+      .map((m) => m[2] ?? '');
+
+  it('V20 every container that shows visibleText output (banner / status alert / restriction, hooks prompt, drawer error, failed diff) has overflow-wrap: anywhere', () => {
+    for (const className of ['.cgv-banner', '.cgv-hooks-warning', '.cgv-preview-error', '.cgv-diff-empty']) {
+      expect(declarationsFor(className).some((body) => /overflow-wrap:\s*anywhere/.test(body)), className).toBe(true);
+    }
   });
 });

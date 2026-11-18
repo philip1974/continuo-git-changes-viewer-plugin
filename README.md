@@ -220,8 +220,10 @@ Error messages and notices that carry git output or text from the repository
 bounded form: control and format characters (bidirectional controls,
 zero-width characters, …) and other default-ignorable code points (variation
 selectors, tag characters, Hangul fillers, …) appear as `<U+XXXX>`, line
-breaks become spaces, and long text is cut (before the replacement, at a
-grapheme boundary where possible). The command shown in the "Diff too large"
+breaks become spaces, and long text is cut to 500 code points of the shown
+text plus an ellipsis (never inside a `<U+XXXX>`, at a grapheme boundary where
+possible), so the host's own notification limit never cuts it again. Long
+unbreakable text wraps instead of overflowing. The command shown in the "Diff too large"
 placeholder is displayed the same way; Copy still copies it exactly (and
 reports an error if the clipboard refuses the write). File
 names in the file list are shown as they are.

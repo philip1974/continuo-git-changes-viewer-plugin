@@ -1,4 +1,4 @@
-/** 错误 / 提示文案的最大长度(码点,按原文计,替换成 `<U+XXXX>` 之前);更长的截断并加省略号。 */
+/** 错误 / 提示文案的最大长度(码点,按输出计——替换成 `<U+XXXX>` 之后,不含省略号);更长的截断并加省略号。 */
 export const MAX_VISIBLE_TEXT = 500;
 
 // 控制字符(Cc:C0 / DEL / C1)、格式字符(Cf:双向控制与方向标记、零宽字符、软连字符、不可见运算符、行间注释……)
@@ -13,39 +13,55 @@ const segmenter: { segment(text: string): Iterable<{ segment: string }> } | null
     ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
     : null;
 
-/**
- * 取前 maxLength 个码点(不切开代理对);能做到时在字形簇边界处截断——基字符与它的组合附加符不拆开。
- * 单个字形簇本身就超过上限(大量叠加的组合符)时按码点截断。返回 null 表示没有超长。
- */
-function cut(text: string, maxLength: number): string | null {
-  const points = Array.from(text);
-  if (points.length <= maxLength) return null;
-  if (segmenter) {
-    // 逐簇累加(segment 是惰性的,到上限即停):完整的簇才保留
-    let kept = '';
-    let count = 0;
-    for (const { segment } of segmenter.segment(text)) {
-      const size = Array.from(segment).length;
-      if (count + size > maxLength) break;
-      kept += segment;
-      count += size;
-    }
-    if (kept !== '') return kept;
-  }
-  return points.slice(0, maxLength).join('');
+const toVisible = (ch: string): string =>
+  `<U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}>`;
+
+/** 码点数(不是 UTF-16 码元数)。 */
+function countPoints(text: string): number {
+  let n = 0;
+  for (const _ of text) n += 1;
+  return n;
 }
 
 /**
  * 把要显示在错误 / 提示里的文本(git 的 stderr、仓库可控的配置值与文件名)变成可见、单行、有界的形式:
  * 控制字符、格式字符与默认可忽略字符替换成 `<U+XXXX>`(终端转义不会被当作样式、U+202E 不会把后半句倒过来显示、
- * 看不见的字符看得见);换行折叠成一个空格;制表符变空格;过长截断。先截断、后替换:结尾不会出现半截的 `<U+…>`。
- * 只用于提示文案——文件列表里的文件名照旧。
+ * 看不见的字符看得见);换行折叠成一个空格;制表符变空格;过长截断并加省略号。只用于提示文案——文件列表里的文件名照旧。
+ *
+ * 上限按**输出**计(替换之后的码点数,不含省略号):逐个字形簇生成输出并累加,放不下的那一簇整簇不要——不切开
+ * `<U+…>`,也不把基字符与它的组合附加符拆开。此前(9282e46)按原文码点计、先截断后替换:每个不可见码点展开成
+ * 8–9 个字符,输出可达约 4500 字符,超过宿主通知的上限(4096)而被宿主从半个 `<U+E00` 处截掉。
+ * 第一个簇本身就放不下(大量叠加的组合符、一长串 tag 字符)时在簇内按码点截断,每个 `<U+…>` 仍是整的。
  */
 export function visibleText(text: string, maxLength = MAX_VISIBLE_TEXT): string {
   const flat = text.replace(LINE_BREAKS, ' ').replace(/\t/g, ' ');
-  const kept = cut(flat, maxLength);
-  const shown = (kept ?? flat)
-    .replace(INVISIBLE, (ch) => `<U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}>`)
-    .trim();
-  return kept === null ? shown : `${shown}\u2026`;
+  let out = '';
+  let size = 0;
+  let cut = false;
+  // segment 是惰性的:到上限即停,不扫描其余部分(单个超长的簇除外,见上)
+  const units: Iterable<string> = segmenter
+    ? (function* () { for (const { segment } of segmenter.segment(flat)) yield segment; })()
+    : flat;
+  for (const unit of units) {
+    const shown = unit.replace(INVISIBLE, toVisible);
+    const shownSize = countPoints(shown);
+    if (size + shownSize <= maxLength) {
+      out += shown;
+      size += shownSize;
+      continue;
+    }
+    cut = true;
+    if (out === '') {
+      for (const ch of unit) {
+        const piece = ch.replace(INVISIBLE, toVisible);
+        const pieceSize = countPoints(piece);
+        if (size + pieceSize > maxLength) break;
+        out += piece;
+        size += pieceSize;
+      }
+    }
+    break;
+  }
+  const trimmed = out.trim();
+  return cut ? `${trimmed}\u2026` : trimmed;
 }
