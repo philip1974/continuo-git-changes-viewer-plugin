@@ -157,6 +157,7 @@
 
 ## [Git store mode selection](./git-store-mode-selection/README.md)
 
+- [`duplicate-path-panel.spec.tsx`](./git-store-mode-selection/duplicate-path-panel.spec.tsx)
 - [`git-store-mode-selection.spec.ts`](./git-store-mode-selection/git-store-mode-selection.spec.ts)
 
 ## [Git store refresh reconciliation](./git-store-refresh-reconciliation/README.md)

@@ -354,3 +354,11 @@ Per-section views (`diffview-section-views`, `diff-fetcher` T11–T12):
   against real git), the deletion for `AD` (no "(empty file)"), and the whole
   file only for the untracked one; the link is labelled "Symbolic link →
   <target>" and the outside file's content never appears.
+
+One path, two records (`git-store-mode-selection` T20–T23, P1):
+
+- R71: after `git rm --cached f.txt` the list has `D  f.txt` and `?? f.txt`;
+  through the store, the untracked row yields the file on disk
+  (`isUntracked`), the staged row the deletion diff; a refresh keeps the
+  untracked row selected; staging the untracked row removes both records.
+

@@ -100,8 +100,8 @@ export function firstSelectableEntry(
   return null;
 }
 
-function isModeValid(change: FileChange, mode: DiffMode): boolean {
-  if (change.inoperable) return false;
+/** 这条记录是否出现在 mode 对应的区里(staged → Staged 区;changed → Changes / Untracked 区)。 */
+function listedIn(change: FileChange, mode: DiffMode): boolean {
   if (mode === 'staged') {
     return change.statusX !== ' ' && change.statusX !== '?';
   }
@@ -112,20 +112,34 @@ function isModeValid(change: FileChange, mode: DiffMode): boolean {
   );
 }
 
+function isModeValid(change: FileChange, mode: DiffMode): boolean {
+  return !change.inoperable && listedIn(change, mode);
+}
+
+/**
+ * 一行对应的 status 记录。行的身份是 (path, 区),不是 path:`git rm --cached f` 之后 status 对同一路径给出
+ * 两条记录——`D  f`(Staged 区)与 `?? f`(Untracked 区,mode 'changed')。只按 path 找会永远拿到第一条:
+ * 点未跟踪那一行却取了"已暂存删除"的 diff(显示 no textual diff),刷新后选中还会跳到 Staged 区。
+ * 该区里没有这个路径的记录 → undefined(那一行不存在)。
+ */
+export function findChange(
+  changes: readonly FileChange[],
+  path: string,
+  mode: DiffMode,
+): FileChange | undefined {
+  return changes.find((change) => change.path === path && listedIn(change, mode));
+}
+
 function reconcileSelected(
   previous: SelectedRef | null,
   changes: readonly FileChange[],
 ): SelectedRef | null {
   if (!previous) return firstSelectableEntry(changes);
-  const samePath = changes.find((change) => change.path === previous.path);
-  if (!samePath) return firstSelectableEntry(changes);
-  if (isModeValid(samePath, previous.mode)) return previous;
-  if (isModeValid(samePath, 'changed')) {
-    return { path: previous.path, mode: 'changed' };
-  }
-  if (isModeValid(samePath, 'staged')) {
-    return { path: previous.path, mode: 'staged' };
-  }
+  const samePath = changes.filter((change) => change.path === previous.path);
+  const valid = (mode: DiffMode) => samePath.some((change) => isModeValid(change, mode));
+  if (valid(previous.mode)) return previous;
+  if (valid('changed')) return { path: previous.path, mode: 'changed' };
+  if (valid('staged')) return { path: previous.path, mode: 'staged' };
   return firstSelectableEntry(changes);
 }
 
@@ -206,7 +220,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
       }
     },
     selectFile(path, mode) {
-      if (get().changes.find((c) => c.path === path)?.inoperable) return;
+      if (findChange(get().changes, path, mode)?.inoperable) return;
       set({ selected: { path, mode } });
       void get().loadDiff(path, mode);
     },
@@ -215,7 +229,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
       if (!repoRoot || !deps.fetchDiff) return;
       const key = cacheKey(path, mode);
       if (diffCache.has(key)) return; // cache hit
-      const change = changes.find((c) => c.path === path);
+      const change = findChange(changes, path, mode);
       if (!change || change.inoperable) return;
       try {
         const result = await deps.fetchDiff(repoRoot, change, mode);

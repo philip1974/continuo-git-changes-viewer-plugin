@@ -2791,3 +2791,43 @@ describe('each section shows its own side of a file that is in both (real git)',
     expect(git(repo, 'status', '--porcelain', '--', 'am.txt')).toBe('A  am.txt\n');
   });
 });
+
+describe('one path, two status records: `git rm --cached` leaves `D  f` and `?? f` (real git)', () => {
+  it('R71 both rows exist; selecting the untracked one shows the file still on disk, selecting the staged one shows the deletion, a refresh keeps the selection, and staging the untracked row folds the two back into nothing', async () => {
+    git(repo, 'rm', '-q', '--cached', 'f.txt');
+    expect(git(repo, 'status', '--porcelain')).toBe('D  f.txt\n?? f.txt\n');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const store = createGitStore({
+      load: async () => ({ repoRoot: repo, changes: await scanStatus(app, repo) }),
+      fetchDiff: (root, change, mode) => fetchDiff(app, root, change, mode),
+    });
+    await store.getState().refresh();
+    expect(store.getState().changes.map((c) => `${c.statusX}${c.statusY} ${c.path}`)).toEqual(['D  f.txt', '?? f.txt']);
+    const shown = async (mode: 'staged' | 'changed') => {
+      store.getState().selectFile('f.txt', mode);
+      await store.getState().loadDiff('f.txt', mode);
+      const { selected, diffCache } = store.getState();
+      return diffCache.get(`${selected!.mode}:${selected!.path}`);
+    };
+
+    expect(await shown('changed')).toMatchObject({ ok: true, isUntracked: true, modified: 'one\n' });
+    const staged = await shown('staged');
+    expect(staged).toMatchObject({ ok: true, isUntracked: false, original: 'one\n', modified: '' });
+    expect(staged?.ok && staged.unifiedDiff).toContain('deleted file mode 100644');
+
+    // 刷新:选中的未跟踪行不跳到 Staged 区,内容仍是工作树文件
+    store.getState().selectFile('f.txt', 'changed');
+    await store.getState().refresh();
+    expect(store.getState().selected).toEqual({ path: 'f.txt', mode: 'changed' });
+    await store.getState().loadDiff('f.txt', 'changed');
+    expect(store.getState().diffCache.get('changed:f.txt')).toMatchObject({ ok: true, isUntracked: true, modified: 'one\n' });
+
+    // 暂存未跟踪那一行(面板对 `??` 行的调用方式)→ 与 HEAD 相同,两条记录都消失
+    expect(await stageFile(app, repo, 'f.txt', { untracked: true })).toEqual({ ok: true });
+    await store.getState().refresh();
+    expect(store.getState().changes).toEqual([]);
+    expect(store.getState().selected).toBeNull();
+  });
+});

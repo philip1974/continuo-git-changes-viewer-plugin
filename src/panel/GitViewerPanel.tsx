@@ -16,7 +16,7 @@ import {
 import type { CoPluginApp, PanelApi } from '../sdk/types';
 import type { AutoRefreshTimer, AutoRefreshTimerOpts } from '../state/auto-refresh-timer';
 import { RetryBackoff } from '../state/retry-backoff';
-import { cacheKey, selectStaged, type GitViewerState } from '../state/git-store';
+import { cacheKey, findChange, selectStaged, type GitViewerState } from '../state/git-store';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
 import { CommitEditor } from './CommitEditor';
@@ -188,7 +188,7 @@ export function GitViewerPanel({
   const selectedRef = state.selected;
   const selected =
     selectedRef
-      ? state.changes.find((change) => change.path === selectedRef.path) ?? null
+      ? findChange(state.changes, selectedRef.path, selectedRef.mode) ?? null
       : null;
 
   // v0.1.2 hotfix: 从 store.diffCache 读真实 diff；props.diff override 给 spec 用
