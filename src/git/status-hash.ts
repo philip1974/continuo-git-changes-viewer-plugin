@@ -15,6 +15,12 @@ import { gitExec } from './exec';
  * 面板不显示它;关掉后那一行只在"相同 / 不同"之间变化。
  * 这条命令的输出只当作不透明的字符串比较,不解析;列表另由 status-scanner 的 v1 命令读出,不受这些头行影响。
  *
+ * 不覆盖的:**未暂存的**子模块指针再次前进。status 为子模块条目输出的是 HEAD 与 index 里记录的提交 id 和
+ * `S<c><m><u>` 标志,不输出子模块自己当前的 HEAD:` M sub` 的子模块再提交一次,输出一字不差(实测 git 2.50 / 2.56);
+ * status 没有能把它打出来的选项(要另起一条 `git diff`),目录的 mtime 也不变(worktreeStamp 看不出)。
+ * 只影响 Changes 区那一行显示的 `Subproject commit …`——点一下该行或手动 Refresh 即重读;已暂存的指针在
+ * index 里,任何变化都在指纹里(real-git R81),提交的内容不受影响。
+ *
  * 不覆盖的:工作树文件的内容(status 不为未暂存的文件输出 id)——同一个未暂存文件再次被编辑时 XY 与 id
  * 都不变。面板为此另外比较当前显示的工作树 diff 的 worktreeStamp(见 diff-fetcher 的 isWorktreeDiffStale)。
  */

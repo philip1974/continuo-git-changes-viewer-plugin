@@ -129,6 +129,11 @@ detect whether HEAD is already on a remote branch.
   that are not valid UTF-8, or contain U+FFFD, are listed but cannot be
   operated on. Amending a commit whose message is not valid UTF-8 saves the
   message as displayed (a warning says so).
+- Auto-refresh notices changes of what is staged, of HEAD, of the list of
+  changed files, and of the file whose working-tree diff is on screen. It does
+  not notice an unstaged submodule moving to yet another commit (git status
+  does not report it); click the row or press Refresh. A staged submodule
+  pointer is covered.
 - The workspace root must be the git toplevel. Opening a subdirectory of a repo
   is reported as unsupported in this version.
 - Very large diffs degrade to a file-level placeholder with the exact git

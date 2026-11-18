@@ -3433,3 +3433,35 @@ describe('the status fingerprint follows HEAD, not only the entries (real git)',
     expect(await readStatusHash(app, repo)).toContain('# branch.oid (initial)');
   });
 });
+
+describe('submodule pointers in the fingerprint (real git)', () => {
+  it('R81 what a commit takes is covered: a staged submodule pointer that moves again and is staged again (`M  sub` both times) changes the fingerprint, and the Staged row read after that shows the new commit', async () => {
+    const sub = join(repo, 'sub');
+    mkdirSync(sub);
+    git(sub, 'init', '-q', '-b', 'main');
+    const advance = (n: number) => {
+      writeFileSync(join(sub, 'inner.txt'), `inner ${n}\n`);
+      git(sub, 'add', '.');
+      git(sub, 'commit', '-qm', `inner ${n}`);
+      return git(sub, 'rev-parse', 'HEAD').trim();
+    };
+    advance(1);
+    git(repo, 'add', 'sub');
+    git(repo, 'commit', '-qm', 'add sub');
+    advance(2);
+    git(repo, 'add', 'sub');
+    expect(git(repo, 'status', '--porcelain')).toBe('M  sub\n');
+
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const first = await readStatusHash(app, repo);
+    const third = advance(3);
+    git(repo, 'add', 'sub');
+    expect(git(repo, 'status', '--porcelain')).toBe('M  sub\n');
+    expect(await readStatusHash(app, repo)).not.toBe(first);
+
+    const row = (await scanStatus(app, repo)).find((c) => c.path === 'sub')!;
+    const diff = await fetchDiff(app, repo, row, 'staged');
+    expect(diff.ok && diff.unifiedDiff).toContain(`+Subproject commit ${third}`);
+  });
+});

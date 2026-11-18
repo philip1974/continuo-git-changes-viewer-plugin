@@ -455,3 +455,7 @@ HEAD (`status-hash` T6c, `amend-component` T35–T38; run with git 2.50.1 and
   nothing: the terminal's message survives, Amend is turned off and the text
   is kept. Checking Amend again loads the current message and amending then
   works.
+- R81: a staged submodule pointer that moves and is staged again (`M  sub`
+  both times) changes the fingerprint, and the Staged row then shows the new
+  commit. (An unstaged pointer moving again is not visible to status — see the
+  residual note in `status-hash`.)

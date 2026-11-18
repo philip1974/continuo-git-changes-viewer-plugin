@@ -29,3 +29,15 @@ commit the user had looked at. `--branch` adds `# branch.oid` / `# branch.head`
 distance to the upstream on every tick; the panel does not show it. The output
 is compared as an opaque string and never parsed; the list comes from a
 separate v1 command (`status-scanner`).
+
+Residual — an unstaged submodule pointer that moves again. For a submodule
+entry status prints the commit ids recorded in HEAD and in the index plus the
+`S<c><m><u>` flags, never the submodule's own current HEAD. With ` M sub`
+shown, another commit inside the submodule leaves the output byte-identical
+(measured, git 2.50.1 / 2.56.1); no status option prints it (it would take an
+extra `git diff` per tick), and the directory's mtime does not change either,
+so the working-tree stamp does not notice. Only the `Subproject commit …`
+line of that Changes row can be stale, until the row is clicked or Refresh is
+pressed. What a commit takes is not affected: a staged pointer lives in the
+index, and any change of it changes the fingerprint (`repo-safety-real-git`
+R81).
