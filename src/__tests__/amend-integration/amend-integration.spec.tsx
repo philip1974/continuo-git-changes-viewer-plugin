@@ -43,6 +43,7 @@ describe('amend integration', () => {
       changes: [{ path: 'src/a.ts', status: 'M', statusX: 'M', statusY: ' ', kind: 'text' }],
       commitMessage: 'new subject',
       amend: true,
+      amendHead: 'after', // 勾选 Amend 时的 HEAD,与下面 exec 对 rev-parse HEAD 的回答相同
       statusFingerprint: 'fp', // 与下面 exec 对指纹 status 的回答相同:提交前确认通过
       refresh: vi.fn(async () => undefined),
     });

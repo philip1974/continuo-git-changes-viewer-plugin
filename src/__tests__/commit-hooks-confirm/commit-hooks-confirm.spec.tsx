@@ -214,7 +214,7 @@ describe('detectRepoHooks', () => {
 
 function renderEditor(detectHooks: (app: CoPluginApp, root: string) => Promise<RepoHooks>, amend = false) {
   const store = createGitStore();
-  store.setState({ repoRoot: '/repo', commitMessage: 'subject', amend, statusFingerprint: 'fp' }); // 提交前确认(commit-editor T31–T35):store 里的指纹与当前读到的相同才提交
+  store.setState({ repoRoot: '/repo', commitMessage: 'subject', amend, amendHead: amend ? 'sha' : null, statusFingerprint: 'fp' }); // 提交前确认(commit-editor T31–T35):store 里的指纹与当前读到的相同才提交
   const commit = vi.fn(async () => ({ ok: true as const }));
   const app = { shell: { exec: vi.fn() }, notifications: { show: vi.fn() } } as unknown as CoPluginApp;
   const detect = vi.fn(detectHooks);

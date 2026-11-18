@@ -60,6 +60,11 @@ interface CommitEditorProps {
 export const REPO_CHANGED_MESSAGE =
   'The repository changed since this view was last refreshed. Nothing was committed — the view is now up to date; review it and commit again.';
 
+// Amend 时 HEAD 已不是勾选 Amend 时的那个提交:编辑框里的信息是旧提交的,照常执行会用它改写新的 HEAD。
+export const AMEND_HEAD_CHANGED_MESSAGE =
+  'HEAD is no longer the commit whose message was loaded when "Amend last commit" was checked. ' +
+  'Nothing was amended and Amend was turned off — check it again to load the current message.';
+
 export const AMEND_NON_UTF8_MESSAGE =
   'The last commit message contains bytes that are not valid UTF-8. They are shown as \uFFFD, and amending will save the message as shown here.';
 
@@ -159,7 +164,10 @@ export function CommitEditor({
 
     store.getState().setCommitMessage('');
     store.getState().setAmend(true);
-    const headMessage = await readHeadMessage(app, repoRoot);
+    // 先读 HEAD 的提交 id,再读它的信息:两次读取之间 HEAD 若变了,记下的 id 是旧的,Amend 时判为"变了"而中止
+    // (反过来——id 新、信息旧——会放行)。
+    const headSha = await readHeadSha(app, repoRoot);
+    const headMessage = headSha === null ? null : await readHeadMessage(app, repoRoot);
     if (token !== toggleTokenRef.current) return;
 
     if (headMessage === null) {
@@ -168,6 +176,7 @@ export function CommitEditor({
       return;
     }
 
+    store.getState().setAmend(true, headSha);
     store.getState().setCommitMessage(headMessage);
     // 提交信息同样经宿主按 UTF-8 解码:不是合法 UTF-8 的字节(没有 encoding 头的 Latin-1 / GBK 提交信息)
     // 已经变成 U+FFFD,Amend 会把预填的文本原样写回去。不拦(用户看得到、可以改),但要说明。
@@ -212,6 +221,15 @@ export function CommitEditor({
         return;
       }
       const headBefore = amend ? await readHeadSha(app, repoRoot) : null;
+      // Amend 只改写"载入信息时的那个提交"。上面的指纹比较只说明仓库与面板最近一次 refresh 时相同;HEAD 在勾选
+      // Amend 之后被替换、随后面板又刷新过(自动刷新的 tick)时,指纹是新的,而编辑框里仍是旧提交的信息。
+      // 读不到 HEAD、或没有记下载入时的提交 → 同样中止(fail-closed)。
+      if (amend && (headBefore === null || headBefore !== store.getState().amendHead)) {
+        store.getState().setAmend(false);
+        await store.getState().refresh();
+        showWarning(app, store, AMEND_HEAD_CHANGED_MESSAGE);
+        return;
+      }
       const result = await commit(
         app,
         repoRoot,

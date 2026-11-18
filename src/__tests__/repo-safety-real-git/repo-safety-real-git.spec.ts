@@ -2557,7 +2557,8 @@ describe('file names reach git byte for byte whatever core.precomposeUnicode say
     // 已跟踪文件会多出一条 `??`(磁盘名与 index 名的形式不同)。
     expect(changes.map((c) => `${c.statusX}${c.statusY}`).sort()).toEqual([' M', '??']);
     expect(changes.find((c) => c.statusY === 'M')!.path).toBe(trackedName[0]);
-    expect((await readStatusHash(app, repo)).split('\0').filter(Boolean)).toHaveLength(2);
+    // 指纹里 `# branch.…` 开头的是头行(HEAD / 分支),其余每条记录一个条目
+    expect((await readStatusHash(app, repo)).split('\0').filter((record) => record !== '' && !record.startsWith('# '))).toHaveLength(2);
     const tracked = changes.find((c) => c.statusY === 'M')!;
     const untracked = changes.find((c) => c.statusX === '?')!;
     expect(untracked.path.normalize('NFC')).toBe(HANGUL_NFD.normalize('NFC'));
@@ -3385,5 +3386,50 @@ describe('a file-level action acts on the entry that was clicked, not on a direc
     // 子条目不在了:x 这一行可以撤销暂存
     expect(await unstageFile(app, repo, 'x')).toEqual({ ok: true });
     expect(git(repo, 'status', '--porcelain')).toBe(' M f.txt\n D x\n');
+  });
+});
+
+describe('the status fingerprint follows HEAD, not only the entries (real git)', () => {
+  it('R80 a staged new file, then HEAD is replaced / moved while the entries stay byte-identical (reword with `commit --amend --only`, a commit made with plumbing, switching to a new branch): each changes the fingerprint; reading it twice in a row does not; the list scan is a separate command and is not affected by the header lines', async () => {
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'config', 'user.email', 't@t');
+    writeFileSync(join(repo, 'n.txt'), 'new\n');
+    git(repo, 'add', 'n.txt');
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const entries = () => git(repo, 'status', '--porcelain=v2');
+    const snapshot = async () => ({ fingerprint: await readStatusHash(app, repo), entries: entries() });
+
+    const start = await snapshot();
+    expect(await readStatusHash(app, repo)).toBe(start.fingerprint);
+    expect(start.fingerprint).toContain(`# branch.oid ${git(repo, 'rev-parse', 'HEAD').trim()}`);
+    expect(start.fingerprint).toContain('# branch.head main');
+
+    git(repo, 'commit', '-q', '--amend', '--only', '-m', 'reworded');
+    const reworded = await snapshot();
+    expect(reworded.entries).toBe(start.entries);
+    expect(reworded.fingerprint).not.toBe(start.fingerprint);
+
+    const made = git(repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'made elsewhere').trim();
+    git(repo, 'update-ref', 'HEAD', made);
+    const moved = await snapshot();
+    expect(moved.entries).toBe(start.entries);
+    expect(moved.fingerprint).not.toBe(reworded.fingerprint);
+
+    git(repo, 'checkout', '-q', '-b', 'other');
+    const switched = await snapshot();
+    expect(switched.entries).toBe(start.entries);
+    expect(switched.fingerprint).not.toBe(moved.fingerprint);
+
+    expect((await scanStatus(app, repo)).map((c) => `${c.statusX}${c.statusY} ${c.path}`)).toEqual(['A  n.txt']);
+  });
+
+  it('R80b an unborn branch and a detached HEAD have a fingerprint too (the command does not fail)', async () => {
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    git(repo, 'checkout', '-q', '--detach');
+    expect(await readStatusHash(app, repo)).toContain('# branch.head (detached)');
+    git(repo, 'checkout', '-q', '--orphan', 'fresh');
+    expect(await readStatusHash(app, repo)).toContain('# branch.oid (initial)');
   });
 });

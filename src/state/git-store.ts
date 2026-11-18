@@ -52,6 +52,11 @@ export interface GitViewerState {
   banner: BannerState | null;
   commitMessage: string;
   amend: boolean;
+  /**
+   * 勾选 Amend 时 HEAD 的提交 id——编辑框里预填的信息来自这个提交。Amend 只改写它:提交时 HEAD 已经是别的
+   * 提交(终端里又提交 / 改写过)就中止(见 CommitEditor)。amend 为 false 时是 null。
+   */
+  amendHead: string | null;
   restriction: string | null;
   /** 最近一次 refresh 没拿到可信的 status(原因);下一次成功的 refresh 清除。非 null 时禁用 Commit / Amend。 */
   statusError: string | null;
@@ -67,7 +72,7 @@ export interface GitViewerState {
   setBanner(banner: BannerState): void;
   dismissBanner(): void;
   setCommitMessage(message: string): void;
-  setAmend(value: boolean): void;
+  setAmend(value: boolean, headSha?: string | null): void;
 }
 
 interface ChangeSlice {
@@ -162,6 +167,7 @@ const emptyState = {
   banner: null,
   commitMessage: '',
   amend: false,
+  amendHead: null,
   restriction: null,
   statusError: null,
   statusFingerprint: null,
@@ -175,6 +181,7 @@ const emptyState = {
   | 'banner'
   | 'commitMessage'
   | 'amend'
+  | 'amendHead'
   | 'restriction'
   | 'statusError'
   | 'statusFingerprint'
@@ -287,6 +294,7 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
         banner: null,
         commitMessage: '',
         amend: false,
+        amendHead: null,
         restriction: null,
         statusError: null,
         statusFingerprint: null,
@@ -301,8 +309,8 @@ export function createGitStore(deps: GitStoreDeps = {}): StoreApi<GitViewerState
     setCommitMessage(message) {
       set({ commitMessage: message });
     },
-    setAmend(value) {
-      set({ amend: value });
+    setAmend(value, headSha = null) {
+      set({ amend: value, amendHead: value ? headSha : null });
     },
   }));
 }

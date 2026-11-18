@@ -96,6 +96,11 @@ the current HEAD message into the editor, then edit the message or stage more
 changes and click Amend. Amend runs `git commit --amend -F -`, then refreshes
 the panel and clears amend mode on success.
 
+Amend only rewrites the commit whose message it loaded. If HEAD has become a
+different commit since "Amend last commit" was checked (you committed or
+amended in a terminal), clicking Amend changes nothing: Amend is turned off
+with an explanation, and checking it again loads the current message.
+
 Amend rewrites local HEAD. If the commit was already pushed, integrating the
 rewrite may require a force-push. v0.4.1 shows a visible warning but does not
 detect whether HEAD is already on a remote branch.

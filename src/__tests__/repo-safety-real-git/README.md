@@ -441,3 +441,17 @@ A file-level action acts on the clicked entry, not on a directory at its path
   and `reset HEAD -- x` unstage the child too; `unstageFile` refuses on the
   `x` row, and works on the child row, on ordinary rows, and on `x` once
   nothing is staged below it.
+
+HEAD (`status-hash` T6c, `amend-component` T35–T38; run with git 2.50.1 and
+2.56.1):
+
+- R80: with a new file staged, HEAD is reworded (`commit --amend --only`),
+  replaced by a commit made with plumbing, and moved to a new branch — the
+  entry lines stay byte-identical each time and the fingerprint changes each
+  time. The list scan is unaffected by the header lines.
+- R80b: a detached HEAD and an unborn branch have a fingerprint too.
+- P4 (real panel): Amend is checked (message of HEAD loaded), HEAD is reworded
+  in a terminal, the tick refreshes the panel. Clicking Amend rewrites
+  nothing: the terminal's message survives, Amend is turned off and the text
+  is kept. Checking Amend again loads the current message and amending then
+  works.

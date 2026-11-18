@@ -2,8 +2,8 @@
 // 真实面板 + 真实 git:面板显示的内容必须与 Commit 将提交的内容一致。这里渲染真正的 GitViewerPanel
 // (真实 store / scanStatus / fetchDiff / readStatusHash),timer 由用例手动驱动。
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cleanup, configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawn, execFileSync } from 'node:child_process';
 import { lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,11 +11,15 @@ import { join } from 'node:path';
 import { fetchDiff } from '../../git/diff-fetcher';
 import { readStatusHash } from '../../git/status-hash';
 import { scanStatus } from '../../git/status-scanner';
-import { REPO_CHANGED_MESSAGE } from '../../panel/CommitEditor';
+import { AMEND_HEAD_CHANGED_MESSAGE, REPO_CHANGED_MESSAGE } from '../../panel/CommitEditor';
 import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CoPluginApp, Disposable, PanelApi, PanelVisibilityEvent, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 import type { AutoRefreshTimerOpts } from '../../state/auto-refresh-timer';
 import { cacheKey, createGitStore } from '../../state/git-store';
+
+// 每一步都要起真实的 git 进程:整套测试并行跑时,默认的 1 s 等待不够
+configure({ asyncUtilTimeout: 10_000 });
+vi.setConfig({ testTimeout: 30_000 });
 
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 const git = (cwd: string, ...args: string[]) =>
@@ -121,7 +125,7 @@ function mount(intervalSec: number) {
 
 // 提交之后面板自己的收尾(清空提交信息、refresh)做完,再让 afterEach 删仓库
 const settled = (store: ReturnType<typeof mount>['store']) =>
-  waitFor(() => expect(store.getState()).toMatchObject({ commitMessage: '', isLoading: false }), { timeout: 4000 });
+  waitFor(() => expect(store.getState()).toMatchObject({ commitMessage: '', isLoading: false }));
 
 describe('the panel shows what a commit would take after it was hidden (real panel, real git)', () => {
   it('P1 staged v1 shown → the panel is hidden (another dock tab) → the file is edited and staged again in a terminal → the panel is shown again: it shows v2 at once, without waiting for a tick, and the commit holds what is shown', async () => {
@@ -140,7 +144,7 @@ describe('the panel shows what a commit would take after it was hidden (real pan
     panelApi.emit(true);
 
     // 没有跑任何 tick
-    await waitFor(() => expect(shown()).toBe('staged:v2 not reviewed\n'), { timeout: 4000 });
+    await waitFor(() => expect(shown()).toBe('staged:v2 not reviewed\n'));
     await waitFor(() => expect(timer.starts).toBe(2));
     expect(screen.getByText('+v2 not reviewed')).toBeTruthy();
 
@@ -148,7 +152,7 @@ describe('the panel shows what a commit would take after it was hidden (real pan
     const commit = (await screen.findByRole('button', { name: 'Commit staged changes' })) as HTMLButtonElement;
     await waitFor(() => expect(commit.disabled).toBe(false));
     fireEvent.click(commit);
-    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'), { timeout: 4000 });
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
     expect(git(repo, 'cat-file', 'blob', 'HEAD:f')).toBe('v2 not reviewed\n');
     await settled(store);
   });
@@ -173,13 +177,13 @@ describe('a commit takes what the panel shows, or nothing (real panel, real git)
     store.getState().setCommitMessage('msg');
     await clickCommit();
 
-    await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'warn', message: REPO_CHANGED_MESSAGE, dismissable: true }), { timeout: 4000 });
+    await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'warn', message: REPO_CHANGED_MESSAGE, dismissable: true }));
     expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('init');
-    await waitFor(() => expect(shown()).toBe('staged:v2 not reviewed\n'), { timeout: 4000 });
+    await waitFor(() => expect(shown()).toBe('staged:v2 not reviewed\n'));
     expect(store.getState().commitMessage).toBe('msg');
 
     await clickCommit();
-    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'), { timeout: 4000 });
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
     expect(git(repo, 'cat-file', 'blob', 'HEAD:f')).toBe('v2 not reviewed\n');
     await settled(store);
   });
@@ -191,9 +195,59 @@ describe('a commit takes what the panel shows, or nothing (real panel, real git)
     await waitFor(() => expect(shown()).toBe('staged:v1 reviewed\n'));
     store.getState().setCommitMessage('msg');
     await clickCommit();
-    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'), { timeout: 4000 });
+    await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
     expect(git(repo, 'cat-file', 'blob', 'HEAD:f')).toBe('v1 reviewed\n');
     expect(store.getState().banner).toBeNull();
+    await settled(store);
+  });
+});
+
+describe('Amend rewrites the commit whose message was loaded, or nothing (real panel, real git)', () => {
+  const headSubject = () => git(repo, 'log', '-1', '--format=%s').trim();
+
+  it('P4 a file is staged and Amend is checked (the editor holds the message of HEAD); HEAD is then replaced in a terminal while the staged entries stay byte-identical. The fingerprint notices (it includes HEAD) and the tick refreshes — and Amend still refuses: the loaded message belongs to the old commit. Nothing is rewritten, Amend is turned off, the text is kept', async () => {
+    writeFileSync(join(repo, 'n'), 'new file\n');
+    git(repo, 'add', 'n');
+    const { app, store, timer } = mount(5);
+    await waitFor(() => expect(timer.starts).toBe(1));
+    // 复选框要等"有没有 HEAD"的探测回来才可用
+    const checkbox = (await screen.findByRole('checkbox', { name: 'Amend last commit' })) as HTMLInputElement;
+    await waitFor(() => expect(checkbox.disabled).toBe(false));
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'init' }));
+
+    // 终端里:只改写 HEAD 的提交信息(--only 不带路径:不带上已暂存的内容)。status 的条目一字不差。
+    const entries = () => git(repo, 'status', '--porcelain=v2');
+    const before = { fingerprint: await readStatusHash(app, repo), entries: entries() };
+    git(repo, 'commit', '-q', '--amend', '--only', '-m', 'reworded in a terminal');
+    expect(entries()).toBe(before.entries);
+    expect(await readStatusHash(app, repo)).not.toBe(before.fingerprint);
+
+    // 自动刷新的 tick 把面板更新到当前状态(列表没变,指纹变了)
+    await timer.opts!.onTick();
+    await waitFor(() => expect(store.getState().statusFingerprint).not.toBe(before.fingerprint));
+    expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'init' });
+
+    const amend = (await screen.findByRole('button', { name: 'Amend last commit' })) as HTMLButtonElement;
+    await waitFor(() => expect(amend.disabled).toBe(false));
+    fireEvent.click(amend);
+
+    await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'warn', message: AMEND_HEAD_CHANGED_MESSAGE, dismissable: true }));
+    expect(headSubject()).toBe('reworded in a terminal');
+    expect(git(repo, 'status', '--porcelain')).toBe('A  n\n');
+    expect(store.getState()).toMatchObject({ amend: false, commitMessage: 'init' });
+    await waitFor(() => expect(store.getState().isLoading).toBe(false));
+
+    // 重新勾选:载入的是现在的 HEAD 的信息,这次 Amend 改写的就是它
+    await waitFor(() => expect(checkbox.disabled).toBe(false));
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'reworded in a terminal' }));
+    const again = (await screen.findByRole('button', { name: 'Amend last commit' })) as HTMLButtonElement;
+    await waitFor(() => expect(again.disabled).toBe(false));
+    fireEvent.click(again);
+    await waitFor(() => expect(git(repo, 'status', '--porcelain')).toBe(''));
+    expect(headSubject()).toBe('reworded in a terminal');
+    expect(git(repo, 'show', 'HEAD:n')).toBe('new file\n');
     await settled(store);
   });
 });

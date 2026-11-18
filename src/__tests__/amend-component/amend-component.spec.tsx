@@ -2,7 +2,7 @@
 import React, { useSyncExternalStore } from 'react';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AMEND_NON_UTF8_MESSAGE, CommitEditor } from '../../panel/CommitEditor';
+import { AMEND_HEAD_CHANGED_MESSAGE, AMEND_NON_UTF8_MESSAGE, CommitEditor } from '../../panel/CommitEditor';
 import type { CommitResult, GitCommitOptions } from '../../git/git-commit';
 import type { CoPluginApp } from '../../sdk/types';
 import { createGitStore } from '../../state/git-store';
@@ -34,12 +34,15 @@ function renderEditor(opts: {
   readonly readHeadMessage?: (app: CoPluginApp, repoRoot: string) => Promise<string | null>;
   readonly hasHeadCommit?: (app: CoPluginApp, repoRoot: string) => Promise<boolean>;
   readonly readHeadSha?: (app: CoPluginApp, repoRoot: string) => Promise<string | null>;
+  /** amend 已勾选时,store 里记下的"载入信息时的 HEAD"(默认与 readHeadSha 的默认回答相同)。 */
+  readonly amendHead?: string | null;
 } = {}) {
   const store = createGitStore();
   store.setState({
     repoRoot: opts.repoRoot === undefined ? '/repo' : opts.repoRoot,
     commitMessage: opts.message ?? 'subject',
     amend: opts.amend ?? false,
+    amendHead: opts.amend ? (opts.amendHead === undefined ? 'sha-after' : opts.amendHead) : null,
     statusFingerprint: 'fp', // 提交前确认(commit-editor T31–T35):store 里的指纹与当前读到的相同才提交
   });
   const commit = opts.commit ?? vi.fn(async () => ({ ok: true as const }));
@@ -175,7 +178,7 @@ describe('CommitEditor amend UI', () => {
     const readHeadSha = vi.fn()
       .mockResolvedValueOnce('same-sha')
       .mockResolvedValueOnce('same-sha');
-    renderEditor({ app, amend: true, message: 'head subject', readHeadSha });
+    renderEditor({ app, amend: true, amendHead: 'same-sha', message: 'head subject', readHeadSha });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
 
@@ -195,6 +198,7 @@ describe('CommitEditor amend UI', () => {
     renderEditor({
       app,
       amend: true,
+      amendHead: 'before',
       message: 'new subject',
       readHeadSha,
       readSubject: vi.fn(async () => 'new subject'),
@@ -275,5 +279,64 @@ describe('CommitEditor amend UI', () => {
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
     await vi.waitFor(() => expect(second.store.getState().commitMessage).toBe('café subject'));
     expect(plain.notifications.show).not.toHaveBeenCalled();
+  });
+  // 编辑框里预填的是"勾选 Amend 时的 HEAD"的信息:Amend 只改写那个提交
+  describe('Amend rewrites the commit whose message was loaded', () => {
+    it('T35 checking Amend records the HEAD commit id together with its message — the id is read first; unchecking forgets it', async () => {
+      const { app } = appWithShell();
+      const order: string[] = [];
+      const readHeadSha = vi.fn(async () => { order.push('sha'); return 'head-1'; });
+      const readHeadMessage = vi.fn(async () => { order.push('message'); return 'head subject'; });
+      const { store } = renderEditor({ app, readHeadSha, readHeadMessage, message: '' });
+
+      const checkbox = await screen.findByRole('checkbox', { name: 'Amend last commit' });
+      fireEvent.click(checkbox);
+      await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, amendHead: 'head-1', commitMessage: 'head subject' }));
+      expect(order).toEqual(['sha', 'message']);
+
+      fireEvent.click(checkbox);
+      expect(store.getState()).toMatchObject({ amend: false, amendHead: null });
+    });
+
+    it('T36 HEAD is a different commit when Amend is clicked (a commit was made or rewritten elsewhere after the message was loaded): nothing is amended, Amend is turned off, the text stays, the view is refreshed and a warning says why', async () => {
+      const { app, notifications } = appWithShell();
+      const commit = vi.fn(async () => ({ ok: true as const }));
+      const { store } = renderEditor({ app, amend: true, amendHead: 'head-1', message: 'old head message', commit, readHeadSha: vi.fn(async () => 'head-2') });
+      const refresh = vi.fn(async () => {});
+      store.setState({ refresh });
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+
+      await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: AMEND_HEAD_CHANGED_MESSAGE }));
+      expect(AMEND_HEAD_CHANGED_MESSAGE).toBe(
+        'HEAD is no longer the commit whose message was loaded when "Amend last commit" was checked. Nothing was amended and Amend was turned off — check it again to load the current message.',
+      );
+      expect(commit).not.toHaveBeenCalled();
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(store.getState()).toMatchObject({ amend: false, amendHead: null, commitMessage: 'old head message' });
+    });
+
+    it('T37 fail-closed: HEAD cannot be read at that moment, or no commit id was recorded with the Amend state → no amend either', async () => {
+      for (const [amendHead, sha] of [['head-1', null], [null, 'head-1']] as const) {
+        const { app, notifications } = appWithShell();
+        const commit = vi.fn(async () => ({ ok: true as const }));
+        const { store } = renderEditor({ app, amend: true, amendHead, message: 'm', commit, readHeadSha: vi.fn(async () => sha) });
+        store.setState({ refresh: vi.fn(async () => {}) });
+        fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+        await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: AMEND_HEAD_CHANGED_MESSAGE }));
+        expect(commit).not.toHaveBeenCalled();
+        cleanup();
+      }
+    });
+
+    it('T38 a HEAD id that cannot be read when Amend is checked is handled like an unreadable message: Amend goes back off with an error, and the message is not asked for', async () => {
+      const { app, notifications } = appWithShell();
+      const readHeadMessage = vi.fn(async () => 'head subject');
+      const { store } = renderEditor({ app, readHeadSha: vi.fn(async () => null), readHeadMessage, message: '' });
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'error', message: 'Failed to read HEAD commit message' }));
+      expect(store.getState()).toMatchObject({ amend: false, amendHead: null });
+      expect(readHeadMessage).not.toHaveBeenCalled();
+    });
   });
 });

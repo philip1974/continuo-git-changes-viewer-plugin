@@ -285,7 +285,7 @@ describe('CommitEditor', () => {
 
     it('T32 Amend is confirmed the same way: a changed fingerprint (it includes HEAD) stops the amend and keeps the Amend state and message', async () => {
       const { store, notifications, commit, refresh } = changedSetup({ amend: true });
-      store.setState({ amend: true });
+      store.setState({ amend: true, amendHead: 'sha' });
 
       fireEvent.click(screen.getByRole('button', { name: 'Amend last commit' }));
 

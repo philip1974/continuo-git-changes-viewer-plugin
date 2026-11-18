@@ -27,7 +27,7 @@ describe('readStatusHash', () => {
     );
     expect(exec).toHaveBeenCalledWith(
       'git',
-      buildGitArgs(['status', '--porcelain=v2', '-z']),
+      buildGitArgs(['status', '--porcelain=v2', '--branch', '--no-ahead-behind', '-z']),
       expect.objectContaining({
         cwd: '/repo',
         env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),
@@ -44,5 +44,17 @@ describe('readStatusHash', () => {
     await expect(readStatusHash(app, '/repo')).rejects.toThrow(
       'git status failed: fatal: not a repo',
     );
+  });
+  it('T6c the command asks for the branch header (HEAD commit and branch name are part of the fingerprint) without counting ahead / behind, and the output is returned untouched — header records included', async () => {
+    const stdout = '# branch.oid 1234abcd\0# branch.head main\x001 A. N... 000000 100644 100644 0000 8ba3 f\0';
+    const exec = vi.fn().mockResolvedValue(result({ stdout }));
+    const app = { shell: { exec } } as unknown as CoPluginApp;
+    await expect(readStatusHash(app, '/repo')).resolves.toBe(stdout);
+    const args = exec.mock.calls[0]![1] as string[];
+    expect(args).toContain('--branch');
+    expect(args).toContain('--no-ahead-behind');
+    // 固定的加固参数照旧(子模块不进入、不取可选锁)
+    expect(args).toContain('--ignore-submodules=dirty');
+    expect(args).toContain('--no-optional-locks');
   });
 });
