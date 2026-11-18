@@ -76,9 +76,11 @@ function Section({
         <span className="cgv-count">{items.length}</span>
       </summary>
       <ul>
-        {rows.map((change) => (
+        {rows.map((change, index) => (
           <li
-            key={`${title}:${change.statusX}${change.statusY}:${change.path}`}
+            // 不可操作行的名字可能是解码之后才相同(两个不同的非 UTF-8 字节序列都变成 U+FFFD):加上行序号消歧。
+            // 这些行没有状态、不可操作,按位置复用无妨;可操作行的路径在一个区里唯一,key 保持稳定。
+            key={`${title}:${change.statusX}${change.statusY}:${change.path}${change.inoperable ? `#${index}` : ''}`}
             className="cgv-file-li"
           >
             {change.inoperable ? (

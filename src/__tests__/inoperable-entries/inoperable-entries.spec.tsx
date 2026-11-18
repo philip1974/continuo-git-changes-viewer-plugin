@@ -132,6 +132,34 @@ describe('inoperable entries: file list rows', () => {
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('.cgv-path')!.textContent).toBe(nasty.path);
   });
+
+  it('I11 two names that are different bytes but decode to the same text (`caf\\xE9.txt` and `caf\\xE8.txt` both become `caf\\uFFFD.txt`) are two rows, without a duplicate React key; the same holds in every section', () => {
+    const decoded = 'caf�.txt';
+    const twins: FileChange[] = [
+      { path: decoded, status: 'A', statusX: 'A', statusY: ' ', kind: 'text', inoperable: true },
+      { path: decoded, status: 'A', statusX: 'A', statusY: ' ', kind: 'text', inoperable: true },
+      { path: decoded, status: 'M', statusX: ' ', statusY: 'M', kind: 'text', inoperable: true },
+      { path: decoded, status: 'M', statusX: ' ', statusY: 'M', kind: 'text', inoperable: true },
+      { path: decoded, status: 'U', statusX: '?', statusY: '?', kind: 'text', inoperable: true },
+      { path: decoded, status: 'U', statusX: '?', statusY: '?', kind: 'text', inoperable: true },
+    ];
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { container, rerender } = renderList(twins);
+      for (const section of ['Staged', 'Changed', 'Untracked']) {
+        const rows = [...[...container.querySelectorAll('details.cgv-section')]
+          .find((d) => d.querySelector('summary span')!.textContent === section)!
+          .querySelectorAll('li.cgv-file-li')];
+        expect(rows.map((li) => li.querySelector('.cgv-path')!.textContent)).toEqual([decoded, decoded]);
+      }
+      // 列表变化后(其中一个不见了)也不留下多余的行
+      rerender(<FileList store={createGitStore()} changes={[twins[0]!, twins[2]!, twins[4]!]} />);
+      expect(container.querySelectorAll('li.cgv-file-li')).toHaveLength(3);
+      expect(errors.mock.calls.filter((c) => String(c[0]).includes('same key'))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
 });
 
 describe('inoperable entries: whole panel', () => {

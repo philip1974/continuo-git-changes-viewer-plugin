@@ -38,6 +38,10 @@ T8–T9), and the panel shows them read-only:
   nothing but `git` is started (no `cat`, no `lstat` of those paths).
 - I10: beside ordinary files, the ordinary one is auto-selected; clicking an
   inoperable row changes nothing.
+- I11: two names that are different bytes but decode to the same text
+  (`caf\xE9.txt` and `caf\xE8.txt` both become `caf�.txt`) are two rows
+  in every section, with no duplicate React key (the row index is part of the
+  key of an inoperable row only; ordinary rows keep a stable key).
 
 Real-git coverage: `repo-safety-real-git` R60 (the rows shown as staged are
 exactly the paths in the resulting commit).
