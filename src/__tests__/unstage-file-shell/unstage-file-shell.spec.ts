@@ -9,6 +9,7 @@ import {
 } from '../../git/unstage-file';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { buildGitArgs } from '../../git/exec';
+import { MAX_ANCESTOR_LEVELS, PATH_TOO_DEEP_ERROR } from '../../git/index-entry';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -308,6 +309,60 @@ describe('unstageFile shell wrapper', () => {
         expect(await unstageFile(app, '/repo', 'x'), JSON.stringify(opts)).toEqual({ ok: false, error: UNVERIFIED_INDEX_ERROR });
         expect(writes()).toEqual([]);
       }
+    });
+  });
+
+  // 宿主每个窗口最多 32 个并发 exec,超出直接 reject:此前每一级祖先并行一条 `ls-files`,路径深 ≥ 34 级时
+  // Unstage / Stage 静默失效(未处理的 rejection),同窗口其它调用一起被拒(复核者实测)。
+  describe('the ancestors are asked one at a time, with a depth limit', () => {
+    const OID = '587be6b4c3f93f93c489c0111bba5596147a26cb';
+    const deepPath = (levels: number) => [...Array.from({ length: levels }, (_, i) => `d${i}`), 'f'].join('/');
+    function setup(index: Record<string, Partial<PluginShellExecResult>> = {}) {
+      let active = 0;
+      const stat = { peak: 0 };
+      const exec = vi.fn(async (_cmd: string, args: readonly string[]) => {
+        active += 1;
+        stat.peak = Math.max(stat.peak, active);
+        await new Promise((r) => setTimeout(r, 0));
+        active -= 1;
+        if (args.includes('ls-files')) return result(index[args[args.length - 1]!] ?? {});
+        return result({});
+      });
+      const ancestorQueries = () =>
+        exec.mock.calls.map(([, args]) => args as readonly string[]).filter((args) => args.includes('ls-files')).map((args) => args[args.length - 1]);
+      const writes = () => exec.mock.calls.filter(([, args]) => args.includes('--staged') || args.includes('reset'));
+      return { app: { shell: { exec } } as unknown as CoPluginApp, exec, stat, ancestorQueries, writes };
+    }
+
+    it('T14 a path 40 levels deep: never more than one git process at a time; every ancestor is asked, shallow to deep; the unstage goes through', async () => {
+      const path = deepPath(40);
+      const { app, stat, ancestorQueries, writes } = setup();
+      expect(await unstageFile(app, '/repo', path)).toEqual({ ok: true });
+      expect(stat.peak).toBe(1);
+      const levels = path.split('/');
+      // 第一条是 hasIndexEntriesInside(路径自己),其后是各级祖先,从浅到深
+      expect(ancestorQueries()).toEqual([path, ...levels.slice(0, -1).map((_, i) => levels.slice(0, i + 1).join('/'))]);
+      expect(writes()).toHaveLength(1);
+    });
+
+    it('T15 the first ancestor found to be an entry stops the search: deeper ancestors are not asked', async () => {
+      const { app, ancestorQueries, writes } = setup({ 'd0/d1': { stdout: `100644 ${OID} 0\td0/d1\0` } });
+      expect(await unstageFile(app, '/repo', deepPath(6))).toEqual({ ok: false, error: ancestorUnstageError('d0/d1') });
+      expect(ancestorQueries().slice(1)).toEqual(['d0', 'd0/d1']);
+      expect(writes()).toEqual([]);
+    });
+
+    it(`T16 more than ${64} ancestors: refused before any ancestor is asked, with its own message; exactly ${64} is still checked`, async () => {
+      expect(MAX_ANCESTOR_LEVELS).toBe(64);
+      const tooDeep = setup();
+      expect(await unstageFile(tooDeep.app, '/repo', deepPath(65))).toEqual({ ok: false, error: PATH_TOO_DEEP_ERROR });
+      expect(tooDeep.exec).not.toHaveBeenCalled();
+      expect(PATH_TOO_DEEP_ERROR).toBe(
+        'This path is nested more than 64 folders deep — too deep to check the index for an entry above it. Nothing was changed — use git in a terminal.',
+      );
+      const limit = setup();
+      expect(await unstageFile(limit.app, '/repo', deepPath(64))).toEqual({ ok: true });
+      expect(limit.ancestorQueries()).toHaveLength(65);
     });
   });
 });

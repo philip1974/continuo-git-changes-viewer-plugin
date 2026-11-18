@@ -77,9 +77,26 @@ export async function wouldAddEntriesInside(
 // 只要第一条记录:见 findIndexEntryAtAncestor
 const FIRST_RECORD_BYTES = 64 * 1024;
 
+/** 最多检查这么多级祖先;更深的路径不检查、操作拒绝(PATH_TOO_DEEP_ERROR)。 */
+export const MAX_ANCESTOR_LEVELS = 64;
+
+export const PATH_TOO_DEEP_ERROR =
+  `This path is nested more than ${MAX_ANCESTOR_LEVELS} folders deep — too deep to check the index for an entry above it. ` +
+  'Nothing was changed — use git in a terminal.';
+
+function ancestorsOf(path: string): string[] {
+  const segments = path.split('/').filter((segment) => segment !== '');
+  return segments.slice(0, -1).map((_, i) => segments.slice(0, i + 1).join('/'));
+}
+
+/** 路径的祖先超过 MAX_ANCESTOR_LEVELS 级:不检查(调用方以 PATH_TOO_DEEP_ERROR 拒绝)。 */
+export function hasTooManyAncestors(path: string): boolean {
+  return ancestorsOf(path).length > MAX_ANCESTOR_LEVELS;
+}
+
 /**
  * 路径的某一级**祖先**在 index 里是不是一个条目(文件 / 链接 / 子模块;任何 stage)。是 → 返回那一级的路径
- * (最浅的一级);都不是 → false;查不了 → null。
+ * (最浅的一级);都不是 → false;查不了(含祖先超过 MAX_ANCESTOR_LEVELS 级)→ null。
  *
  * 为什么需要:index 里不能同时有 `x` 与 `x/…`。把 `x/a` 写进 index 的命令(`restore --staged -- x/a`、
  * `reset HEAD -- x/a` 从 HEAD 取回它;`add -- x/a` 新加它)会先把 `x` 这个条目拿掉——用户点的是 `x/a` 那一行,
@@ -88,6 +105,11 @@ const FIRST_RECORD_BYTES = 64 * 1024;
  * 每一级祖先一条 `ls-files -s -z -- <祖先>`:祖先通常是目录,git 会列出其下的全部条目(可以很多)。index 按路径
  * 的字节序排列,`x` 自己的记录排在一切 `x/…` 之前、且 pathspec `x` 不匹配 `x.txt` / `x-y`——所以**第一条**记录
  * 的路径是不是恰好等于祖先就是答案,其余输出不需要:输出上限设得很小,被截断不算失败。
+ *
+ * 逐级**串行**、从浅到深,找到即停。此前各级并行:宿主每个窗口最多 32 个并发 exec、超出直接 reject——路径深
+ * ≥ 34 级时操作静默失效,同窗口其它插件与面板自己的读取一起被拒(复核者实测)。不合成一条命令:多个 pathspec 的
+ * 输出是各祖先之下全部条目的并集(浅的一级可以是整个仓库),既无界,也拿不到"每一级的第一条"。
+ * 某一级查不了时继续往深处查:更深处确实是条目时报告它(说得出原因就说原因),否则 null。
  */
 export async function findIndexEntryAtAncestor(
   app: Pick<CoPluginApp, 'shell'>,
@@ -95,25 +117,29 @@ export async function findIndexEntryAtAncestor(
   path: string,
   timeoutMs: number,
 ): Promise<string | false | null> {
-  const segments = path.split('/').filter((segment) => segment !== '');
-  const ancestors = segments.slice(0, -1).map((_, i) => segments.slice(0, i + 1).join('/'));
-  const found = await Promise.all(
-    ancestors.map(async (ancestor): Promise<boolean | null> => {
-      const r = await gitExec(app, repoRoot, ['ls-files', '-s', '-z', '--', ancestor], {
-        timeoutMs,
-        maxOutputBytes: FIRST_RECORD_BYTES,
-      });
-      if (r.exitCode !== 0 || r.timedOut) return null;
-      const end = r.stdout.indexOf('\0');
-      // 没有一条完整的记录:没有输出 = 没有条目;否则是半截(路径比上限还长)= 不知道
-      if (end < 0) return r.stdout === '' && !r.truncated ? false : null;
-      const m = /^\d{6} [0-9a-f]+ [0-3]\t([\s\S]*)$/.exec(r.stdout.slice(0, end));
-      return m ? m[1] === ancestor : null;
-    }),
-  );
-  const hit = found.indexOf(true);
-  if (hit >= 0) return ancestors[hit]!;
-  return found.includes(null) ? null : false;
+  const ancestors = ancestorsOf(path);
+  if (ancestors.length > MAX_ANCESTOR_LEVELS) return null;
+  let unknown = false;
+  for (const ancestor of ancestors) {
+    const r = await gitExec(app, repoRoot, ['ls-files', '-s', '-z', '--', ancestor], {
+      timeoutMs,
+      maxOutputBytes: FIRST_RECORD_BYTES,
+    });
+    if (r.exitCode !== 0 || r.timedOut) {
+      unknown = true;
+      continue;
+    }
+    const end = r.stdout.indexOf('\0');
+    // 没有一条完整的记录:没有输出 = 没有条目;否则是半截(路径比上限还长)= 不知道
+    if (end < 0) {
+      if (r.stdout !== '' || r.truncated) unknown = true;
+      continue;
+    }
+    const m = /^\d{6} [0-9a-f]+ [0-3]\t([\s\S]*)$/.exec(r.stdout.slice(0, end));
+    if (!m) unknown = true;
+    else if (m[1] === ancestor) return ancestor;
+  }
+  return unknown ? null : false;
 }
 
 /**

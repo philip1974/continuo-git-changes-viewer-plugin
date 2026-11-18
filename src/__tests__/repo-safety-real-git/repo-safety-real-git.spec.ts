@@ -32,6 +32,7 @@ import { installRepoSafetyGuard, isKnownSafeConfigKey, isRepoControlledScope, is
 import { detectRepo } from '../../git/repo-detect';
 import { readStatusHash } from '../../git/status-hash';
 import { ancestorStageError, DIRECTORY_STAGE_ERROR, stageFile } from '../../git/stage-file';
+import { PATH_TOO_DEEP_ERROR } from '../../git/index-entry';
 import { DiffView } from '../../panel/DiffView';
 import { createGitStore } from '../../state/git-store';
 import { parsePorcelainStatus, scanStatus, StatusUnavailableError, UnsafeIndexError } from '../../git/status-scanner';
@@ -3597,6 +3598,59 @@ describe('a file-level action acts on the entry that was clicked, not on a direc
     git(repo, 'rm', '-q', '--cached', 'x');
     expect(await stageFile(app, repo, 'x/new', { untracked: true })).toEqual({ ok: true });
     expect(git(repo, 'status', '--porcelain')).toBe('D  x\nA  x/new\n?? x/deep/\n');
+  });
+
+  // 宿主每个窗口最多 32 个并发 exec(Continuo shell.service 的 MAX_ACTIVE_EXECS_PER_SENDER),超出立即 reject。
+  // 此前对每一级祖先并行一条 `ls-files`:路径深 ≥ 34 级时 Unstage / Stage 静默失效,同窗口其它调用一起被拒。
+  it('R88 a path 40 levels deep, under a host that rejects the 33rd concurrent exec: Unstage and Stage both go through with never more than one git process at a time; an ancestor that is an index entry is still found at depth; more than 64 ancestors is refused with nothing changed', async () => {
+    const app = realApp();
+    installRepoSafetyGuard(app);
+    const run = app.shell.exec.bind(app.shell);
+    let active = 0;
+    const stat = { peak: 0, rejected: 0 };
+    (app.shell as { exec: typeof run }).exec = async (cmd, args, opts) => {
+      if (active >= 32) {
+        stat.rejected += 1;
+        throw Object.assign(new Error('too many active shell execs'), { code: 'TOO_MANY_STREAMS' });
+      }
+      active += 1;
+      stat.peak = Math.max(stat.peak, active);
+      try {
+        return await run(cmd, args, opts);
+      } finally {
+        active -= 1;
+      }
+    };
+    const deep = (levels: number) => Array.from({ length: levels }, (_, i) => `d${i}`).join('/');
+    mkdirSync(join(repo, deep(39)), { recursive: true });
+    const path = `${deep(39)}/f`;
+    writeFileSync(join(repo, path), 'deep\n');
+    git(repo, 'add', '--', path);
+
+    expect(await unstageFile(app, repo, path)).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain', '--untracked-files=all')).toBe(`?? ${path}\n`);
+    expect(await stageFile(app, repo, path, { untracked: true })).toEqual({ ok: true });
+    expect(git(repo, 'status', '--porcelain')).toBe(`A  ${path}\n`);
+    expect(stat).toEqual({ peak: 1, rejected: 0 });
+
+    // 深处的祖先是 index 里的文件条目(index 用 plumbing 写:git 自己不让 `x` 与 `x/…` 并存)
+    git(repo, 'reset', '-q');
+    const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: repo, input: 'x\n', env: ENV, encoding: 'utf8' }).trim();
+    git(repo, 'update-index', '--add', '--cacheinfo', `100644,${blob},${deep(30)}`);
+    expect(await stageFile(app, repo, path, { untracked: true })).toEqual({ ok: false, error: ancestorStageError(deep(30)) });
+    expect(git(repo, 'ls-files', '-s', '--', path)).toBe('');
+    git(repo, 'rm', '-q', '--cached', '--', deep(30));
+
+    // 65 级祖先:不查、不改
+    mkdirSync(join(repo, deep(65)), { recursive: true });
+    const tooDeep = `${deep(65)}/f`;
+    writeFileSync(join(repo, tooDeep), 'too deep\n');
+    git(repo, 'add', '--', tooDeep);
+    const before = git(repo, 'ls-files', '-s');
+    expect(await unstageFile(app, repo, tooDeep)).toEqual({ ok: false, error: PATH_TOO_DEEP_ERROR });
+    expect(await stageFile(app, repo, tooDeep)).toEqual({ ok: false, error: PATH_TOO_DEEP_ERROR });
+    expect(git(repo, 'ls-files', '-s')).toBe(before);
+    expect(stat.rejected).toBe(0);
   });
 });
 

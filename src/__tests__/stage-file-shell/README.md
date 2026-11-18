@@ -49,5 +49,8 @@ and tracked rows alike.
 
 - T10: ancestor entry → refused, naming it; a folder ancestor does not block;
   an unanswerable query refuses.
+- T11: 40 levels deep → at most one git process at a time; more than 64
+  ancestors → `PATH_TOO_DEEP_ERROR`, nothing run (see `unstage-file-shell`
+  T14–T16).
 
-Real git: `repo-safety-real-git` R87.
+Real git: `repo-safety-real-git` R87, R88.

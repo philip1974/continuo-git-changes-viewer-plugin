@@ -481,6 +481,12 @@ A file-level action acts on the clicked entry, not on a directory at its path
 - R87: Stage, an entry above. With `status.showUntrackedFiles=all` git lists
   ` D x` and `?? x/new`; `git add -- x/new` also stages `D  x`. `stageFile`
   refuses at any depth; once `x` is out of the index the row stages normally.
+- R88: a path 40 levels deep under a host that rejects the 33rd concurrent
+  exec (Continuo's per-window limit): Unstage and Stage go through with one
+  git process at a time; an ancestor entry 30 levels down (written with
+  `update-index --cacheinfo`) is still found; more than 64 ancestors is
+  refused with the index unchanged. Panel: `panel-real-git` P13 (also: a
+  rejected exec is shown as an error, not an unhandled rejection).
 - R79: Unstage. With `D  x` and `AM x/work.txt`, both `restore --staged -- x`
   and `reset HEAD -- x` unstage the child too; `unstageFile` refuses on the
   `x` row, and works on the child row, on ordinary rows, and on `x` once

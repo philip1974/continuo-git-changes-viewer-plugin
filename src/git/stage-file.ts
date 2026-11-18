@@ -1,6 +1,6 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
-import { findIndexEntryAtAncestor, GITLINK_MODE, readIndexEntries, wouldAddEntriesInside } from './index-entry';
+import { findIndexEntryAtAncestor, hasTooManyAncestors, PATH_TOO_DEEP_ERROR, GITLINK_MODE, readIndexEntries, wouldAddEntriesInside } from './index-entry';
 import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
 import { probeWorktreeEntry, UNVERIFIED_PATH_ERROR } from './worktree-entry';
 
@@ -62,6 +62,8 @@ export async function stageFile(
   opts: StageFileOptions = {},
 ): Promise<FileOpResult> {
   if (!isSafeRepoRelativePath(path)) return { ok: false, error: UNSAFE_PATH_ERROR };
+  // 祖先太多级:不逐级查询(见 index-entry 的 MAX_ANCESTOR_LEVELS),不执行
+  if (hasTooManyAncestors(path)) return { ok: false, error: PATH_TOO_DEEP_ERROR };
   if (!opts.untracked) {
     // 看不了 → 不暂存(fail-closed)。父级不是目录(parent-not-directory)时 `git add` 只会记下这条路径的删除,照常执行。
     const entry = await probeWorktreeEntry(app, repoRoot, path);

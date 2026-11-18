@@ -71,7 +71,9 @@ nested repository directory is still staged as the single entry it is — whethe
 a directory is a repository is git's call (it is asked what `git add` would add
 below the path), not the mere presence of something named `.git` inside. The
 check happens just before the git command; a change in the instant between
-the two is not caught.
+the two is not caught. Each parent folder of the path is checked in turn, so
+Stage / Unstage on a path nested more than 64 folders deep is refused (use a
+terminal).
 
 ## Commit
 

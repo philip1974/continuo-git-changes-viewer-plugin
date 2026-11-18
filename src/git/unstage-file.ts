@@ -1,6 +1,6 @@
 import type { CoPluginApp } from '../sdk/types';
 import { gitExec } from './exec';
-import { findIndexEntryAtAncestor, hasIndexEntriesInside, isDirectoryInHead } from './index-entry';
+import { findIndexEntryAtAncestor, hasTooManyAncestors, PATH_TOO_DEEP_ERROR, hasIndexEntriesInside, isDirectoryInHead } from './index-entry';
 import { isSafeRepoRelativePath, UNSAFE_PATH_ERROR } from './path-utils';
 import type { FileOpResult } from './stage-file';
 
@@ -63,6 +63,8 @@ export async function unstageFile(
   path: string,
 ): Promise<FileOpResult> {
   if (!isSafeRepoRelativePath(path)) return { ok: false, error: UNSAFE_PATH_ERROR };
+  // 祖先太多级:不逐级查询(见 index-entry 的 MAX_ANCESTOR_LEVELS),不执行
+  if (hasTooManyAncestors(path)) return { ok: false, error: PATH_TOO_DEEP_ERROR };
   // 查不了 → 不撤销(fail-closed)
   const inside = await hasIndexEntriesInside(app, repoRoot, path, PROBE_TIMEOUT_MS);
   if (inside === null) return { ok: false, error: UNVERIFIED_INDEX_ERROR };

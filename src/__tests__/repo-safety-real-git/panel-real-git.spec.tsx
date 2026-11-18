@@ -5,7 +5,7 @@ import React from 'react';
 import { cleanup, configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawn, execFileSync } from 'node:child_process';
-import { lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fetchDiff } from '../../git/diff-fetcher';
@@ -575,5 +575,60 @@ describe('the panel’s own file writes and Commit exclude each other (real pane
     await waitFor(() => expect(git(repo, 'log', '-1', '--format=%s').trim()).toBe('msg'));
     expect(committed()).toEqual(['f', 'x']);
     await settled(store);
+  });
+});
+
+// 宿主每个窗口最多 32 个并发 exec,超出立即 reject。此前 Unstage 对路径的每一级祖先并行一条 `ls-files`:
+// 40 级的路径点 Unstage 没有任何提示(只有未处理的 rejection),index 也没变。
+describe('a deep path under the host’s concurrent-exec limit (real panel, real git)', () => {
+  it('P13 a staged file 40 levels deep: Unstage in the panel goes through (never more than one process for it at a time) and says so; when the host rejects the exec outright, the panel shows the error instead of an unhandled rejection, and the write is no longer counted as in flight', async () => {
+    const deep = Array.from({ length: 39 }, (_, i) => `d${i}`).join('/');
+    const path = `${deep}/f`;
+    mkdirSync(join(repo, deep), { recursive: true });
+    writeFileSync(join(repo, path), 'deep\n');
+    git(repo, 'add', '--', path);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { app, store } = mount(0);
+      await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, diffRefreshingKey: null }));
+      const run = app.shell.exec.bind(app.shell);
+      let active = 0;
+      const stat = { peak: 0, rejected: 0 };
+      let rejectAll = false;
+      (app.shell as { exec: typeof run }).exec = async (cmd, args, opts) => {
+        if (rejectAll || active >= 32) {
+          stat.rejected += 1;
+          throw new Error('too many active shell execs');
+        }
+        active += 1;
+        stat.peak = Math.max(stat.peak, active);
+        try {
+          return await run(cmd, args, opts);
+        } finally {
+          active -= 1;
+        }
+      };
+
+      fireEvent.click(await screen.findByRole('button', { name: `Unstage file ${path}` }));
+      await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'info', message: `Unstaged ${path}`, dismissable: true }));
+      expect(git(repo, 'status', '--porcelain', '--untracked-files=all')).toBe(`?? ${path}\n`);
+      // 祖先逐级串行(见 R88);之后的 refresh 读 diff 时最多三条并行
+      expect(stat.rejected).toBe(0);
+      expect(stat.peak).toBeLessThanOrEqual(3);
+      await waitFor(() => expect(store.getState()).toMatchObject({ isLoading: false, writesInFlight: 0 }));
+
+      // (未跟踪的整个目录在 status 里是一行 `?? d0/`)
+      rejectAll = true;
+      fireEvent.click(await screen.findByRole('button', { name: 'Stage file d0/' }));
+      await waitFor(() => expect(store.getState().banner).toEqual({ kind: 'error', message: 'too many active shell execs', dismissable: true }));
+      expect(store.getState().writesInFlight).toBe(0);
+      rejectAll = false;
+      await new Promise((r) => setTimeout(r, 50));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });

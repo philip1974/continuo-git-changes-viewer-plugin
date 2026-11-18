@@ -48,7 +48,13 @@ and `x/…` at once.
   drops the entry `x` — the staged version of `x` is gone. Each ancestor is
   asked on its own (`ls-files -s -z -- <ancestor>`); the index is sorted, so
   the ancestor's own record, if any, is the first one, and only that record is
-  read (small output cap; a cut after it is not a failure).
+  read (small output cap; a cut after it is not a failure). The ancestors are
+  asked one at a time, shallow to deep, stopping at the first entry found:
+  asked in parallel, a path 34+ levels deep exceeded the host's 32 concurrent
+  execs per window — the unstage failed silently and other calls in the window
+  were rejected too. One command for all ancestors is not an option: its
+  output is everything below the shallowest ancestor (unbounded). More than
+  64 ancestors → refused with its own message, nothing asked.
 - The path is a folder in HEAD: unstaging `A  x` restores every `x/…` entry
   from HEAD, i.e. unstages the `D  x/a` rows too (`ls-tree -z HEAD -- <path>`).
   With no commit yet there is nothing in HEAD and the check passes.
@@ -62,5 +68,10 @@ messages point to a terminal.
   path asks nothing.
 - T13: a tree in HEAD → refused; blob / gitlink / nothing → unstaged; unborn
   HEAD → unstaged; anything unanswerable refuses.
+- T14: 40 levels deep → at most one git process at a time, every ancestor
+  asked shallow to deep, unstaged.
+- T15: the first ancestor entry found stops the search.
+- T16: more than 64 ancestors → `PATH_TOO_DEEP_ERROR`, no git run; exactly 64
+  is checked.
 
-Real git: `repo-safety-real-git` R85, R86, R86b.
+Real git: `repo-safety-real-git` R85, R86, R86b, R88.

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ancestorStageError, DIRECTORY_STAGE_ERROR, stageFile, UNVERIFIED_STAGE_ERROR } from '../../git/stage-file';
+import { PATH_TOO_DEEP_ERROR } from '../../git/index-entry';
 import { UNVERIFIED_PATH_ERROR } from '../../git/worktree-entry';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { buildGitArgs } from '../../git/exec';
@@ -212,6 +213,38 @@ describe('stageFile shell wrapper', () => {
       expect(UNVERIFIED_STAGE_ERROR).toBe(
         'Could not check the index for an entry above this path, so nothing was staged. Refresh and try again, or use git in a terminal.',
       );
+    });
+  });
+
+  // 祖先逐级串行查询(见 unstage-file-shell T14–T16):此前并行,深路径占满宿主的并发 exec 配额
+  describe('the ancestors are asked one at a time, with a depth limit', () => {
+    const deepPath = (levels: number) => [...Array.from({ length: levels }, (_, i) => `d${i}`), 'f'].join('/');
+    function setup() {
+      let active = 0;
+      const stat = { peak: 0 };
+      const exec = vi.fn(async (_cmd: string, args: readonly string[]) => {
+        active += 1;
+        stat.peak = Math.max(stat.peak, active);
+        await new Promise((r) => setTimeout(r, 0));
+        active -= 1;
+        return result({});
+      });
+      const adds = () => exec.mock.calls.filter(([, args]) => args.includes('add'));
+      return { app: { shell: { exec }, fs: FILE_FS } as unknown as CoPluginApp, exec, stat, adds };
+    }
+
+    it('T11 an untracked path 40 levels deep stages with never more than one git process at a time; more than 64 ancestors → refused with its own message, nothing run', async () => {
+      const deep = setup();
+      expect(await stageFile(deep.app, '/repo', deepPath(40), { untracked: true })).toEqual({ ok: true });
+      expect(deep.stat.peak).toBe(1);
+      expect(deep.exec.mock.calls.filter(([, args]) => args.includes('ls-files'))).toHaveLength(40);
+      expect(deep.adds()).toHaveLength(1);
+
+      for (const untracked of [true, false]) {
+        const tooDeep = setup();
+        expect(await stageFile(tooDeep.app, '/repo', deepPath(65), { untracked })).toEqual({ ok: false, error: PATH_TOO_DEEP_ERROR });
+        expect(tooDeep.exec).not.toHaveBeenCalled();
+      }
     });
   });
 });
