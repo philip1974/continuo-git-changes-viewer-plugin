@@ -118,6 +118,19 @@ const NO_NETWORK_ENV: Readonly<Record<string, string>> = {
   GIT_ALLOW_PROTOCOL: '',
 };
 
+// GIT_LITERAL_PATHSPECS=1:路径参数按字面处理。git 默认把 `--` 之后的参数当 pathspec(glob + `:(magic)`):
+// 文件名 `*` / `:(glob)**` / `[id].tsx` 会让"暂存 / 丢弃这一个文件"作用到其它文件(`[id].tsx` 还匹配
+// `i.tsx`),而确认框只显示一个文件名(实测)。插件传给 git 的路径全部来自 status 的逐字输出,从不需要
+// 通配。commit 例外:插件的 commit 不带路径参数,而环境变量会传给 hooks(lint-staged 等在 hooks 里
+// 用 glob pathspec)。另外三个全局 pathspec 变量显式置 0:用户环境里若开着任何一个,git 会以
+// "literal is incompatible with all other global pathspec settings" 直接失败(实测)。
+const LITERAL_PATHSPEC_ENV: Readonly<Record<string, string>> = {
+  GIT_LITERAL_PATHSPECS: '1',
+  GIT_GLOB_PATHSPECS: '0',
+  GIT_NOGLOB_PATHSPECS: '0',
+  GIT_ICASE_PATHSPECS: '0',
+};
+
 function runsHooks(args: readonly string[]): boolean {
   return args[0] !== undefined && HOOK_RUNNING_SUBCOMMANDS.has(args[0]);
 }
@@ -152,6 +165,7 @@ export function buildGitEnv(
     ...env,
     ...GIT_HARDENING_ENV,
     ...(networkAllowed(args, opts) ? {} : NO_NETWORK_ENV),
+    ...(runsHooks(args) ? {} : LITERAL_PATHSPEC_ENV),
   };
 }
 

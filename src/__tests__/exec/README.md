@@ -29,6 +29,11 @@ invocation against executable settings in an untrusted repository config:
   (except a hooks-confirmed `commit`) `GIT_NO_LAZY_FETCH=1` plus
   `GIT_ALLOW_PROTOCOL=` (empty list): a repository `protocol.<name>.allow=always` outranks
   `-c protocol.allow=never`, but no config can override the env variable.
+- Env, every command except `commit`: `GIT_LITERAL_PATHSPECS=1` (with the
+  other global pathspec variables forced to 0, which git requires). Paths come
+  verbatim from `git status`; as pathspecs a file named `*`, `:(glob)**` or
+  `[id].tsx` would make "stage / discard this file" hit other files. Not set
+  for `commit` (no path arguments, and its env reaches hooks that use globs).
 - An app shell may carry a guard (see `repo-safety`); a refusal or a guard error
   returns a failed result (exit 128) and git is not spawned (fail-closed).
 
@@ -36,4 +41,4 @@ T1 status argv + env. T2 caller env preserved, hardening values win. T3 diff/sho
 flags. T3b nested-repository pins/flags on every subcommand. T4 commit keeps hooks enabled, `--quiet`, network blocked unless `repoHooksConfirmed`. T4b the option affects commit only. T5 guard refusal skips spawn.
 T6 throwing guard fails closed. T7 passing guard runs the hardened command. T8 every non-commit subcommand disables hooks.
 T9 `GIT_ALLOW_PROTOCOL` is empty (caller env cannot re-enable it) and unset only for a hooks-confirmed commit.
-T10 `stripTrailingNewline` (used for path-valued git output instead of `trim()`) removes one trailing LF/CRLF only.
+T11 literal pathspecs for every non-commit call. T10 `stripTrailingNewline` (used for path-valued git output instead of `trim()`) removes one trailing LF/CRLF only.

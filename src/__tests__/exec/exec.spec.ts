@@ -44,6 +44,17 @@ const ENV = {
   GIT_EDITOR: ':',
   GIT_NO_LAZY_FETCH: '1',
   GIT_ALLOW_PROTOCOL: '',
+  GIT_LITERAL_PATHSPECS: '1',
+  GIT_GLOB_PATHSPECS: '0',
+  GIT_NOGLOB_PATHSPECS: '0',
+  GIT_ICASE_PATHSPECS: '0',
+};
+const COMMIT_ENV = {
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_EDITOR: ':',
+  GIT_NO_LAZY_FETCH: '1',
+  GIT_ALLOW_PROTOCOL: '',
 };
 
 describe('gitExec hardened shell wrapper', () => {
@@ -113,7 +124,7 @@ describe('gitExec hardened shell wrapper', () => {
     const [, args, opts] = exec.mock.calls[0]!;
     expect(args).toEqual([...GLOBALS, '-c', 'protocol.allow=never', 'commit', '--quiet', '-F', '-']);
     expect(args.some((a: string) => a.startsWith('core.hooksPath'))).toBe(false);
-    expect(opts.env).toEqual(ENV);
+    expect(opts.env).toEqual(COMMIT_ENV);
 
     const [, confirmedArgs, confirmedOpts] = exec.mock.calls[1]!;
     expect(confirmedArgs).toEqual([...GLOBALS, 'commit', '--quiet', '--amend', '-F', '-']);
@@ -185,6 +196,23 @@ describe('gitExec hardened shell wrapper', () => {
     const confirmed = buildGitEnv(['commit', '-F', '-'], {}, { repoHooksConfirmed: true });
     expect(confirmed).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
     expect(confirmed).not.toHaveProperty('GIT_NO_LAZY_FETCH');
+  });
+});
+
+describe('literal pathspecs', () => {
+  it('T11 every path-taking call treats paths literally (GIT_LITERAL_PATHSPECS=1, caller env cannot turn it off); commit — whose env reaches hooks — does not set it', () => {
+    for (const sub of [['add', '--', '*'], ['checkout', '--', ':(glob)**'], ['restore', '--staged', '--', '[id].tsx'],
+      ['reset', 'HEAD', '--', '*'], ['diff', '--', '*'], ['diff', '--cached', '--', '*'], ['status'], ['show', 'HEAD:*']]) {
+      // 用户环境里开着别的全局 pathspec 变量时 git 会拒绝与 literal 并用,一并压成 0
+      expect(buildGitEnv(sub, { GIT_LITERAL_PATHSPECS: '0', GIT_GLOB_PATHSPECS: '1', GIT_ICASE_PATHSPECS: '1', GIT_NOGLOB_PATHSPECS: '1' })).toMatchObject({
+        GIT_LITERAL_PATHSPECS: '1',
+        GIT_GLOB_PATHSPECS: '0',
+        GIT_NOGLOB_PATHSPECS: '0',
+        GIT_ICASE_PATHSPECS: '0',
+      });
+    }
+    expect(buildGitEnv(['commit', '-F', '-'])).not.toHaveProperty('GIT_LITERAL_PATHSPECS');
+    expect(buildGitEnv(['commit', '-F', '-'], {}, { repoHooksConfirmed: true })).not.toHaveProperty('GIT_LITERAL_PATHSPECS');
   });
 });
 

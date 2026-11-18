@@ -119,3 +119,13 @@ Commit and the network (a hook-less Commit shows no confirmation):
   confirmed commit → none of them.
 - R38: after confirmation the transport is reachable again (the user agreed to
   run repository code); the same commit without confirmation is not.
+
+Literal paths (also affects ordinary repositories):
+
+- R39: tracked files named `*` and `:(glob)**` → without
+  `GIT_LITERAL_PATHSPECS` staging that one file stages everything and
+  discarding it discards every change; with it stage / unstage (restore and
+  reset) / discard touch only that file.
+- R40: `[id].tsx` no longer matches `i.tsx` (stage, diff, staged diff).
+- R41: no side effects elsewhere — untracked directory staging, hunk apply,
+  head meta, safety probes; a pre-commit hook still uses glob pathspecs.

@@ -1154,3 +1154,94 @@ describe('commit never reaches the network unless the user confirmed running rep
     expect(marks()).not.toContain('ssh');
   });
 });
+
+describe('paths are passed to git literally, never as pathspec patterns (real git)', () => {
+  const LITERAL: Tamper = { dropEnv: ['GIT_LITERAL_PATHSPECS'] };
+  const porcelain = () => git(repo, 'status', '--porcelain').split('\n').filter(Boolean).sort();
+
+  // 被跟踪的文件名本身就是 pattern:`*`、`:(glob)**`、`[id].tsx`(后者是 Next.js 等的常见路由文件名,还会匹配 `i.tsx`)
+  beforeEach(() => {
+    for (const name of ['*', ':(glob)**', '[id].tsx', 'i.tsx']) writeFileSync(join(repo, name), 'base\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'pattern-named files');
+    editAll();
+  });
+  const editAll = () => {
+    for (const name of ['*', ':(glob)**', '[id].tsx', 'i.tsx', 'f.txt', 'g.txt']) appendFileSync(join(repo, name), 'edit\n');
+  };
+
+  it.each(['*', ':(glob)**'])('R39 stage / unstage / discard of a file named %s touches only that file (without the env it hits every changed file)', async (name) => {
+    const others = [' M *', ' M :(glob)**', ' M [id].tsx', ' M f.txt', ' M g.txt', ' M i.tsx'].filter((l) => l !== ` M ${name}`);
+
+    // 证明 fixture:不按字面处理时,"暂存这一个文件"暂存了全部,"丢弃这一个文件"丢掉了全部改动
+    expect((await stageFile(tamperedApp(LITERAL), repo, name)).ok).toBe(true);
+    expect(porcelain().every((l) => l.startsWith('M  '))).toBe(true);
+    git(repo, 'reset', '-q');
+    expect((await discardFile(tamperedApp(LITERAL), repo, name)).ok).toBe(true);
+    expect(porcelain()).toEqual([]);
+    editAll();
+
+    const app = realApp();
+    expect((await stageFile(app, repo, name)).ok).toBe(true);
+    expect(porcelain()).toEqual([`M  ${name}`, ...others].sort());
+
+    // 把其余文件也暂存,再只取消暂存这一个(restore 与 reset 两条路径)
+    git(repo, 'add', '.');
+    _resetRestoreCache();
+    expect((await unstageFile(app, repo, name)).ok).toBe(true);
+    expect(porcelain()).toEqual([` M ${name}`, ...others.map((l) => l.replace(' M ', 'M  '))].sort());
+    git(repo, 'add', '.');
+    expect((await gitExec(app, repo, ['restore', '--staged', '--', name])).exitCode).toBe(0);
+    expect(porcelain()).toEqual([` M ${name}`, ...others.map((l) => l.replace(' M ', 'M  '))].sort());
+    git(repo, 'reset', '-q');
+
+    expect((await discardFile(app, repo, name)).ok).toBe(true);
+    expect(porcelain()).toEqual(others.sort());
+    expect(readFileSync(join(repo, name), 'utf8')).toBe('base\n');
+  });
+
+  it('R40 an ordinary repository: `[id].tsx` no longer drags `i.tsx` along, and its diff shows that file only', async () => {
+    expect((await stageFile(tamperedApp(LITERAL), repo, '[id].tsx')).ok).toBe(true);
+    expect(porcelain()).toContain('M  i.tsx'); // 证明 fixture
+    git(repo, 'reset', '-q');
+
+    const app = realApp();
+    const change = (await scanStatus(app, repo)).find((c) => c.path === '[id].tsx')!;
+    const loose = await fetchDiff(tamperedApp(LITERAL), repo, change);
+    expect(loose.ok && loose.unifiedDiff).toContain('diff --git a/i.tsx b/i.tsx');
+    const diff = await fetchDiff(app, repo, change);
+    expect(diff.ok && diff.unifiedDiff).toContain('diff --git a/[id].tsx b/[id].tsx');
+    expect(diff.ok && diff.unifiedDiff).not.toContain('i.tsx b/i.tsx');
+
+    expect((await stageFile(app, repo, '[id].tsx')).ok).toBe(true);
+    expect(porcelain()).toContain(' M i.tsx');
+    expect(porcelain()).toContain('M  [id].tsx');
+    const staged = await fetchDiff(app, repo, change, 'staged');
+    expect(staged.ok && staged.unifiedDiff).toContain('diff --git a/[id].tsx b/[id].tsx');
+    expect((await discardFile(app, repo, 'i.tsx')).ok).toBe(true);
+    expect(readFileSync(join(repo, '[id].tsx'), 'utf8')).toBe('base\nedit\n');
+  });
+
+  it('R41 literal mode has no side effects on the other subcommands: untracked directory staging, hunk apply, status, head meta, config / layout probes, commit (whose hooks keep glob pathspecs)', async () => {
+    const app = realApp();
+    const { guard } = installRepoSafetyGuard(app);
+    expect((await guard.check(repo, { fresh: true })).kind).toBe('trusted');
+    mkdirSync(join(repo, 'dir'));
+    writeFileSync(join(repo, 'dir', 'u.txt'), 'u\n');
+    expect((await scanStatus(app, repo)).map((c) => c.path)).toContain('dir/');
+    expect((await stageFile(app, repo, 'dir/')).ok).toBe(true);
+    expect(porcelain()).toContain('A  dir/u.txt');
+    expect((await stageHunk(app, repo, git(repo, 'diff', '--', 'f.txt'))).ok).toBe(true);
+    expect(await readHeadMessage(app, repo)).toBe('pattern-named files');
+    expect(await hasHeadCommit(app, repo)).toBe(true);
+
+    // commit:hooks 里的 glob pathspec 照常可用(环境变量没有传给 hooks)
+    const hook = join(repo, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hook, `#!/bin/sh\ngit diff --cached --name-only -- '*.txt' > "${join(markDir, 'globbed')}" || exit 1\n`);
+    chmodSync(hook, 0o755);
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'config', 'user.email', 't@t');
+    expect(await gitCommit(app, repo, 'literal', { hooksConfirmed: true })).toMatchObject({ ok: true });
+    expect(readFileSync(join(markDir, 'globbed'), 'utf8').split('\n').filter(Boolean).sort()).toEqual(['dir/u.txt', 'f.txt']);
+  });
+});
