@@ -786,6 +786,72 @@ describe('probeRepoSafety symlinks inside the git directory', () => {
   });
 });
 
+describe('probeRepoSafety special files git would open (FIFO, socket, device)', () => {
+  // git 打开 FIFO 即阻塞、读设备读不完:status / diff / log / commit 挂到宿主超时(untrusted-file-reads UF4–UF6)。
+  const special = (name: string): Entry => ({ name, isFile: false, isDirectory: false, isSymlink: false });
+  const probe = (fs: unknown) =>
+    probeRepoSafety({ shell: { exec: gitMock('', result({ stdout: layoutOut() })) }, fs } as unknown as CoPluginApp, '/repo');
+  const TREE: Record<string, Entry[]> = {
+    '/repo/.git': [file('HEAD'), file('config'), file('index'), dir('objects'), dir('refs'), dir('info'), dir('hooks')],
+    '/repo/.git/objects': [dir('info'), dir('pack')],
+    '/repo/.git/objects/info': [],
+    '/repo/.git/objects/pack': [],
+    '/repo/.git/refs': [],
+    '/repo/.git/info': [file('exclude')],
+  };
+  const withSpecial = (dirPath: string, name: string) => ({
+    ...TREE,
+    [dirPath]: [...TREE[dirPath]!.filter((e) => e.name !== name), special(name)],
+  });
+  /** lstat 替身:worktree 根下的文件按 types 返回类型,其余 ENOENT。 */
+  const rootFs = (tree: Record<string, Entry[]>, types: Record<string, 'file' | 'dir' | 'link' | 'special' | Error> = {}) => {
+    const base = fsMock(tree);
+    const lstat = vi.fn(async (path: string) => {
+      const t = types[path];
+      if (t === undefined) throw enoent();
+      if (t instanceof Error) throw t;
+      return { size: 0, mtimeMs: 0, isFile: t === 'file', isDirectory: t === 'dir', isSymlink: t === 'link' };
+    });
+    return { listDir: base.listDir, lstat };
+  };
+
+  it.each([
+    ['/repo/.git', 'packed-refs', 'packed-refs'],
+    ['/repo/.git', 'shallow', 'shallow'],
+    ['/repo/.git', 'index', 'index'],
+    ['/repo/.git', 'COMMIT_EDITMSG', 'COMMIT_EDITMSG'],
+    ['/repo/.git/info', 'exclude', 'info/exclude'],
+    ['/repo/.git/info', 'attributes', 'info/attributes'],
+    ['/repo/.git/info', 'grafts', 'info/grafts'],
+    ['/repo/.git/info', 'sparse-checkout', 'info/sparse-checkout'],
+    ['/repo/.git/objects/info', 'commit-graph', 'objects/info/commit-graph'],
+    ['/repo/.git/refs', 'evil', 'refs/evil'],
+  ])('S8 a file at %s/%s that is neither a regular file, a directory nor a link → restricted, named in the message', async (dirPath, name, rel) => {
+    const r = await probe(fsMock(withSpecial(dirPath, name)));
+    expect(r).toMatchObject({ kind: 'restricted', reason: 'unsafe-layout', cacheable: false });
+    expect(r.kind === 'restricted' && r.message).toContain(`(${rel})`);
+    expect(r.kind === 'restricted' && r.message).toContain('not a regular file');
+  });
+
+  it('S9 the socket of git\'s built-in fsmonitor daemon (top of the git directory) is not a reason; the same name deeper down is', async () => {
+    await expect(probe(fsMock(withSpecial('/repo/.git', 'fsmonitor--daemon.ipc')))).resolves.toMatchObject({ kind: 'trusted' });
+    await expect(probe(fsMock(withSpecial('/repo/.git/info', 'fsmonitor--daemon.ipc')))).resolves.toMatchObject({ kind: 'restricted' });
+  });
+
+  it.each(['.gitignore', '.gitattributes'])('S10 %s at the top of the working tree that is a FIFO / socket / device → restricted; a regular file, directory, link or none is fine', async (name) => {
+    const path = `/repo/${name}`;
+    const r = await probe(rootFs(TREE, { [path]: 'special' }));
+    expect(r).toMatchObject({ kind: 'restricted', reason: 'unsafe-layout', cacheable: false });
+    expect(r.kind === 'restricted' && r.message).toContain(`(${name})`);
+    for (const t of ['file', 'dir', 'link'] as const) {
+      await expect(probe(rootFs(TREE, { [path]: t }))).resolves.toMatchObject({ kind: 'trusted' });
+    }
+    await expect(probe(rootFs(TREE))).resolves.toMatchObject({ kind: 'trusted' });
+    const denied = await probe(rootFs(TREE, { [path]: new Error('EACCES: permission denied') }));
+    expect(denied.kind === 'restricted' && denied.message).toContain('could not be inspected');
+  });
+});
+
 describe('RepoSafetyGuard cache', () => {
   function setup(stdout = '', layout?: PluginShellExecResult, fsExtra: unknown = fsMock()) {
     const exec = gitMock(stdout, layout);

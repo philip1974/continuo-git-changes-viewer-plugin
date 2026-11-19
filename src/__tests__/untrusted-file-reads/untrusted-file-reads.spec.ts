@@ -1,10 +1,11 @@
+// @vitest-environment jsdom
 // 真实 git:仓库让 git 去读一个"读不完"的文件(/dev/zero)或"打开就阻塞"的文件(FIFO)时,面板的每条
 // git 命令仍须在正常时间内结束,而不是挂到宿主超时(30 s,每次自动刷新退避重试)。
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawn, execFileSync } from 'node:child_process';
-import { appendFileSync, lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fetchDiff } from '../../git/diff-fetcher';
 import { gitCommit } from '../../git/git-commit';
 import { readHeadMessage } from '../../git/head-meta';
@@ -13,7 +14,7 @@ import { installRepoSafetyGuard } from '../../git/repo-safety';
 import { stageFile } from '../../git/stage-file';
 import { readStatusHash } from '../../git/status-hash';
 import { scanStatus } from '../../git/status-scanner';
-import type { CoPluginApp, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
+import type { CoPluginApp, PluginManifest, PluginShellExecOptions, PluginShellExecResult } from '../../sdk/types';
 
 // 每条命令的耗时上限。正常仓库里这些命令都在几十毫秒内结束;挂住的命令由 KILL_AFTER_MS 终止
 // (宿主的 30 s 超时在这里缩短,失败的用例不会拖住整套测试,也不会让读 /dev/zero 的 git 吃掉几十 GB 内存)。
@@ -62,7 +63,11 @@ function realApp(timings: Timing[]): CoPluginApp {
   return { shell: { exec }, fs: { lstat, stat, listDir } } as unknown as CoPluginApp;
 }
 
-const mkfifo = (p: string) => execFileSync('mkfifo', [p]);
+// git 2.56.1 的测试副本没有模板目录,`git init` 不建 .git/info:先建父目录
+const mkfifo = (p: string) => {
+  mkdirSync(dirname(p), { recursive: true });
+  execFileSync('mkfifo', [p]);
+};
 
 let repo: string;
 beforeEach(() => {
@@ -114,11 +119,24 @@ describe('files named by repository config: git never reads them (real git)', ()
     await panelFlow();
   });
 
-  it('UF2 [diff] orderFile = a FIFO inside the repository: no command blocks opening it', async () => {
+  it('UF2 [diff] orderFile = a FIFO: no command blocks opening it', async () => {
+    // 不放在 .git 里:那里的 FIFO 本身就让仓库受限(UF4);也不放在工作树里(会成为未跟踪文件)
+    const elsewhere = mkdtempSync(join(realpathSync(tmpdir()), 'cgv-ufr-fifo-'));
+    try {
+      mkfifo(join(elsewhere, 'order'));
+      git(repo, 'config', 'diff.orderFile', join(elsewhere, 'order'));
+      await panelFlow();
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it('UF2b [diff] orderFile = a FIFO inside the git directory: restricted (special file) rather than hanging', async () => {
     mkfifo(join(repo, '.git', 'order'));
     git(repo, 'config', 'diff.orderFile', join(repo, '.git', 'order'));
-    await panelFlow();
+    await expectRestricted('(order)');
   });
+
 
   it.each([
     ['mailmap.file = /dev/zero', () => git(repo, 'config', 'mailmap.file', '/dev/zero')],
@@ -133,5 +151,89 @@ describe('files named by repository config: git never reads them (real git)', ()
     expect(await gitCommit(app, repo, 'second')).toMatchObject({ ok: true });
     expect(await readHeadMessage(app, repo)).toBe('second');
     expect(slow(timings)).toEqual([]);
+  });
+});
+
+/** 受限检测本身在上限内给出受限结论;此后经 gitExec 的命令被拒,不起 git。 */
+async function expectRestricted(text: string) {
+  const timings: Timing[] = [];
+  const app = realApp(timings);
+  const { guard } = installRepoSafetyGuard(app);
+  const verdict = await guard.check(repo, { fresh: true });
+  expect(verdict).toMatchObject({ kind: 'restricted', reason: 'unsafe-layout' });
+  expect(verdict.kind === 'restricted' && verdict.message).toContain(text);
+  const probes = timings.length;
+  await expect(scanStatus(app, repo)).rejects.toThrow(text);
+  expect(timings.length - probes).toBeLessThanOrEqual(3); // 只有守卫自己的探测,没有 status
+  expect(timings.filter((t) => / status /.test(` ${t.args} `))).toEqual([]);
+  expect(slow(timings)).toEqual([]);
+}
+
+describe('special files at locations git reads: the repository is restricted instead of hanging (real git)', () => {
+  it.each([
+    'info/exclude', 'info/attributes', 'packed-refs', 'info/grafts', 'shallow', 'info/sparse-checkout',
+    'objects/info/commit-graph', 'COMMIT_EDITMSG', 'index',
+  ])('UF4 .git/%s is a FIFO → restricted at once, naming it; no status runs', async (rel) => {
+    rmSync(join(repo, '.git', rel), { force: true });
+    mkfifo(join(repo, '.git', rel));
+    await expectRestricted(`(${rel})`);
+  });
+
+  it.each(['.gitignore', '.gitattributes'])('UF5 %s at the top of the working tree is a FIFO → restricted, naming it', async (name) => {
+    mkfifo(join(repo, name));
+    await expectRestricted(`(${name})`);
+  });
+
+  it('UF6 a special file named fsmonitor--daemon.ipc at the top of the git directory (where git\'s own fsmonitor daemon keeps its socket; core.fsmonitor is pinned off, git never opens it) leaves the repository trusted and the panel working', async () => {
+    mkfifo(join(repo, '.git', 'fsmonitor--daemon.ipc'));
+    await panelFlow();
+  });
+
+  it('UF7 the panel shows the restriction instead of hanging: a refresh of the real plugin finishes in normal time and carries the reason', async () => {
+    rmSync(join(repo, '.git', 'info', 'exclude'), { force: true });
+    mkfifo(join(repo, '.git', 'info', 'exclude'));
+    const timings: Timing[] = [];
+    const base = realApp(timings);
+    const app = {
+      ...base,
+      panels: { register: () => ({ dispose() {} }) },
+      commands: { register: () => ({ dispose() {} }) },
+      ribbon: { register: () => ({ dispose() {} }) },
+      workspace: { getRoot: async () => repo },
+      fs: { ...base.fs, requestScope: async () => 'grant' },
+      notifications: { show: () => {} },
+    } as unknown as CoPluginApp;
+    class TestPluginBase {
+      constructor(readonly app: CoPluginApp, readonly manifest: PluginManifest) {}
+      onload(): void {}
+    }
+    globalThis.co = { Plugin: TestPluginBase, React: { createElement: () => null }, PermissionError: class extends Error {}, z: {} };
+    try {
+      const PluginClass = (await import('../../main')).default;
+      const plugin = new PluginClass(app, { id: 'git-viewer' } as PluginManifest);
+      await plugin.onload();
+      const started = Date.now();
+      await plugin.store.getState().refresh();
+      expect(Date.now() - started).toBeLessThan(LIMIT_MS);
+      const state = plugin.store.getState();
+      expect(state.repoRoot).toBeNull();
+      expect(state.restriction).toContain('Git commands are disabled for this repository');
+      expect(state.restriction).toContain('(info/exclude)');
+      expect(timings.filter((t) => / status /.test(` ${t.args} `))).toEqual([]);
+      expect(slow(timings)).toEqual([]);
+      await plugin.onunload();
+    } finally {
+      globalThis.co = undefined;
+    }
+  });
+
+  it('UF8 include.path naming a FIFO: the config probe itself would block; it times out and the repository is restricted (probe-failed) without running anything else', async () => {
+    mkfifo(join(repo, '.git', 'inc'));
+    git(repo, 'config', 'include.path', join(repo, '.git', 'inc'));
+    const timings: Timing[] = [];
+    const app = realApp(timings);
+    const { guard } = installRepoSafetyGuard(app);
+    expect(await guard.check(repo, { fresh: true })).toMatchObject({ kind: 'restricted', reason: 'probe-failed' });
+    expect(timings.map((t) => t.args.split(' ')[1])).toEqual(['config']);
   });
 });

@@ -118,8 +118,19 @@ restricted verdict at one step skips the later ones.
    `reftable`, among the entries of `objects` (fan-out directories included),
    under `objects/info`, or in `objects/pack` → restricted. A non-empty
    `objects/info/alternates` → restricted. A symlinked top-level `hooks` is
-   left to the pre-commit hooks check. If file access is unavailable, denied,
-   or fails, the repository is restricted.
+   left to the pre-commit hooks check. The same scan restricts any entry that
+   is neither a regular file, a directory nor a link (FIFO, socket, device):
+   git blocks opening a FIFO and never finishes reading a device, so a FIFO
+   `packed-refs`, `shallow`, `index`, `info/exclude`, `info/attributes`,
+   `info/grafts`, `info/sparse-checkout`, `objects/info/commit-graph` or
+   `COMMIT_EDITMSG` hung status / diff / log / commit until the host timeout
+   (S8; real git: `untrusted-file-reads` UF4). Exempt: the top-level
+   `fsmonitor--daemon.ipc`, git's own fsmonitor socket, never opened because
+   `core.fsmonitor` is pinned off (S9). `.gitignore` / `.gitattributes` at the
+   top of the working tree that are such a file are restricted too (S10;
+   UF5); deeper ones are not checked (that would walk the whole tree — see the
+   plugin README). If file access is unavailable, denied, or fails, the
+   repository is restricted.
 
 - Restricted (or probe failure) is fail-closed: every `gitExec` call on that
   repository returns a failed result without spawning git, and the panel shows
@@ -131,8 +142,9 @@ restricted verdict at one step skips the later ones.
   + `GIT_ALLOW_PROTOCOL=`),
   core.hooksPath (hooks are disabled for everything but commit, which asks for
   confirmation), and keys that merely name an outside file that git parses as
-  patterns without echoing it (diff.orderFile, mailmap.file) or that the
-  plugin never uses
+  patterns without echoing it (diff.orderFile, mailmap.file — git does read
+  them to the end, so they are neutralised in `exec` instead: pinned to
+  `/dev/null` / `--no-mailmap`) or that the plugin never uses
   (commit.template).
 - The verdict is cached per repo root keyed by `.git/config` mtime+size
   (`app.fs.stat`, no process). No cache when stat is unavailable or the config
@@ -155,7 +167,7 @@ T1 output parsing (T1b / T1c strict parsing: malformed output → null). T2–T5
 T4b diff.submodule). T18–T20 redirect keys (T18b attributesFile / excludesFile).
 T6–T9 config probe and fail-closed (T7b Apple Git's `unknown`-scope defaults → trusted, cacheable; T7c restricted /
 redirect / unreviewed key in `unknown` / `submodule` / a made-up scope → restricted; T9b malformed output →
-`probe-failed`). L1–L7 layout probe. S1–S7 symlink scan.
+`probe-failed`). L1–L7 layout probe. S1–S7 symlink scan. S8–S10 special files.
 T10–T15b cache (T13b: repository-controlled entries from a scope other than `local` / `unknown` live outside
 `.git/config` → never cached; `unknown` alone does not prevent caching — it is present in every repository on Apple
 Git and belongs to the Xcode installation). T15c `restrict()` (a verdict set from outside the probe — the forged-index case — holds until the next fresh check). T16–T17 guard wiring into `gitExec`.

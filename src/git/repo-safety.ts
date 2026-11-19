@@ -43,7 +43,9 @@ import {
 //    cwd 不在任何仓库里(`fatal: not a git repository`)不算受限:没有仓库可保护,后续 git 命令同样只会失败。
 // 3. git 目录内的符号链接(经宿主 app.fs.listDir / lstat,不起进程):git 目录与 common 目录的顶层条目、
 //    以及 refs / logs / info / reftable 全树、objects 顶层(含 fan-out 目录)、objects/info、objects/pack
-//    中出现任何符号链接即受限;非空的 objects/info/alternates 即受限。例外:顶层 `hooks`(常见做法,
+//    中出现任何符号链接、或既非普通文件也非目录的条目(FIFO / socket / 设备,见 SPECIAL_FILE_EXEMPT 处)
+//    即受限;工作区根目录的 .gitignore / .gitattributes 是这类文件同样受限;非空的 objects/info/alternates
+//    即受限。例外:顶层 `hooks`(常见做法,
 //    由 repo-hooks 在提交前处理)。不遍历 objects/xx 内部(要链接到具体对象须已知其 OID)、modules / lfs
 //    等 git 核心不经手的目录。app.fs 不可用 / 未授权 / 读取失败 → 受限。
 //
@@ -377,6 +379,7 @@ function isInside(dir: string, parent: string): boolean {
 interface Layout {
   readonly gitDir: string;
   readonly commonDir: string;
+  readonly toplevel: string;
 }
 
 /** 返回 null = cwd 不在任何仓库里(不受限);RepoSafety = 受限;Layout = 通过,供符号链接检查使用。 */
@@ -412,7 +415,7 @@ async function probeLayout(
       );
     }
   }
-  return { gitDir, commonDir };
+  return { gitDir, commonDir, toplevel };
 }
 
 type GitDirFs = Pick<CoPluginApp['fs'], 'listDir' | 'lstat'>;
@@ -428,8 +431,24 @@ function descendInto(rel: string): boolean {
 
 const MAX_SCANNED_DIRS = 5_000;
 
-/** 返回第一个符号链接的相对路径;没有则 null。读取失败抛出(调用方 fail-closed)。 */
-async function findSymlink(fs: GitDirFs, gitDir: string): Promise<string | null> {
+// 既不是普通文件、目录也不是符号链接的条目(FIFO、socket、设备):git 打开 FIFO 即阻塞,读设备(/dev/zero
+// 的副本)读不完。packed-refs / shallow / index / info/exclude / info/attributes / info/grafts /
+// info/sparse-checkout / objects/info/commit-graph / COMMIT_EDITMSG 等任何一个是 FIFO,status / diff / log /
+// commit 就挂到宿主超时,每次自动刷新再来一遍(实测 git 2.50.1 / 2.56.1,untrusted-file-reads UF4)。
+// 不逐个列名字:扫描范围内(见 descendInto)git 自己写出的条目只有普通文件、目录,唯一例外是 git 内置
+// fsmonitor 守护进程放在 git 目录顶层的 socket——插件固定 core.fsmonitor=false,git 不会打开它。
+const SPECIAL_FILE_EXEMPT = 'fsmonitor--daemon.ipc';
+
+const isSpecial = (e: { isFile: boolean; isDirectory: boolean; isSymlink: boolean }) =>
+  !e.isFile && !e.isDirectory && !e.isSymlink;
+
+interface UnsafeEntry {
+  readonly rel: string;
+  readonly kind: 'symlink' | 'special';
+}
+
+/** 返回第一个符号链接或特殊文件(相对路径);没有则 null。读取失败抛出(调用方 fail-closed)。 */
+async function findUnsafeEntry(fs: GitDirFs, gitDir: string): Promise<UnsafeEntry | null> {
   let level: string[] = [''];
   let scanned = 0;
   while (level.length > 0) {
@@ -443,7 +462,9 @@ async function findSymlink(fs: GitDirFs, gitDir: string): Promise<string | null>
       for (const e of entries) {
         const child = rel === '' ? e.name : `${rel}/${e.name}`;
         if (e.isSymlink) {
-          if (child !== 'hooks') return child;
+          if (child !== 'hooks') return { rel: child, kind: 'symlink' };
+        } else if (isSpecial(e)) {
+          if (child !== SPECIAL_FILE_EXEMPT) return { rel: child, kind: 'special' };
         } else if (e.isDirectory && descendInto(child)) {
           next.push(child);
         }
@@ -452,6 +473,15 @@ async function findSymlink(fs: GitDirFs, gitDir: string): Promise<string | null>
     level = next;
   }
   return null;
+}
+
+const ROOT_FILES_GIT_OPENS: readonly string[] = ['.gitignore', '.gitattributes'];
+
+function specialFileRestriction(where: string, rel: string): RepoSafety {
+  return layoutRestriction(
+    `${where} a file git reads that is not a regular file (${rel}): a FIFO, socket or device. ` +
+      `Git would block on it or never finish reading it.`,
+  );
 }
 
 async function probeGitDirLinks(
@@ -469,12 +499,25 @@ async function probeGitDirLinks(
   }
   try {
     for (const dir of new Set([layout.gitDir, layout.commonDir])) {
-      const link = await findSymlink(fs, dir);
-      if (link !== null) {
+      const found = await findUnsafeEntry(fs, dir);
+      if (found?.kind === 'symlink') {
         return layoutRestriction(
-          `its git directory contains a symbolic link (${link}). Git would read and write ` +
+          `its git directory contains a symbolic link (${found.rel}). Git would read and write ` +
             `through it, possibly outside this folder.`,
         );
+      }
+      if (found?.kind === 'special') return specialFileRestriction(`its git directory contains`, found.rel);
+    }
+    // 工作区根目录的 .gitignore / .gitattributes:status / diff / add 每次都打开(FIFO 同样挂住,UF5)。
+    // 只查根目录:git 读**每个**目录的这两个文件,逐目录检查就要遍历整棵工作树(残余见 README)。
+    // 符号链接不算:git 不跟随工作树里的这两个链接(打开时带 O_NOFOLLOW,只给 warning)。
+    for (const name of ROOT_FILES_GIT_OPENS) {
+      try {
+        if (isSpecial(await fs.lstat(`${layout.toplevel}/${name}`))) {
+          return specialFileRestriction('the top of its working tree contains', name);
+        }
+      } catch (err) {
+        if (!isNotFoundError(err)) throw err;
       }
     }
     try {

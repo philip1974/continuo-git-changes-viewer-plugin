@@ -224,9 +224,15 @@ A repository can also name a file that never ends (`/dev/zero`) or blocks
 when opened (a FIFO) in a setting git reads on every refresh. The plugin
 switches those reads off: `diff.orderFile` is pinned to an empty file and
 `log` runs without mailmap, so the file order in a diff ignores any order file
-(yours included) and nothing else changes. Remaining case: a repository that
-turns on commit signing with an SSH key that is a FIFO makes Commit wait for
-the host timeout.
+(yours included) and nothing else changes. Files git reads at fixed places
+are checked instead: a FIFO, socket or device inside `.git` (`packed-refs`,
+`shallow`, `index`, `info/exclude`, …) or as `.gitignore` / `.gitattributes`
+at the top of the folder stops the viewer, which says which file it is.
+Remaining cases, each of which makes a refresh (or Commit) wait for the host
+timeout and then report it: a FIFO `.gitignore` / `.gitattributes` in a
+subfolder (git reads one per folder, and checking would mean walking the
+whole tree), and a repository that turns on commit signing with an SSH key
+that is a FIFO.
 
 Error messages and notices that carry git output or text from the repository
 (stderr, `core.hooksPath`, hook names) are shown in a visible, single-line,

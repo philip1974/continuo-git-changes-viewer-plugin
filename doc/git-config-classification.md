@@ -125,6 +125,14 @@ the key set to a FIFO / `/dev/zero`; `untrusted-file-reads` UF1–UF3):
 | `format.signatureFile`, `sendemail.*`, `gitcvs.logFile`, `init.templateDir`, `help.htmlPath`, `<tool>.path`, `instaweb.modulePath`, `format.outputDirectory` | no (commands not run) | — |
 | `core.notesRef`, `notes.displayRef`, `attr.tree` | refs / tree objects, not files | — |
 
+Files git reads at fixed locations are not config but have the same problem:
+any entry of the scanned part of the git directory that is a FIFO, socket or
+device (`packed-refs`, `shallow`, `index`, `info/exclude`, `info/attributes`,
+`info/grafts`, `info/sparse-checkout`, `objects/info/commit-graph`, …), and a
+FIFO `.gitignore` / `.gitattributes` at the top of the working tree, restrict
+the repository (`repo-safety` S8–S10, `untrusted-file-reads` UF4–UF5).
+Ones in subdirectories of the working tree are a known residual.
+
 Not config, but found by the same audit:
 
 - Paths. `GIT_LITERAL_PATHSPECS=1` on every command but `commit`: a file named

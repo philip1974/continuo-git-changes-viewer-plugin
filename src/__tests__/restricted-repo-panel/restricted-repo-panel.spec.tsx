@@ -33,7 +33,7 @@ const isLayoutProbe = (args: readonly string[]) => args.includes('--is-inside-wo
 function makeApp(
   probeStdout: string,
   layoutStdout = LAYOUT_OK,
-  gitDirEntries: ReadonlyArray<{ name: string; isSymlink: boolean }> = [],
+  gitDirEntries: ReadonlyArray<{ name: string; isSymlink: boolean; special?: boolean }> = [],
 ) {
   const state = { probeStdout, layoutStdout, gitDirEntries };
   const exec = vi.fn(async (_cmd: string, args: readonly string[], _opts?: unknown) => ({
@@ -52,7 +52,7 @@ function makeApp(
     fs: {
       requestScope: vi.fn(async () => 'grant'),
       listDir: vi.fn(async () =>
-        state.gitDirEntries.map((e) => ({ ...e, isFile: !e.isSymlink, isDirectory: false })),
+        state.gitDirEntries.map(({ special, ...e }) => ({ ...e, isFile: !e.isSymlink && special !== true, isDirectory: false })),
       ),
       lstat: vi.fn(async () => {
         throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
@@ -132,6 +132,7 @@ describe('restricted repository', () => {
     ['git resolves the working tree elsewhere', '', 'false\n\n/repo/.git\n/repo/.git\n/etc\n', [], 'working tree'],
     ['git directory outside the workspace', '', 'true\n\n/victim/private/.git\n/victim/private/.git\n/repo\n', [], 'outside this folder (/victim/private/.git)'],
     ['symbolic link inside the git directory', '', LAYOUT_OK, [{ name: 'index', isSymlink: true }], 'symbolic link (index)'],
+    ['FIFO / socket / device inside the git directory', '', LAYOUT_OK, [{ name: 'packed-refs', isSymlink: false, special: true }], 'not a regular file (packed-refs)'],
   ] as const)('B5 %s: refresh runs no git besides the probes and the store carries the reason', async (_label, config, layout, entries, text) => {
     const { app, exec } = makeApp(config, layout, entries);
     const plugin = await loadPlugin(app);
