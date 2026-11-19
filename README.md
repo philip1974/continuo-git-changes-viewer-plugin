@@ -220,6 +220,14 @@ as reviewed. Those sections only act during network transport, mail sending or
 when an alias / pager is invoked, none of which this plugin does. Details:
 [`doc/git-config-classification.md`](doc/git-config-classification.md).
 
+A repository can also name a file that never ends (`/dev/zero`) or blocks
+when opened (a FIFO) in a setting git reads on every refresh. The plugin
+switches those reads off: `diff.orderFile` is pinned to an empty file and
+`log` runs without mailmap, so the file order in a diff ignores any order file
+(yours included) and nothing else changes. Remaining case: a repository that
+turns on commit signing with an SSH key that is a FIFO makes Commit wait for
+the host timeout.
+
 Error messages and notices that carry git output or text from the repository
 (stderr, `core.hooksPath`, hook names) are shown in a visible, single-line,
 bounded form: control and format characters (bidirectional controls,

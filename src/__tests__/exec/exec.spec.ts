@@ -42,6 +42,8 @@ const GLOBALS = [
   'core.protectNTFS=true',
   '-c',
   'i18n.commitEncoding=UTF-8',
+  '-c',
+  'diff.orderFile=/dev/null',
 ];
 // git 2.56 的 githooks(5) 全部事件(写死在测试里:源码里的列表被删改时这里会红)
 const HOOK_EVENTS = [
@@ -126,11 +128,11 @@ describe('gitExec hardened shell wrapper', () => {
     ]);
     expect(buildGitArgs(['show', 'HEAD:a.ts'])).toEqual([
       ...GLOBALS, ...NO_NETWORK, ...LITERAL_ARGV,
-      'show', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', 'HEAD:a.ts',
+      'show', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', '--no-mailmap', 'HEAD:a.ts',
     ]);
     expect(buildGitArgs(['log', '-1', '--pretty=%B'])).toEqual([
       ...GLOBALS, ...NO_NETWORK, ...LITERAL_ARGV,
-      'log', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', '-1', '--pretty=%B',
+      'log', '--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', '--no-mailmap', '-1', '--pretty=%B',
     ]);
   });
 
@@ -248,6 +250,27 @@ describe('gitExec hardened shell wrapper', () => {
     const confirmed = buildGitEnv(['commit', '-F', '-'], {}, { repoHooksConfirmed: true });
     expect(confirmed).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
     expect(confirmed).not.toHaveProperty('GIT_NO_LAZY_FETCH');
+  });
+});
+
+describe('files named by repository config are never read', () => {
+  // diff.orderFile=/dev/zero(或仓库内的 FIFO)让 status / diff / commit 读到宿主超时(见 untrusted-file-reads);
+  // mailmap.file / mailmap.blob / 工作区 .mailmap 让 log 同样挂住。
+  it('T14 diff.orderFile is pinned to /dev/null (not empty: git fails on an empty order file) for every subcommand, commit included; log / show never read a mailmap', () => {
+    for (const sub of [['status'], ['diff', '--', 'a'], ['diff', '--numstat', '-z', 'HEAD'], ['log', '-1'], ['show', 'HEAD:a'],
+      ['add', '--', 'a'], ['commit', '-F', '-'], ['checkout', '--', 'a']]) {
+      for (const opts of [{}, { repoHooksConfirmed: true }]) {
+        const args = buildGitArgs(sub, opts);
+        const i = args.indexOf('diff.orderFile=/dev/null');
+        expect(i, sub.join(' ')).toBeGreaterThan(0);
+        expect(args[i - 1]).toBe('-c');
+        expect(i).toBeLessThan(args.indexOf(sub[0]!));
+      }
+    }
+    for (const sub of ['log', 'show']) {
+      const args = buildGitArgs([sub, '-1']);
+      expect(args.slice(args.indexOf(sub))).toContain('--no-mailmap');
+    }
   });
 });
 

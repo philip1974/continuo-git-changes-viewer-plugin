@@ -353,6 +353,10 @@
 
 - [`untracked-diff.spec.ts`](./untracked-diff/untracked-diff.spec.ts)
 
+## [Untrusted File Reads](./untrusted-file-reads/README.md)
+
+- [`untrusted-file-reads.spec.ts`](./untrusted-file-reads/untrusted-file-reads.spec.ts)
+
 ## [visible-text](./visible-text/README.md)
 
 - [`visible-text.spec.tsx`](./visible-text/visible-text.spec.tsx)

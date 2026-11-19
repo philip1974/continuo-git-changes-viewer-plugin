@@ -29,22 +29,25 @@ keys git gives no switch for.
 | Handling | Keys | Count |
 | --- | --- | ---: |
 | **Restricted** — repository is not operated on | `filter.<drv>.clean/smudge/process`, `diff.<drv>.textconv/command`, `diff.external`, `merge.<drv>.driver`, `gpg.program`, `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`, `core.askPass`, `core.gitProxy`, `core.alternateRefsCommand`, `uploadpack.packObjectsHook`, `remote.<n>.uploadpack/receivepack`, `protocol.<n>.allow`, `trailer.<k>.cmd/command`, `gc.recentObjectsHook`, `hook.*` (config-defined hooks, git ≥ 2.54), `core.worktree`, `core.bare` (unless false), `core.attributesFile`, `core.excludesFile`; by value: `core.fsmonitor` (non-boolean), `diff.submodule` (other than short/log), `extensions.refStorage` (other than files/reftable); plus git-lfs `lfs.extension.*` / `lfs.customtransfer.*` | 21 |
-| **Pinned with `-c`** (every command) | `core.fsmonitor=false`, `log.showSignature=false`, `submodule.recurse=false`, `diff.submodule=short`, `status.submoduleSummary=false`, `maintenance.auto=false`, `gc.auto=0`, `core.protectHFS=true`, `core.protectNTFS=true`, `i18n.commitEncoding=UTF-8`; `fsmonitor.*` (daemon never started) | 12 |
+| **Pinned with `-c`** (every command) | `core.fsmonitor=false`, `log.showSignature=false`, `submodule.recurse=false`, `diff.submodule=short`, `status.submoduleSummary=false`, `maintenance.auto=false`, `gc.auto=0`, `core.protectHFS=true`, `core.protectNTFS=true`, `i18n.commitEncoding=UTF-8`, `diff.orderFile=/dev/null` (a file git opens and reads to the end, see below); `fsmonitor.*` (daemon never started) | 13 |
 | **Pinned with `-c`** (every command but `commit`, whose `-c` values reach hooks) | `protocol.allow=never` (also on a commit whose hooks were not confirmed), `core.hooksPath=/dev/null`, `hook.<event>.enabled=false` for every githooks(5) event (git ≥ 2.55), `status.renames=true`, `diff.renames=true`, `color.ui=false`, `color.diff=false`, `diff.noprefix=false`, `diff.mnemonicPrefix=false`, `diff.srcPrefix=a/`, `diff.dstPrefix=b/`, `diff.context=3`, `diff.interHunkContext=0`, `diff.suppressBlankEmpty=false`, `diff.relative=false`, `i18n.logOutputEncoding=UTF-8`, `apply.ignoreWhitespace=no` | 16 |
 | **Pinned with `-c`** (every command but `commit`, `status`, and `add` of an untracked path) | `core.precomposeUnicode=false` — arguments reach git byte for byte (see note) | 1 |
 | **Never triggered** — auto-maintenance is pinned off | remaining `gc.*`, `maintenance.*` | 31 |
-| **Overridden by a fixed flag** | `diff.ignoreSubmodules`, `submodule.<n>.ignore` (`--ignore-submodules=dirty`; a `-c` would lose to `submodule.<n>.ignore`); `core.pager`, `pager.<cmd>` (`--no-pager`); `diff.trustExitCode`, `diff.<drv>.trustExitCode/cachetextconv` (`--no-ext-diff --no-textconv`); `apply.whitespace` (`--whitespace=nowarn`); `format.pretty` (explicit `--pretty`); `status.branch/short/showStash/aheadBehind/relativePaths/displayCommentPrefix`, `column.*` (`--porcelain=v1 -z`); remaining `color.*` (`--no-color`, porcelain, `commit --quiet`); `commit.status/verbose/template` (`-F -`, no editor) | 104 |
+| **Overridden by a fixed flag** | `diff.ignoreSubmodules`, `submodule.<n>.ignore` (`--ignore-submodules=dirty`; a `-c` would lose to `submodule.<n>.ignore`); `core.pager`, `pager.<cmd>` (`--no-pager`); `diff.trustExitCode`, `diff.<drv>.trustExitCode/cachetextconv` (`--no-ext-diff --no-textconv`); `apply.whitespace` (`--whitespace=nowarn`); `format.pretty` (explicit `--pretty`); `status.branch/short/showStash/aheadBehind/relativePaths/displayCommentPrefix`, `column.*` (`--porcelain=v1 -z`); remaining `color.*` (`--no-color`, porcelain, `commit --quiet`); `commit.status/verbose/template` (`-F -`, no editor); `log.mailmap`, `mailmap.file`, `mailmap.blob` (`--no-mailmap` on `log` / `show`, see below) | 107 |
 | **Overridden by environment** | `core.editor`, `sequence.editor` (`GIT_EDITOR=:`) | 2 |
 | **Network only** — blocked by `GIT_ALLOW_PROTOCOL=` + `GIT_NO_LAZY_FETCH=1` + `-c protocol.allow=never` (every command except a hooks-confirmed commit) | `core.sshCommand`, `ssh.variant`, `http.*`, `credential.*`, `credentialCache.*`, `credentialStore.*`, `url.*`, `remote.*` (rest, incl. `vcs`, `proxy`, `promisor`, `partialclonefilter`), `remotes.*`, `fetch.*`, `transfer.*`, `bundle.*`, `clone.*`, `promisor.*`, `protocol.version`, `lsrefs.*`, `submodule.fetchJobs` / `alternate*` / `<n>.fetchRecurseSubmodules` | 114 |
 | **Protected scope** — git ignores the key in repository config | `trace2.*` (system / global only; verified: a local `trace2.*Target` writes nothing), `safe.*` | 13 |
 | **Not read by this command set** — belongs to commands the plugin never runs | `am`, `blame`, `branch`, `browser`, `clean`, `completion`, `difftool`, `fastimport`, `format` (rest), `fsck`, `gitcvs`, `gitweb`, `grep`, `gui`, `guitool`, `help`, `imap`, `init`, `instaweb`, `interactive`, `mailinfo`, `man`, `merge` (rest), `mergetool`, `notes`, `pack`, `pull`, `push`, `rebase`, `receive`, `repack`, `revert`, `sendemail`, `showBranch`, `stash`, `submodule` (rest), `tag`, `tar`, `trailer` (rest; no `--trailer`), `uploadarchive`, `uploadpack`, `versionsort`, `web`, `worktree`, `commitGraph`, `bitmapPseudoMerge`; `alias.*` (cannot shadow a built-in); `diff.tool/guitool/dirstat/stat*Width/wordRegex`, `log.follow/showRoot/diffMerges/graphColors`, `pretty.<name>`, `checkout.defaultRemote/guess` | 484 |
-| **Read, in-process only** — no process, no network, stays inside the workspace; changes presentation, performance or content conversion at most | remaining `core.*` (autocrlf / eol / safecrlf, fileMode, symlinks, ignoreCase, quotePath, abbrev, compression, sparseCheckout, splitIndex, untrackedCache, sharedRepository, fsync, lock timeouts, …), remaining `diff.*` (algorithm, renameLimit, `<drv>.xfuncname/binary`, orderFile, colorMoved, …), `index.*`, `splitIndex.*`, `sparse.*`, `feature.experimental/manyFiles`, the nine reviewed `extensions.*` names (see below), remaining `log.*`, `mailmap.*`, `attr.tree`, `user.*`, `author.*`, `committer.*`, `commit.cleanup`, `commit.gpgSign`, `add.*`, `checkout.workers/thresholdForParallelism`, `rerere.*`, `reftable.*`, `gpg.format/minTrustLevel/ssh.*File`, `status.renameLimit/showUntrackedFiles`, `advice.*`, `include.path`, `includeIf.*` (followed by the config probe) | 157 |
+| **Read, in-process only** — no process, no network, stays inside the workspace; changes presentation, performance or content conversion at most | remaining `core.*` (autocrlf / eol / safecrlf, fileMode, symlinks, ignoreCase, quotePath, abbrev, compression, sparseCheckout, splitIndex, untrackedCache, sharedRepository, fsync, lock timeouts, …), remaining `diff.*` (algorithm, renameLimit, `<drv>.xfuncname/binary`, colorMoved, …), `index.*`, `splitIndex.*`, `sparse.*`, `feature.experimental/manyFiles`, the nine reviewed `extensions.*` names (see below), remaining `log.*`, `attr.tree`, `user.*`, `author.*`, `committer.*`, `commit.cleanup`, `commit.gpgSign`, `add.*`, `checkout.workers/thresholdForParallelism`, `rerere.*`, `reftable.*`, `gpg.format/minTrustLevel/ssh.*File`, `status.renameLimit/showUntrackedFiles`, `advice.*`, `include.path`, `includeIf.*` (followed by the config probe) | 154 |
 
 Notes on the last two rows (keys whose names look dangerous):
 
-- `diff.orderFile`, `mailmap.file`, `gpg.ssh.allowedSignersFile` name files
-  outside the workspace, but git only parses them as patterns / mappings and
-  does not echo their content (`repo-safety-real-git` R30).
+- `gpg.ssh.allowedSignersFile` names a file outside the workspace, but git
+  only reads it to verify signatures (switched off) and does not echo it
+  (`repo-safety-real-git` R30). `diff.orderFile` and `mailmap.file` were
+  listed here too: they do not echo either, but git opens and reads them to
+  the end — see "Keys that name a file" below for why they are now pinned /
+  switched off.
 - `core.attributesFile` is different and therefore restricted: for a line whose
   attribute name is malformed git prints `<word> is not a valid attribute
   name: <file>:<line>` on stderr (status, diff, add), i.e. words of the named
@@ -95,6 +98,32 @@ Notes on the last two rows (keys whose names look dangerous):
 - `core.unsetenvvars`, `core.restrictinheritedhandles`, `core.hideDotFiles`
   exist only in Git for Windows and affect child processes git starts; with
   the settings above no child process is started (not verified on Windows).
+
+## Keys that name a file
+
+A repository can point any key whose value is a path at `/dev/zero` (git never
+reaches the end; a 32–49 GB process footprint was measured before the 30 s
+host timeout) or at a FIFO inside the repository (opening it blocks). No
+symbolic link, external program or hook is needed, and auto-refresh retries
+with backoff. Every documented path-valued key, against the commands the
+plugin runs (verified with git 2.50.1 and 2.56.1 by running each command with
+the key set to a FIFO / `/dev/zero`; `untrusted-file-reads` UF1–UF3):
+
+| Key | Read by the plugin's commands? | Handling |
+| --- | --- | --- |
+| `diff.orderFile` | yes: `status`, `diff --numstat HEAD`, `diff -- <path>`, `commit` | pinned `-c diff.orderFile=/dev/null` on every command (an empty value fails: `failed to read orderfile ''`); a user's global order file no longer applies inside the plugin |
+| `mailmap.file`, `mailmap.blob`, worktree `.mailmap` | yes: `log -1` (amend prefill, post-commit summary) | `--no-mailmap` on `log` / `show` (`-c mailmap.file=` would leave `.mailmap` and `mailmap.blob`); only `%B` / `%s` are read |
+| `core.excludesFile`, `core.attributesFile` | yes: `status`, `diff`, `ls-files -o`, `add` | restricted (already) |
+| `core.hooksPath` | hooks only | pinned `/dev/null` except `commit` (already) |
+| `include.path`, `includeIf.<cond>.path` | every command, the config probe first | a FIFO makes the probe time out (5 s) and `/dev/zero` makes git fail → restricted (`probe-failed`) without running anything else |
+| `commit.template` | no (`commit -F -`) | — |
+| `blame.ignoreRevsFile` | no (`blame` not run) | — |
+| `gpg.ssh.allowedSignersFile`, `gpg.ssh.revocationFile` | only to verify signatures | `log.showSignature=false`, `--no-show-signature` (already) |
+| `user.signingKey` (with `commit.gpgSign` and `gpg.format=ssh`) | by the user's `ssh-keygen` during `commit` | residual: a FIFO key makes a user-initiated commit wait for the host timeout |
+| `fsmonitor.socketDir` | no (`core.fsmonitor=false`) | — |
+| `http.sslCert/sslKey/sslCAPath/cookieFile/…` | network only | network blocked (already) |
+| `format.signatureFile`, `sendemail.*`, `gitcvs.logFile`, `init.templateDir`, `help.htmlPath`, `<tool>.path`, `instaweb.modulePath`, `format.outputDirectory` | no (commands not run) | — |
+| `core.notesRef`, `notes.displayRef`, `attr.tree` | refs / tree objects, not files | — |
 
 Not config, but found by the same audit:
 

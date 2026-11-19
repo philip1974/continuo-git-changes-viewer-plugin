@@ -66,7 +66,8 @@ import {
 //   配置式 hooks(hook.*,git >= 2.54)不走 hooks 目录,上面的中和对它无效 → 列为受限键(见列表末尾)。
 //
 // 评估后不列入的"指向外部文件"的键(实测不泄露内容、不越界读写,见 R30):
-// - diff.orderFile / mailmap.file:只按模式 / 映射解析,内容不出现在 stdout / stderr。
+// - diff.orderFile / mailmap.file:只按模式 / 映射解析,内容不出现在 stdout / stderr。但 git 会打开并读完它们
+//   (/dev/zero、FIFO 让命令挂到超时)→ 不靠受限,由 exec.ts 中和:`-c diff.orderFile=/dev/null`、log/show 的 `--no-mailmap`。
 //   (core.attributesFile / core.excludesFile 不在此列——见 isRedirectConfigEntry,R30b。)
 // - commit.template:插件用 `commit -F -`,不读模板。
 // - core.symlinks / core.fileMode:工作树里的符号链接只显示链接目标路径,不跟随。

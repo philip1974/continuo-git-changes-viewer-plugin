@@ -74,6 +74,12 @@ export const PINNED_CONFIG: ReadonlyArray<readonly [key: string, value: string]>
   // 插件经 stdin 传入的提交信息一律是 UTF-8;仓库设成别的编码会给提交打上错误的 encoding 头,
   // 之后 log 按它转码就成了乱码。
   ['i18n.commitEncoding', 'UTF-8'],
+  // diff.orderFile 是一个文件路径,status(刷新 index 时比较)、diff、commit 都会打开并读完它。仓库把它设成
+  // /dev/zero(读不完,子进程内存涨到几十 GB)或仓库里的 FIFO(打开即阻塞)就让每条命令挂到宿主超时,自动刷新
+  // 还会退避重试(实测 git 2.50.1 / 2.56.1;untrusted-file-reads UF1–UF2)。固定为 /dev/null(空文件,
+  // 等于不排序);不能固定为空值——git 会以 `failed to read orderfile ''` 失败。commit 也要:它同样会读。
+  // 代价:用户自己全局的 orderFile 在插件的 diff 里不生效(只改变文件在 diff 里的先后)。
+  ['diff.orderFile', '/dev/null'],
 ];
 
 // 只影响"插件要解析的输出"的固定配置:除 commit 外的每次调用都加。commit 不加——它的输出插件不解析,
@@ -185,12 +191,16 @@ export const HOOK_RUNNING_SUBCOMMANDS: ReadonlySet<string> = new Set(['commit'])
 //   断网后则以 `fatal: unable to read <oid>` 退出 128——提交其实已创建,却报告失败。加 --quiet 后
 //   根本不读旧 blob(实测:不断网也不拉取),"nothing to commit" 等失败信息照常输出;插件不使用该摘要。
 // - diff/show/log:`--no-color`(与 -c color.ui / color.diff=false 双保险,见 PINNED_OUTPUT_CONFIG)。
+// - show/log:`--no-mailmap`。log 默认(log.mailmap=true)启动时就读 mailmap.file / mailmap.blob / 工作区的
+//   `.mailmap`;仓库把其中任一指向 /dev/zero 或 FIFO,`log -1`(amend 预填、提交后的摘要)挂到超时(实测)。
+//   插件只取 %B / %s,不用作者名,关掉 mailmap 不改变结果。不用 `-c mailmap.file=`:那管不到 mailmap.blob 和
+//   工作区的 .mailmap。
 export const SUBCOMMAND_HARDENING: Readonly<Record<string, readonly string[]>> = {
   commit: ['--quiet'],
   status: ['--ignore-submodules=dirty'],
   diff: ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--submodule=short', '--no-color'],
-  show: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color'],
-  log: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color'],
+  show: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', '--no-mailmap'],
+  log: ['--no-ext-diff', '--no-textconv', '--no-show-signature', '--submodule=short', '--no-color', '--no-mailmap'],
 };
 
 // GIT_TERMINAL_PROMPT=0:不在终端提示凭据;GIT_EDITOR=':':git 把 ':' 视为"不启动编辑器",

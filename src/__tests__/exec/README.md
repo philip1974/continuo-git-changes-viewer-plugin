@@ -35,10 +35,14 @@ invocation against executable settings in an untrusted repository config:
   `diff.context=3`, `diff.interHunkContext=0`, `diff.suppressBlankEmpty=false`,
   `diff.relative=false` (hunk patches are generated from this output),
   `i18n.logOutputEncoding=UTF-8`, `apply.ignoreWhitespace=no`. Always pinned:
-  `core.protectHFS=true`, `core.protectNTFS=true`, `i18n.commitEncoding=UTF-8`.
+  `core.protectHFS=true`, `core.protectNTFS=true`, `i18n.commitEncoding=UTF-8`,
+  `diff.orderFile=/dev/null` (status / diff / commit open and read the order
+  file to the end — `/dev/zero` or a FIFO hung every command until the host
+  timeout; an empty value makes git fail; T14, `untrusted-file-reads`).
 - Per subcommand: `diff` → `--no-ext-diff --no-textconv --ignore-submodules=dirty
   --submodule=short`; `show` / `log` → `--no-ext-diff --no-textconv
-  --no-show-signature --submodule=short`; `status` → `--ignore-submodules=dirty`
+  --no-show-signature --submodule=short --no-mailmap` (log reads
+  `mailmap.file` / `mailmap.blob` / `.mailmap` at start-up; T14); `status` → `--ignore-submodules=dirty`
   (no recursion into nested repos whose config is not inspected; it has to be
   the flag — `submodule.<name>.ignore` outranks `-c diff.ignoreSubmodules`);
   `commit` → `--quiet` (the change summary would read old blobs, which in a
