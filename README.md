@@ -156,8 +156,44 @@ amended in a terminal), clicking Amend changes nothing: Amend is turned off
 with an explanation, and checking it again loads the current message.
 
 Amend rewrites local HEAD. If the commit was already pushed, integrating the
-rewrite may require a force-push. v0.4.1 shows a visible warning but does not
+rewrite may require a force-push. v0.4.2 shows a visible warning but does not
 detect whether HEAD is already on a remote branch.
+
+## Changes in 0.4.2
+
+Hardening release (since 0.4.1); no new git operations.
+
+- **Untrusted folders.** Before running git the viewer checks the repository
+  and stops, saying why, when its config could run a program (filters, diff
+  drivers, signing programs, config-defined hooks, …), point git outside the
+  folder (`core.worktree`, a `.git` file / `commondir` elsewhere, symbolic
+  links or a FIFO / device inside `.git`, borrowed objects, out-of-folder ref
+  storage), name settings this viewer has not reviewed, or when the index
+  lists forged paths. Repository hooks never run except for Commit, which
+  asks first; git never uses the network or starts a process inside a
+  nested repository; settings that would make git read a file that never
+  ends or blocks (`diff.orderFile`, mailmap) are switched off.
+- **Commit and Amend.** Commit refuses (and refreshes) when the repository
+  changed after you looked at it, and cannot run while a Stage / Unstage /
+  Discard is in flight. Amend rewrites only the commit whose message it
+  loaded, keeps your draft when unchecked, does not overwrite text typed
+  while the message loads, and refuses to re-encode a non-UTF-8 message left
+  unedited. Host refusals are reported instead of failing silently.
+- **What is shown.** The Staged section shows the index version, Changes the
+  working-tree side; working-tree files are never read through symbolic
+  links; whole-file reads stop at 1 MiB / 5 s and say so. File names with
+  `..`, glob characters, NFD (decomposed) characters or a `:` are handled
+  literally; names that are not portable or not UTF-8 are listed read-only.
+- **File operations.** Stage / Unstage / Discard act only on the clicked
+  entry; conflicted paths offer no Unstage / Discard; type changes and
+  non-UTF-8 content have no hunk buttons.
+- **Refresh.** A failing, timed-out or truncated `git status` is shown as an
+  error (Commit disabled) instead of "no changes"; the panel catches up as
+  soon as it becomes visible again; late results no longer overwrite newer
+  ones.
+- **Messages.** git output and other repository text in notices is shown in a
+  visible, single-line, bounded form; Copy in "Diff too large" reports a
+  refused clipboard.
 
 ## v0.4 Limits
 
@@ -168,7 +204,7 @@ detect whether HEAD is already on a remote branch.
 - File-level actions in v0.4.0 are intentionally narrow: Untracked can be
   staged; Changed M/D can be staged or discarded; Staged M/A/D can be unstaged.
   Rename/copy rows do not expose file-level action buttons yet.
-- Commit is intentionally narrow in v0.4.1: signoff, author override, commit
+- Commit is intentionally narrow in v0.4.2: signoff, author override, commit
   signing, hook bypass, amend push detection, and stash UI are not supported.
 - Jump-back currently shows an inline panel banner with a `path:line` hint. A
   future v0.2 SDK expansion is expected to add real editor navigation.
