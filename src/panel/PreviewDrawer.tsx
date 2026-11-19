@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { visibleText } from '../lib/visible-text';
 
 export type DrawerAction = 'stage' | 'unstage' | 'discard' | 'discard-file';
 
@@ -87,6 +88,8 @@ interface PreviewDrawerProps {
   readonly state: PreviewDrawerState;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
+  /** 非 null:此刻不能执行(提交正在进行),确认按钮禁用并以它为提示。 */
+  readonly confirmBlockedReason?: string | null;
 }
 
 function patchForState(state: PreviewDrawerState): string | null {
@@ -129,6 +132,7 @@ export function PreviewDrawer({
   state,
   onConfirm,
   onCancel,
+  confirmBlockedReason = null,
 }: PreviewDrawerProps) {
   const [confirmInput, setConfirmInput] = useState('');
 
@@ -176,7 +180,7 @@ export function PreviewDrawer({
           <strong>WARNING: This will permanently delete the unstaged change.</strong>
           <span> Use <code>git stash</code> first if uncertain.</span>
         </div>
-        {isError ? <span className="cgv-preview-error">{state.error}</span> : null}
+        {isError ? <span className="cgv-preview-error">{visibleText(state.error)}</span> : null}
         {body ? <div className="cgv-preview-body">{body}</div> : null}
         {!body && patch ? <pre className="cgv-preview-patch">{patch}</pre> : null}
         <div className="cgv-confirm-row">
@@ -201,7 +205,8 @@ export function PreviewDrawer({
             type="button"
             className="cgv-discard-btn"
             onClick={onConfirm}
-            disabled={!isDiscardConfirmed}
+            disabled={!isDiscardConfirmed || confirmBlockedReason !== null}
+            title={confirmBlockedReason ?? undefined}
             aria-label={isError ? `Retry discard ${noun}` : `Discard ${noun}`}
           >
             {isError ? `Retry ${verbText}` : verbText}
@@ -224,7 +229,7 @@ export function PreviewDrawer({
             : `${verbText} ${noun}: ${state.filePath}`}
         </strong>
         {state.kind === 'error' ? (
-          <span className="cgv-preview-error">{state.error}</span>
+          <span className="cgv-preview-error">{visibleText(state.error)}</span>
         ) : null}
       </header>
       {body ? <div className="cgv-preview-body">{body}</div> : null}
@@ -239,7 +244,8 @@ export function PreviewDrawer({
             <button
               type="button"
               onClick={onConfirm}
-              disabled={state.kind === 'applying'}
+              disabled={state.kind === 'applying' || confirmBlockedReason !== null}
+              title={confirmBlockedReason ?? undefined}
               aria-label={`${verbText} ${noun}`}
             >
               {state.kind === 'applying' ? `${verbText}...` : verbText}

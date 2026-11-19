@@ -7,9 +7,13 @@ import {
 } from './sdk/types';
 import { registerCommands } from './commands';
 import { detectRepo } from './git/repo-detect';
-import { scanStatus } from './git/status-scanner';
+import { installRepoSafetyGuard } from './git/repo-safety';
+import { readStatusHash } from './git/status-hash';
+import { scanStatus, StatusUnavailableError, UnsafeIndexError } from './git/status-scanner';
 import { fetchDiff } from './git/diff-fetcher';
 import { SettingsBus } from './lib/settings-bus';
+import { tryNotify } from './lib/notify';
+import { visibleText } from './lib/visible-text';
 import { AutoRefreshTimer } from './state/auto-refresh-timer';
 import { createGitStore } from './state/git-store';
 import { GitViewerPanel } from './panel/GitViewerPanel';
@@ -65,12 +69,9 @@ export default class GitChangesViewerPlugin extends Plugin {
     message: string,
     code?: string,
   ): void {
-    if (typeof this.app.notifications?.show === 'function') {
-      this.app.notifications.show(
-        code === undefined ? { kind, message } : { kind, message, code },
-      );
-      return;
-    }
+    const opts = code === undefined ? { kind, message: visibleText(message) } : { kind, message: visibleText(message), code };
+    // 宿主拒绝显示(插件被吊销后 show 同步抛出)时与没有通知 API 一样退回 banner,不抛出
+    if (tryNotify(this.app, opts)) return;
 
     // Defensive fallback only. The SDK toast has no dismissable field; inline
     // banners keep it because the panel banner UI supports manual dismissal.
@@ -94,8 +95,23 @@ export default class GitChangesViewerPlugin extends Plugin {
       });
     }
 
+    // 安全:此后本插件所有经 gitExec 的 git 调用都先过受限仓库检测(fail-closed)。
+    const safety = installRepoSafetyGuard(this.app);
+    this.disposables.push(safety);
+
     const store = createGitStore({
       load: async () => {
+        // 每次 refresh 都强制重新探测(不走缓存),再运行任何 git 命令。
+        // 探测要经 app.fs 检查 git 目录内的符号链接,先等 fs scope 请求结束(未授权时探测会判受限)。
+        await this.scopeReadyPromise;
+        const root = await this.app.workspace.getRoot();
+        if (root) {
+          const verdict = await safety.guard.check(root, { fresh: true });
+          if (verdict.kind === 'restricted') {
+            return { repoRoot: null, changes: [], restriction: verdict.message };
+          }
+        }
+
         const repo = await detectRepo(this.app);
         if (!repo.ok) {
           const message =
@@ -106,10 +122,31 @@ export default class GitChangesViewerPlugin extends Plugin {
           return { repoRoot: repo.root ?? null, changes: [] };
         }
 
-        return {
-          repoRoot: repo.root,
-          changes: await scanStatus(this.app, repo.root),
-        };
+        // 指纹在列表**之前**读(见 git-store 的 statusFingerprint):它不比列表新。
+        // 读不到:与列表读不到同样对待——statusError 带上原因(面板显示它、禁用 Commit / Amend,自动刷新的 tick
+        // 按退避重试)。此前只是静默地记成 null:列表照常显示,而每次点 Commit 都提示"仓库已变化"、永远提交不了。
+        let statusFingerprint: string | null = null;
+        let fingerprintError: string | null = null;
+        try {
+          statusFingerprint = await readStatusHash(this.app, repo.root);
+        } catch (err) {
+          fingerprintError = err instanceof Error ? err.message : String(err);
+        }
+        try {
+          const changes = await scanStatus(this.app, repo.root);
+          return { repoRoot: repo.root, changes, statusFingerprint, ...(fingerprintError !== null ? { statusError: fingerprintError } : {}) };
+        } catch (err) {
+          if (err instanceof StatusUnavailableError) {
+            // status 失败 / 超时 / 被截断:列表不可信。仓库本身没有问题(不受限),但面板要说明原因并禁用
+            // Commit / Amend(见 git-store 的 statusError);截断时仍显示已读到的那部分。
+            return { repoRoot: repo.root, changes: [...err.partial], statusError: err.message, statusFingerprint };
+          }
+          if (!(err instanceof UnsafeIndexError)) throw err;
+          // 伪造的 index:与其它受限情形同样处理——不显示列表,并让守卫拒绝此后的一切 git 调用
+          // (否则 commit 会把面板没显示的条目写进 tree)。下一次 refresh 重新判断。
+          safety.guard.restrict(repo.root, { kind: 'restricted', reason: 'unsafe-index', keys: [], message: err.message });
+          return { repoRoot: null, changes: [], restriction: err.message };
+        }
       },
       fetchDiff: (repoRoot, change, mode) =>
         fetchDiff(this.app, repoRoot, change, mode),

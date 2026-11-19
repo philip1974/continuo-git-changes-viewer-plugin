@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { tryNotify } from '../lib/notify';
 import type { SettingsBus } from '../lib/settings-bus';
 import type { CoPluginApp } from '../sdk/types';
 import {
@@ -48,7 +49,8 @@ export function SettingsTab({ app, pluginId, bus }: SettingsTabProps) {
       bus.emit(next);
     } catch {
       setValue(previous);
-      app.notifications?.show({
+      // 宿主拒绝显示(插件被吊销)时 tryNotify 记录到 console,不抛出;设置页没有 banner 可退
+      tryNotify(app, {
         kind: 'warning',
         message: 'Failed to save Auto-refresh setting',
       });

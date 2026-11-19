@@ -56,6 +56,25 @@ File-level Discard is destructive and requires typing `discard` exactly. It runs
 preserves already-staged content for `MM` files. Untracked file deletion is not
 supported in v0.4.0.
 
+A row names one entry, but git treats the path as a prefix. When a directory
+now sits where a tracked file was (or a file where one of its parent folders
+was), Discard would delete that directory or file with everything in it, and
+Stage would add every untracked file inside — files the list does not show
+while the old entry exists. Unstage would likewise unstage entries staged
+below a directory of the same name. The same holds upwards: when a file is
+staged where a folder used to be, unstaging a row below it would drop that
+staged file from the index, unstaging the file's own row would also unstage
+the deletions below it, and staging a new file under a path that is still a
+file in the index would stage that file's removal. In these cases the action is refused with
+an explanation and nothing is changed; resolve it in a terminal. A submodule or
+nested repository directory is still staged as the single entry it is — whether
+a directory is a repository is git's call (it is asked what `git add` would add
+below the path), not the mere presence of something named `.git` inside. The
+check happens just before the git command; a change in the instant between
+the two is not caught. Each parent folder of the path is checked in turn, so
+Stage / Unstage on a path nested more than 64 folders deep is refused (use a
+terminal).
+
 ## Commit
 
 The top of the panel includes a commit message editor. The Commit button is
@@ -67,32 +86,199 @@ Commit hooks run normally; this plugin does not pass `--no-verify`. If a hook
 fails, the hook output is shown and the message draft stays in the editor. On
 success, the plugin clears the draft, refreshes the working tree, and reads the
 real subject from `git log -1 --pretty=%s` so commit-msg hook rewrites are
-reflected in the toast.
+reflected in the toast. If Continuo refuses to run git for the commit (for
+example too many git processes running in the window at once), the panel shows
+"Commit failed" (or "Amend failed") with the reason and keeps the message.
+If Continuo also refuses to show notifications (the plugin was disabled or its
+permissions revoked while the panel was open), every message the panel would
+have shown as a notification goes to the panel's own banner instead (the
+settings tab, which has no banner, only logs it to the console); nothing is
+left half-done because of the refused notification.
+
+Right before committing, the plugin checks that the repository is still in
+the state the panel last read (the same fingerprint the auto-refresh uses:
+`git status --porcelain=v2`, i.e. what is staged). If something changed in
+between — for example you staged another edit in a terminal — nothing is
+committed: the panel refreshes and asks you to review and commit again. The
+same check runs before an amend. If the state cannot be read at all (`git
+status` failed or timed out — it has the same time limit as the list), nothing
+is committed either and the panel says that the state could not be confirmed
+and why; while it stays unreadable the panel shows the reason and Commit /
+Amend are disabled until a refresh succeeds. A very short window remains between that
+check and git reading the index for the commit (two process starts); a change
+landing exactly there is committed without having been shown.
+
+After a refresh the diff you are looking at stays on screen until the new one
+has been read; the header shows "Refreshing diff…" meanwhile, and a commit
+clicked while a Staged diff is in that state is held back.
+
+The comparison is made with what was on screen when you clicked. A click while
+a refresh is in flight is held back ("still being refreshed"), and if a refresh
+lands between the click and the comparison — or while the hooks confirmation
+is open — nothing is committed and the panel asks you to review and commit
+again. What cannot be told apart: a refresh that landed an instant before the
+click, so that the new list was on screen (or about to be painted) without you
+having had time to read it. The click then commits what the panel shows at
+that moment.
+
+The panel's own Stage / Unstage / Discard (file and hunk) and Commit / Amend
+do not overlap. While a stage, unstage or discard is running — until its git
+command and the refresh after it are done — Commit and Amend are disabled; a
+click that slips in anyway, or a stage that ran while the hooks confirmation
+was open, commits nothing and asks you to review and commit again. While a
+commit or amend is running, the stage / unstage / discard buttons are
+disabled, and so are Commit and Amend — also in a panel that was closed and
+opened again while the commit was still running (for example during a slow
+pre-commit hook): it shows "Committing..." until that commit has finished, and
+cannot start a second one. The hooks confirmation itself does not hold the
+commit: stage / unstage / discard stay usable while it is open, and confirming
+afterwards commits nothing (see above).
 
 ### Amend
 
 The commit editor can amend the last commit. Enable "Amend last commit" to load
 the current HEAD message into the editor, then edit the message or stage more
-changes and click Amend. Amend runs `git commit --amend -F -`, then refreshes
+changes and click Amend. If you start typing before the message has loaded,
+your text is kept instead. Amend runs `git commit --amend -F -`, then refreshes
 the panel and clears amend mode on success.
 
+A draft written before checking "Amend last commit" is kept aside: unchecking
+Amend (or HEAD's message failing to load, including Continuo refusing to run
+git) puts that draft back into the editor. If checking whether there is a last
+commit fails, "Amend last commit" stays disabled and its tooltip says why;
+Amend mode that is already on can still be unchecked.
+Text edited while Amend was checked is not kept when you uncheck it — the draft
+from before checking comes back. After a successful amend the editor is empty.
+
+Amend only rewrites the commit whose message it loaded. If HEAD has become a
+different commit since "Amend last commit" was checked (you committed or
+amended in a terminal), clicking Amend changes nothing: Amend is turned off
+with an explanation, and checking it again loads the current message.
+
 Amend rewrites local HEAD. If the commit was already pushed, integrating the
-rewrite may require a force-push. v0.4.1 shows a visible warning but does not
+rewrite may require a force-push. v0.4.2 shows a visible warning but does not
 detect whether HEAD is already on a remote branch.
+
+## Changes in 0.4.2
+
+Hardening release (since 0.4.1); no new git operations.
+
+- **Untrusted folders.** Before running git the viewer checks the repository
+  and stops, saying why, when its config could run a program (filters, diff
+  drivers, signing programs, config-defined hooks, …), point git outside the
+  folder (`core.worktree`, a `.git` file / `commondir` elsewhere, symbolic
+  links or a FIFO / device inside `.git`, borrowed objects, out-of-folder ref
+  storage), name settings this viewer has not reviewed, or when the index
+  lists forged paths. Repository hooks never run except for Commit, which
+  asks first; git never uses the network or starts a process inside a
+  nested repository; settings that would make git read a file that never
+  ends or blocks (`diff.orderFile`, mailmap) are switched off.
+- **Commit and Amend.** Commit refuses (and refreshes) when the repository
+  changed after you looked at it, and cannot run while a Stage / Unstage /
+  Discard is in flight. Amend rewrites only the commit whose message it
+  loaded, keeps your draft when unchecked, does not overwrite text typed
+  while the message loads, and refuses to re-encode a non-UTF-8 message left
+  unedited. Host refusals are reported instead of failing silently.
+- **What is shown.** The Staged section shows the index version, Changes the
+  working-tree side; working-tree files are never read through symbolic
+  links; whole-file reads stop at 1 MiB / 5 s and say so. File names with
+  `..`, glob characters, NFD (decomposed) characters or a `:` are handled
+  literally; names that are not portable or not UTF-8 are listed read-only.
+- **File operations.** Stage / Unstage / Discard act only on the clicked
+  entry; conflicted paths offer no Unstage / Discard; type changes and
+  non-UTF-8 content have no hunk buttons.
+- **Refresh.** A failing, timed-out or truncated `git status` is shown as an
+  error (Commit disabled) instead of "no changes"; the panel catches up as
+  soon as it becomes visible again; late results no longer overwrite newer
+  ones.
+- **Messages.** git output and other repository text in notices is shown in a
+  visible, single-line, bounded form; Copy in "Diff too large" reports a
+  refused clipboard.
 
 ## v0.4 Limits
 
-- Hunk stage, unstage, and discard are supported for modified text files only.
+- Hunk stage, unstage, and discard are supported for modified text files only
+  (including the unstaged edits of a staged new file, `AM`, in Changes).
   Added, deleted, renamed, copied, binary, and untracked files do not expose
   hunk write buttons in this version.
 - File-level actions in v0.4.0 are intentionally narrow: Untracked can be
   staged; Changed M/D can be staged or discarded; Staged M/A/D can be unstaged.
   Rename/copy rows do not expose file-level action buttons yet.
-- Commit is intentionally narrow in v0.4.1: signoff, author override, commit
+- Commit is intentionally narrow in v0.4.2: signoff, author override, commit
   signing, hook bypass, amend push detection, and stash UI are not supported.
 - Jump-back currently shows an inline panel banner with a `path:line` hint. A
   future v0.2 SDK expansion is expected to add real editor navigation.
+- Files whose names are not portable (`c:notes.txt`, a name containing `..\`)
+  are listed but cannot be viewed, staged, unstaged or discarded here. If one
+  is already staged the row says so, because a commit will include it.
+- Files with an unresolved merge conflict are listed with a CONFLICT badge.
+  They have no Unstage or Discard here (unstaging would silently drop the
+  conflict; discarding cannot work); resolve them in an editor or a terminal
+  and mark them resolved with `git add` in a terminal. Only the deleted-side
+  conflicts (`UD`, `DD`) offer Stage, which marks the conflict as resolved. A
+  file added with `git add -N` (intent to add) is shown but has no actions.
+- Text that is not valid UTF-8 (Latin-1, GBK, …) is displayed with the
+  replacement character `�`. Files whose diff contains it have no hunk
+  buttons — a hunk patch could not write the original bytes back — and the
+  diff says so; use the file-level actions, which are byte-exact. A file that
+  really contains the character U+FFFD is treated the same way. File names
+  that are not valid UTF-8, or contain U+FFFD, are listed but cannot be
+  operated on. When the last commit's message is not valid UTF-8, Amend with
+  the pre-filled message left unedited is refused (amending would replace
+  those bytes with `EF BF BD`; so would `git commit --amend --no-edit`): edit
+  the message first, or amend in a terminal. An edited message is saved as
+  displayed (a warning says so when it is loaded).
+- Auto-refresh notices changes of what is staged, of HEAD, of the list of
+  changed files, and of the file whose working-tree diff is on screen. It does
+  not notice an unstaged submodule moving to yet another commit (git status
+  does not report it); click the row or press Refresh. A staged submodule
+  pointer is covered.
 - The workspace root must be the git toplevel. Opening a subdirectory of a repo
   is reported as unsupported in this version.
 - Very large diffs degrade to a file-level placeholder with the exact git
-  command to run manually.
+  command to run manually (the host caps command output at 10 MiB). The file
+  name in that command is quoted for POSIX-style shells (sh, bash, zsh, fish);
+  it is not written for PowerShell or cmd. A new or
+  untracked file is shown in full up to 1 MiB; beyond that the panel shows the
+  first 1 MB and says so.
+
+## Untrusted folders: known limitation
+
+Before running git the plugin checks the repository's own config and stops
+(showing why) when it contains a setting that runs a program, points git
+outside the folder, or that the installed git understands but this plugin has
+not reviewed. Repository extensions (`extensions.*`) and `feature.*` presets
+pass only by reviewed name. One gap remains by construction: git documents a
+few sections only as wildcards (`http.<url>.*`, `credential.<url>.*`,
+`bundle.*`, `sendemail.<identity>.*`, `sideband.<url>.*`, `alias.*`,
+`pager.<cmd>`), so a variable a future git adds inside one of them is treated
+as reviewed. Those sections only act during network transport, mail sending or
+when an alias / pager is invoked, none of which this plugin does. Details:
+[`doc/git-config-classification.md`](doc/git-config-classification.md).
+
+A repository can also name a file that never ends (`/dev/zero`) or blocks
+when opened (a FIFO) in a setting git reads on every refresh. The plugin
+switches those reads off: `diff.orderFile` is pinned to an empty file and
+`log` runs without mailmap, so the file order in a diff ignores any order file
+(yours included) and nothing else changes. Files git reads at fixed places
+are checked instead: a FIFO, socket or device inside `.git` (`packed-refs`,
+`shallow`, `index`, `info/exclude`, …) or as `.gitignore` / `.gitattributes`
+at the top of the folder stops the viewer, which says which file it is.
+Remaining cases, each of which makes a refresh (or Commit) wait for the host
+timeout and then report it: a FIFO `.gitignore` / `.gitattributes` in a
+subfolder (git reads one per folder, and checking would mean walking the
+whole tree), and a repository that turns on commit signing with an SSH key
+that is a FIFO.
+
+Error messages and notices that carry git output or text from the repository
+(stderr, `core.hooksPath`, hook names) are shown in a visible, single-line,
+bounded form: control and format characters (bidirectional controls,
+zero-width characters, …) and other default-ignorable code points (variation
+selectors, tag characters, Hangul fillers, …) appear as `<U+XXXX>`, line
+breaks become spaces, and long text is cut to 500 code points of the shown
+text plus an ellipsis (never inside a `<U+XXXX>`, at a grapheme boundary where
+possible), so the host's own notification limit never cuts it again. Long
+unbreakable text wraps instead of overflowing. The command shown in the "Diff too large"
+placeholder is displayed the same way; Copy still copies it exactly (and
+reports an error if the clipboard refuses the write). File
+names in the file list are shown as they are.

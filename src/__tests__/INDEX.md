@@ -16,6 +16,7 @@
 
 ## [Auto Refresh Wiring](./auto-refresh-wiring/README.md)
 
+- [`retry-backoff.spec.ts`](./auto-refresh-wiring/retry-backoff.spec.ts)
 - [`wiring.spec.tsx`](./auto-refresh-wiring/wiring.spec.tsx)
 
 ## [can-amend](./can-amend/README.md)
@@ -54,6 +55,10 @@
 
 - [`commit-editor-component.spec.tsx`](./commit-editor-component/commit-editor-component.spec.tsx)
 
+## [Commit Hooks Confirmation](./commit-hooks-confirm/README.md)
+
+- [`commit-hooks-confirm.spec.tsx`](./commit-hooks-confirm/commit-hooks-confirm.spec.tsx)
+
 ## [commit-integration](./commit-integration/README.md)
 
 - [`commit-integration.spec.tsx`](./commit-integration/commit-integration.spec.tsx)
@@ -62,9 +67,17 @@
 
 - [`commit-shell.spec.ts`](./commit-shell/commit-shell.spec.ts)
 
+## [Copy Command](./copy-command/README.md)
+
+- [`copy-command.spec.tsx`](./copy-command/copy-command.spec.tsx)
+
 ## [Diff Fetcher](./diff-fetcher/README.md)
 
 - [`diff-fetcher.spec.ts`](./diff-fetcher/diff-fetcher.spec.ts)
+
+## [Diff Symlink Guard](./diff-symlink-guard/README.md)
+
+- [`diff-symlink-guard.spec.tsx`](./diff-symlink-guard/diff-symlink-guard.spec.tsx)
 
 ## [DiffView Banner Preserved](./diffview-banner-preserved/README.md)
 
@@ -77,6 +90,10 @@
 ## [diffview-scroll-fix (v0.1.8 hot-fix)](./diffview-scroll-fix/README.md)
 
 - [`cgv-panel-height.spec.ts`](./diffview-scroll-fix/cgv-panel-height.spec.ts)
+
+## [Which view a row gets, per section](./diffview-section-views/README.md)
+
+- [`diffview-section-views.spec.tsx`](./diffview-section-views/diffview-section-views.spec.tsx)
 
 ## [discard-file-shell](./discard-file-shell/README.md)
 
@@ -122,6 +139,10 @@
 
 - [`file-level-integration.spec.tsx`](./file-level-integration/file-level-integration.spec.tsx)
 
+## [file-op-commit-exclusion](./file-op-commit-exclusion/README.md)
+
+- [`file-op-commit-exclusion.spec.tsx`](./file-op-commit-exclusion/file-op-commit-exclusion.spec.tsx)
+
 ## [FileList three sections](./filelist-3-segment/README.md)
 
 - [`filelist-3-segment.spec.tsx`](./filelist-3-segment/filelist-3-segment.spec.tsx)
@@ -140,6 +161,7 @@
 
 ## [Git store mode selection](./git-store-mode-selection/README.md)
 
+- [`duplicate-path-panel.spec.tsx`](./git-store-mode-selection/duplicate-path-panel.spec.tsx)
 - [`git-store-mode-selection.spec.ts`](./git-store-mode-selection/git-store-mode-selection.spec.ts)
 
 ## [Git store refresh reconciliation](./git-store-refresh-reconciliation/README.md)
@@ -154,9 +176,17 @@
 
 - [`head-meta-shell.spec.ts`](./head-meta-shell/head-meta-shell.spec.ts)
 
+## [host-exec-rejection](./host-exec-rejection/README.md)
+
+- [`commit-editor-rejection.spec.tsx`](./host-exec-rejection/commit-editor-rejection.spec.tsx)
+
 ## [Hunk patch builder](./hunk-patch-builder/README.md)
 
 - [`hunk-patch-builder.spec.ts`](./hunk-patch-builder/hunk-patch-builder.spec.ts)
+
+## [Inoperable entries (names the plugin will not hand to git)](./inoperable-entries/README.md)
+
+- [`inoperable-entries.spec.tsx`](./inoperable-entries/inoperable-entries.spec.tsx)
 
 ## [jsx-runtime-shim (v0.3.2/v0.3.3 regression guards)](./jsx-runtime-shim/README.md)
 
@@ -193,6 +223,10 @@
 
 - [`mapping.spec.ts`](./notification-mapping/mapping.spec.ts)
 
+## [notify-refused](./notify-refused/README.md)
+
+- [`notify-refused.spec.tsx`](./notify-refused/notify-refused.spec.tsx)
+
 ## [Numstat Binary Detection](./numstat/README.md)
 
 - [`numstat.spec.ts`](./numstat/numstat.spec.ts)
@@ -221,9 +255,27 @@
 
 - [`preview-drawer-fsm.spec.tsx`](./preview-drawer-fsm/preview-drawer-fsm.spec.tsx)
 
+## [Render Limits](./render-limits/README.md)
+
+- [`render-limits.spec.tsx`](./render-limits/render-limits.spec.tsx)
+
 ## [Repo Detection](./repo-detect/README.md)
 
 - [`repo-detect.spec.ts`](./repo-detect/repo-detect.spec.ts)
+
+## [Repo Safety (restricted repositories)](./repo-safety/README.md)
+
+- [`config-key-classification.spec.ts`](./repo-safety/config-key-classification.spec.ts)
+- [`repo-safety.spec.ts`](./repo-safety/repo-safety.spec.ts)
+
+## [Repo Safety — real git integration](./repo-safety-real-git/README.md)
+
+- [`panel-real-git.spec.tsx`](./repo-safety-real-git/panel-real-git.spec.tsx)
+- [`repo-safety-real-git.spec.ts`](./repo-safety-real-git/repo-safety-real-git.spec.ts)
+
+## [Restricted Repository (panel behavior)](./restricted-repo-panel/README.md)
+
+- [`restricted-repo-panel.spec.tsx`](./restricted-repo-panel/restricted-repo-panel.spec.tsx)
 
 ## [Ribbon Register](./ribbon-register/README.md)
 
@@ -277,6 +329,10 @@
 
 - [`status-scanner-xy.spec.ts`](./status-scanner-xy/status-scanner-xy.spec.ts)
 
+## [Status Unavailable](./status-unavailable/README.md)
+
+- [`status-unavailable.spec.tsx`](./status-unavailable/status-unavailable.spec.tsx)
+
 ## [Store Load Toast](./storeload-toast/README.md)
 
 - [`storeload-toast.spec.ts`](./storeload-toast/storeload-toast.spec.ts)
@@ -296,3 +352,15 @@
 ## [Untracked Diff](./untracked-diff/README.md)
 
 - [`untracked-diff.spec.ts`](./untracked-diff/untracked-diff.spec.ts)
+
+## [Untrusted File Reads](./untrusted-file-reads/README.md)
+
+- [`untrusted-file-reads.spec.ts`](./untrusted-file-reads/untrusted-file-reads.spec.ts)
+
+## [visible-text](./visible-text/README.md)
+
+- [`visible-text.spec.tsx`](./visible-text/visible-text.spec.tsx)
+
+## [worktree-entry](./worktree-entry/README.md)
+
+- [`worktree-entry.spec.ts`](./worktree-entry/worktree-entry.spec.ts)

@@ -3,3 +3,38 @@
 Pure helpers for translating git repo-relative paths into absolute Continuo
 editor paths.
 
+
+Paths come from `git status`, i.e. from the (possibly hostile) repository's
+index. A forged index can list `../outside.txt`, absolute paths or
+`.git/hooks/pre-commit`; git reports them without validation and
+`git checkout -- .git/hooks/x` even writes into the git directory. The plugin
+therefore only accepts canonical repo-relative paths:
+
+- T1–T4 `joinRepoPath` returns `null` (never an outside path) for anything
+  else.
+- T5–T6 `isSafeRepoRelativePath`: not empty, not absolute (POSIX, UNC, drive
+  letter), no empty / `.` / `..` segment (one trailing `/` is allowed for
+  untracked directories), and no segment that resolves to `.git` on HFS+ /
+  NTFS (case, ignorable code points, trailing dots and spaces, `git~1`,
+  alternate data streams). Glob characters are fine — paths are passed to git
+  literally.
+
+The same predicate gates the status parser (an entry that fails it is either
+dropped — forged, see below — or kept as a read-only "inoperable" row),
+`fetchDiff`, stage / unstage / discard file, and the hunk-action predicates.
+
+- T8–T9 `isForgedIndexPath`: the subset git itself never writes into an index
+  (POSIX-absolute, an empty / `.` / `..` segment, a `.git` segment). Such an
+  entry means the index was forged; the status scan then refuses the whole
+  repository (see `status-scanner` T7). Names that are only unsafe on Windows
+  (`c:notes.txt`, `..\x`) are legitimate file names elsewhere: they do not
+  condemn the repository and are listed as inoperable rows (`status-scanner`
+  T8, `inoperable-entries`).
+
+- T8: a name containing U+FFFD is not accepted either. File-name bytes that
+  are not valid UTF-8 (possible in an index; on Linux also on disk) reach the
+  plugin as U+FFFD, and passing that string back to git names a different
+  path — a file whose name really contains U+FFFD, if there is one
+  (`repo-safety-real-git` R76). It is not evidence of a forged index, only an
+  inoperable row (`status-scanner` T10). A name that really contains U+FFFD is
+  refused as well (conservative).

@@ -6,16 +6,25 @@ You are working on the Continuo Git Changes Viewer plugin, a third-party
 Continuo plugin repository. Treat this repository as renderer-side plugin code
 behind the Continuo plugin SDK boundary.
 
-## v0.1 Hard Lines
+## Hard Lines
 
-1. Git is strictly read-only. Do not add stage, discard, commit, stash, checkout,
-   reset, clean, or index-mutating behavior.
-2. All git execution goes through `app.shell.exec`. Do not import Node process,
-   filesystem, or child-process APIs in production source.
+1. Git writes are limited to the explicit, user-initiated operations shipped
+   since v0.3: stage / unstage / discard (hunk and file level), commit and
+   amend. Destructive ones go through the preview drawer / confirmation flow.
+   Do not add other mutating behavior (stash, checkout of branches, reset,
+   clean, push, fetch, ...) and never mutate the repo from background refresh
+   or read paths.
+2. All git execution goes through `gitExec` (`src/git/exec.ts`) on top of
+   `app.shell.exec`, which carries the hardening arguments (hooks disabled
+   except for commit, no network protocols, safe config overrides). Do not
+   import Node process, filesystem, or child-process APIs in production source.
 3. Large diffs must degrade to the existing placeholder path instead of trying to
    load or render everything.
 4. Every git invocation must keep `GIT_OPTIONAL_LOCKS=0` and
    `--no-optional-locks` in the chain.
+5. Treat the opened folder as untrusted: keep the repo-safety / repo-hooks
+   checks fail-closed, and never read working-tree files through symbolic
+   links (see `src/__tests__/diff-symlink-guard/`).
 
 ## Repository Boundary
 
@@ -40,9 +49,10 @@ This plugin follows the same dev-loop discipline as the Continuo main repo:
 
 ## UI And SDK Notes
 
-The v0.1 panel is opened through More Actions or command surfaces. It does not
-register a ribbon action. Jump-back is an inline banner, not real editor
-navigation, until the host SDK exposes an editor navigation API.
+The panel is opened through the ribbon action, More Actions, or command
+surfaces. Jump-back opens the file in the Continuo editor through
+`app.editor.openFile` and falls back to an inline banner when the host SDK does
+not expose it.
 
 Use `src/styles/index.css` variables and local classes. Do not depend on the
 main repo design system or Tailwind utility colors.

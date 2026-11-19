@@ -13,6 +13,7 @@ import type {
   PluginShellExecOptions,
   PluginShellExecResult,
 } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -65,9 +66,22 @@ describe('gitCommit shell wrapper', () => {
 
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'commit', '-F', '-'],
+      buildGitArgs(['commit', '-F', '-']),
       expect.objectContaining({ cwd: '/repo' }),
     );
+  });
+
+  it('T3b only a hooks-confirmed commit is run with the network open; the default commit carries the network block', async () => {
+    const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
+
+    await gitCommit(appWithExec(exec), '/repo', 'subject');
+    await gitCommit(appWithExec(exec), '/repo', 'subject', { amend: true, hooksConfirmed: true });
+
+    expect(exec.mock.calls[0]![1]).toContain('protocol.allow=never');
+    expect(exec.mock.calls[0]![2].env).toMatchObject({ GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: '' });
+    expect(exec.mock.calls[1]![1]).toEqual(buildGitArgs(['commit', '--amend', '-F', '-'], { repoHooksConfirmed: true }));
+    expect(exec.mock.calls[1]![1]).not.toContain('protocol.allow=never');
+    expect(exec.mock.calls[1]![2].env).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
   });
 
   it('T4 passes the commit message through stdin input', async () => {
@@ -91,7 +105,7 @@ describe('gitCommit shell wrapper', () => {
     expect(exec).toHaveBeenCalledWith(
       'git',
       expect.anything(),
-      expect.objectContaining({ env: { GIT_OPTIONAL_LOCKS: '0' } }),
+      expect.objectContaining({ env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }) }),
     );
   });
 
@@ -143,7 +157,7 @@ describe('gitCommit shell wrapper', () => {
     await expect(readLastCommitSubject(appWithExec(exec), '/repo')).resolves.toBe('hook subject');
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'log', '-1', '--pretty=%s'],
+      buildGitArgs(['log', '-1', '--pretty=%s']),
       expect.objectContaining({ timeoutMs: 5_000 }),
     );
   });

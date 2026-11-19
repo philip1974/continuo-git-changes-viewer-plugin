@@ -1,6 +1,6 @@
 import type { DiffResult } from './diff-fetcher';
 import type { SectionKind } from './can-stage-hunk';
-import { isPathSafeForPatch } from './hunk-patch';
+import { isHunkPatchableDiff, isPathSafeForPatch } from './hunk-patch';
 import type { FileChange } from './status-scanner';
 
 export function canUnstageHunk(
@@ -9,10 +9,12 @@ export function canUnstageHunk(
   section: SectionKind,
 ): boolean {
   if (!change || !diff) return false;
+  if (change.inoperable) return false;
   if (section !== 'staged') return false;
   if (change.kind !== 'text') return false;
   if (!diff.ok) return false;
   if (diff.isUntracked) return false;
   if (change.statusX !== 'M') return false;
+  if (!isHunkPatchableDiff(diff.unifiedDiff)) return false;
   return isPathSafeForPatch(change.path);
 }

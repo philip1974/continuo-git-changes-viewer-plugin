@@ -2,7 +2,7 @@
 import React, { useSyncExternalStore } from 'react';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CommitEditor } from '../../panel/CommitEditor';
+import { AMEND_HEAD_CHANGED_MESSAGE, AMEND_NON_UTF8_MESSAGE, AMEND_NON_UTF8_UNEDITED_MESSAGE, CommitEditor } from '../../panel/CommitEditor';
 import type { CommitResult, GitCommitOptions } from '../../git/git-commit';
 import type { CoPluginApp } from '../../sdk/types';
 import { createGitStore } from '../../state/git-store';
@@ -34,12 +34,16 @@ function renderEditor(opts: {
   readonly readHeadMessage?: (app: CoPluginApp, repoRoot: string) => Promise<string | null>;
   readonly hasHeadCommit?: (app: CoPluginApp, repoRoot: string) => Promise<boolean>;
   readonly readHeadSha?: (app: CoPluginApp, repoRoot: string) => Promise<string | null>;
+  /** amend 已勾选时,store 里记下的"载入信息时的 HEAD"(默认与 readHeadSha 的默认回答相同)。 */
+  readonly amendHead?: string | null;
 } = {}) {
   const store = createGitStore();
   store.setState({
     repoRoot: opts.repoRoot === undefined ? '/repo' : opts.repoRoot,
     commitMessage: opts.message ?? 'subject',
     amend: opts.amend ?? false,
+    amendHead: opts.amend ? (opts.amendHead === undefined ? 'sha-after' : opts.amendHead) : null,
+    statusFingerprint: 'fp', // 提交前确认(commit-editor T31–T35):store 里的指纹与当前读到的相同才提交
   });
   const commit = opts.commit ?? vi.fn(async () => ({ ok: true as const }));
   const readSubject = opts.readSubject ?? vi.fn(async () => 'subject');
@@ -65,6 +69,8 @@ function renderEditor(opts: {
         readHeadMessage={readHeadMessage}
         hasHeadCommit={hasHeadCommit}
         readHeadSha={readHeadSha}
+        detectHooks={async () => ({ kind: 'none' as const })}
+        readFingerprint={async () => 'fp'}
       />
     );
   }
@@ -135,9 +141,10 @@ describe('CommitEditor amend UI', () => {
     fireEvent.click(checkbox);
     resolveHead('late head message');
 
+    // 取消勾选恢复勾选前的草稿(T43);迟到的 HEAD 信息不会覆盖它
     await vi.waitFor(() => {
       expect(store.getState().amend).toBe(false);
-      expect(store.getState().commitMessage).toBe('');
+      expect(store.getState().commitMessage).toBe('draft');
     });
   });
 
@@ -172,7 +179,7 @@ describe('CommitEditor amend UI', () => {
     const readHeadSha = vi.fn()
       .mockResolvedValueOnce('same-sha')
       .mockResolvedValueOnce('same-sha');
-    renderEditor({ app, amend: true, message: 'head subject', readHeadSha });
+    renderEditor({ app, amend: true, amendHead: 'same-sha', message: 'head subject', readHeadSha });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
 
@@ -192,6 +199,7 @@ describe('CommitEditor amend UI', () => {
     renderEditor({
       app,
       amend: true,
+      amendHead: 'before',
       message: 'new subject',
       readHeadSha,
       readSubject: vi.fn(async () => 'new subject'),
@@ -257,5 +265,214 @@ describe('CommitEditor amend UI', () => {
         message: 'Failed to read HEAD commit message',
       });
     });
+  });
+  it('T34 a HEAD message that arrives with U+FFFD in it (bytes that were not valid UTF-8) is still pre-filled, with a warning that amending saves it as shown; an ordinary message raises none', async () => {
+    const lossy = appWithShell();
+    const first = renderEditor({ app: lossy.app, readHeadMessage: vi.fn(async () => 'caf\uFFFD subject'), message: '' });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(first.store.getState().commitMessage).toBe('caf\uFFFD subject'));
+    expect(lossy.notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: AMEND_NON_UTF8_MESSAGE });
+    expect(first.store.getState().amend).toBe(true);
+    cleanup();
+
+    const plain = appWithShell();
+    const second = renderEditor({ app: plain.app, readHeadMessage: vi.fn(async () => 'café subject'), message: '' });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(second.store.getState().commitMessage).toBe('café subject'));
+    expect(plain.notifications.show).not.toHaveBeenCalled();
+  });
+  // 编辑框里预填的是"勾选 Amend 时的 HEAD"的信息:Amend 只改写那个提交
+  describe('Amend rewrites the commit whose message was loaded', () => {
+    it('T35 checking Amend records the HEAD commit id together with its message — the id is read first; unchecking forgets it', async () => {
+      const { app } = appWithShell();
+      const order: string[] = [];
+      const readHeadSha = vi.fn(async () => { order.push('sha'); return 'head-1'; });
+      const readHeadMessage = vi.fn(async () => { order.push('message'); return 'head subject'; });
+      const { store } = renderEditor({ app, readHeadSha, readHeadMessage, message: '' });
+
+      const checkbox = await screen.findByRole('checkbox', { name: 'Amend last commit' });
+      fireEvent.click(checkbox);
+      await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, amendHead: 'head-1', commitMessage: 'head subject' }));
+      expect(order).toEqual(['sha', 'message']);
+
+      fireEvent.click(checkbox);
+      expect(store.getState()).toMatchObject({ amend: false, amendHead: null });
+    });
+
+    it('T36 HEAD is a different commit when Amend is clicked (a commit was made or rewritten elsewhere after the message was loaded): nothing is amended, Amend is turned off, the text stays, the view is refreshed and a warning says why', async () => {
+      const { app, notifications } = appWithShell();
+      const commit = vi.fn(async () => ({ ok: true as const }));
+      const { store } = renderEditor({ app, amend: true, amendHead: 'head-1', message: 'old head message', commit, readHeadSha: vi.fn(async () => 'head-2') });
+      const refresh = vi.fn(async () => {});
+      store.setState({ refresh });
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+
+      await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: AMEND_HEAD_CHANGED_MESSAGE }));
+      expect(AMEND_HEAD_CHANGED_MESSAGE).toBe(
+        'HEAD is no longer the commit whose message was loaded when "Amend last commit" was checked. Nothing was amended and Amend was turned off — check it again to load the current message.',
+      );
+      expect(commit).not.toHaveBeenCalled();
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(store.getState()).toMatchObject({ amend: false, amendHead: null, commitMessage: 'old head message' });
+    });
+
+    it('T37 fail-closed: HEAD cannot be read at that moment, or no commit id was recorded with the Amend state → no amend either', async () => {
+      for (const [amendHead, sha] of [['head-1', null], [null, 'head-1']] as const) {
+        const { app, notifications } = appWithShell();
+        const commit = vi.fn(async () => ({ ok: true as const }));
+        const { store } = renderEditor({ app, amend: true, amendHead, message: 'm', commit, readHeadSha: vi.fn(async () => sha) });
+        store.setState({ refresh: vi.fn(async () => {}) });
+        fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+        await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: AMEND_HEAD_CHANGED_MESSAGE }));
+        expect(commit).not.toHaveBeenCalled();
+        cleanup();
+      }
+    });
+
+    it('T38 a HEAD id that cannot be read when Amend is checked is handled like an unreadable message: Amend goes back off with an error, and the message is not asked for', async () => {
+      const { app, notifications } = appWithShell();
+      const readHeadMessage = vi.fn(async () => 'head subject');
+      const { store } = renderEditor({ app, readHeadSha: vi.fn(async () => null), readHeadMessage, message: '' });
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'error', message: 'Failed to read HEAD commit message' }));
+      expect(store.getState()).toMatchObject({ amend: false, amendHead: null });
+      expect(readHeadMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  // 预填的信息含 U+FFFD(原提交信息有不是合法 UTF-8 的字节)而用户没改过:直接 Amend 会把原字节改写成 EF BF BD
+  // (实测,无 encoding 头的 GBK / Latin-1 提交;`--amend --no-edit` 也保不住)。拦下并说明;改过则照常。
+  describe('an unedited message with bytes that were not valid UTF-8 is not amended as is', () => {
+    const lossy = 'caf� subject\n\nbody ��';
+
+    it('T39 the pre-filled message still contains U+FFFD and was not edited: nothing is amended, Amend stays on, the text is kept and a warning says why and what to do', async () => {
+      const { app, notifications } = appWithShell();
+      const commit = vi.fn(async () => ({ ok: true as const }));
+      const { store } = renderEditor({ app, commit, readHeadMessage: vi.fn(async () => lossy), message: '' });
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: lossy }));
+      notifications.show.mockClear();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'warning', message: AMEND_NON_UTF8_UNEDITED_MESSAGE }));
+      expect(AMEND_NON_UTF8_UNEDITED_MESSAGE).toBe(
+        'The last commit message contains bytes that are not valid UTF-8, and it has not been edited: amending would replace those bytes with �. Nothing was amended — edit the message before amending, or amend in a terminal.',
+      );
+      expect(commit).not.toHaveBeenCalled();
+      expect(store.getState()).toMatchObject({ amend: true, amendHead: 'sha-after', commitMessage: lossy });
+    });
+
+    it('T40 once the message was edited (even if some U+FFFD is left in it) Amend goes through as before; so does an unedited message without U+FFFD; unchecking Amend forgets the loaded message', async () => {
+      for (const [loaded, typed] of [
+        [lossy, 'café subject\n\nbody'],
+        [lossy, 'caf� subject\n\nbody �� edited'],
+        ['plain subject', null],
+      ] as const) {
+        const { app } = appWithShell();
+        const commit = vi.fn(async () => ({ ok: true as const }));
+        const { store } = renderEditor({ app, commit, readHeadMessage: vi.fn(async () => loaded), message: '' });
+        fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+        await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: loaded }));
+        expect(store.getState().amendMessage).toBe(loaded);
+        if (typed !== null) fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: typed } });
+        fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+        await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+        expect(commit).toHaveBeenCalledWith(app, '/repo', typed ?? loaded, { amend: true });
+        cleanup();
+      }
+
+      const { app } = appWithShell();
+      const { store } = renderEditor({ app, readHeadMessage: vi.fn(async () => lossy), message: '' });
+      const checkbox = await screen.findByRole('checkbox', { name: 'Amend last commit' });
+      fireEvent.click(checkbox);
+      await vi.waitFor(() => expect(store.getState().amendMessage).toBe(lossy));
+      fireEvent.click(checkbox);
+      expect(store.getState()).toMatchObject({ amend: false, amendHead: null, amendMessage: null });
+    });
+  });
+
+  // e6adc86 之后:勾选 Amend 到预填信息到达之间(读 HEAD 要起两个 git 进程)用户已经开始打字,预填到达时把它覆盖了。
+  describe('typing while the HEAD message is still being read', () => {
+    function slowHead(message: string) {
+      let resolve: (value: string | null) => void = () => undefined;
+      const readHeadMessage = vi.fn(async () => new Promise<string | null>((r) => { resolve = r; }));
+      return { readHeadMessage, arrive: () => resolve(message) };
+    }
+
+    it('T41 text typed before the pre-fill arrives is kept (not overwritten); the loaded message is still recorded, so the U+FFFD rule sees the typed text as edited and Amend goes through with it; no U+FFFD warning about a message that is not shown', async () => {
+      const { app, notifications } = appWithShell();
+      const commit = vi.fn(async () => ({ ok: true as const }));
+      const head = slowHead('caf\uFFFD subject');
+      const { store } = renderEditor({ app, commit, readHeadMessage: head.readHeadMessage, message: '' });
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(head.readHeadMessage).toHaveBeenCalledTimes(1));
+      fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'typed while loading' } });
+      head.arrive();
+      await vi.waitFor(() => expect(store.getState().amendMessage).toBe('caf\uFFFD subject'));
+      expect(store.getState()).toMatchObject({ amend: true, amendHead: 'sha-after', commitMessage: 'typed while loading' });
+      expect(notifications.show).not.toHaveBeenCalledWith({ kind: 'warning', message: AMEND_NON_UTF8_MESSAGE });
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(commit).toHaveBeenCalledWith(app, '/repo', 'typed while loading', { amend: true }));
+    });
+
+    it('T42 nothing typed while loading (text typed before checking Amend does not count): the message is pre-filled as before', async () => {
+      const { app } = appWithShell();
+      const head = slowHead('head subject');
+      const { store } = renderEditor({ app, readHeadMessage: head.readHeadMessage, message: '' });
+      fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'a draft typed before' } });
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+      await vi.waitFor(() => expect(head.readHeadMessage).toHaveBeenCalledTimes(1));
+      head.arrive();
+      await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'head subject', amendMessage: 'head subject' }));
+    });
+  });
+});
+
+// 勾选 Amend 会把编辑框换成 HEAD 的信息;此前取消勾选清空编辑框,勾选前写的草稿丢了。
+describe('the draft written before checking Amend', () => {
+  it('T43 checking Amend keeps the draft aside (in the store); unchecking puts it back', async () => {
+    const { app } = appWithShell();
+    const { store } = renderEditor({ app, message: '' });
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'my draft' } });
+    const checkbox = await screen.findByRole('checkbox', { name: 'Amend last commit' });
+    fireEvent.click(checkbox);
+    await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: true, commitMessage: 'head subject\n\nhead body', amendDraft: 'my draft' }));
+    fireEvent.click(checkbox);
+    expect(store.getState()).toMatchObject({ amend: false, commitMessage: 'my draft', amendDraft: null });
+  });
+
+  it('T44 the message edited in Amend mode is not kept when Amend is unchecked: the draft from before checking comes back', async () => {
+    const { app } = appWithShell();
+    const { store } = renderEditor({ app, message: '' });
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'my draft' } });
+    const checkbox = await screen.findByRole('checkbox', { name: 'Amend last commit' });
+    fireEvent.click(checkbox);
+    await vi.waitFor(() => expect(store.getState().commitMessage).toBe('head subject\n\nhead body'));
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'edited amend message' } });
+    fireEvent.click(checkbox);
+    expect(store.getState()).toMatchObject({ amend: false, commitMessage: 'my draft' });
+  });
+
+  it('T45 the HEAD message cannot be read: Amend goes back off and the draft comes back', async () => {
+    const { app, notifications } = appWithShell();
+    const { store } = renderEditor({ app, message: '', readHeadMessage: vi.fn(async () => null) });
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'my draft' } });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith({ kind: 'error', message: 'Failed to read HEAD commit message' }));
+    expect(store.getState()).toMatchObject({ amend: false, commitMessage: 'my draft', amendDraft: null });
+  });
+
+  it('T46 after a successful amend the editor is empty: the draft is not brought back and is forgotten', async () => {
+    const { app } = appWithShell();
+    const commit = vi.fn(async () => ({ ok: true as const }));
+    const { store } = renderEditor({ app, commit, message: '' });
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'my draft' } });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(store.getState().commitMessage).toBe('head subject\n\nhead body'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Amend last commit' }));
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(store.getState()).toMatchObject({ amend: false, commitMessage: '', amendDraft: null }));
   });
 });

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DiffView } from '../../panel/DiffView';
 import { createGitStore } from '../../state/git-store';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 afterEach(() => cleanup());
 
@@ -66,7 +67,7 @@ describe('discard hunk integration', () => {
     });
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'apply', '--reverse', '--whitespace=nowarn', '-'],
+      buildGitArgs(['apply', '--reverse', '--whitespace=nowarn', '-']),
       expect.objectContaining({ input: expect.stringContaining('@@ -1 +1 @@') }),
     );
     expect(exec.mock.calls[0]?.[1]).not.toContain('--cached');

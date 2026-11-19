@@ -2,6 +2,7 @@
 import React from 'react';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { NON_UTF8_HUNK_NOTE } from '../../git/hunk-patch';
 import { DiffView } from '../../panel/DiffView';
 import { createGitStore } from '../../state/git-store';
 
@@ -81,5 +82,33 @@ describe('DiffView hunk actions', () => {
     );
 
     expect(screen.queryByRole('button', { name: /hunk at/ })).toBeNull();
+  });
+  it('T23 a diff containing U+FFFD (bytes that were not valid UTF-8) shows no hunk action in either section and a note saying why; an ordinary diff shows no such note', () => {
+    const store = createGitStore();
+    store.setState({ repoRoot: '/repo' });
+    const lossy = { ...diff, unifiedDiff: '@@ -1 +1 @@\n-old\n+caf\uFFFD\n' };
+
+    const changed = render(
+      <DiffView store={store} change={{ path: 'src/a.ts', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }} diff={lossy} />,
+    );
+    expect(screen.queryAllByRole('button')).toEqual([]);
+    expect(screen.getByRole('note').textContent).toBe(NON_UTF8_HUNK_NOTE);
+    expect(NON_UTF8_HUNK_NOTE).toBe(
+      'This file contains bytes that are not valid UTF-8 (shown as \uFFFD) or the replacement character itself. Hunk actions are not available because they would not write those bytes back unchanged. Use the file-level actions instead.',
+    );
+    expect(screen.getByText('+caf\uFFFD')).toBeTruthy();
+    changed.unmount();
+
+    const staged = render(
+      <DiffView store={store} mode="staged" change={{ path: 'src/a.ts', status: 'M', statusX: 'M', statusY: ' ', kind: 'text' }} diff={lossy} />,
+    );
+    expect(screen.queryAllByRole('button')).toEqual([]);
+    expect(screen.getByRole('note').textContent).toBe(NON_UTF8_HUNK_NOTE);
+    staged.unmount();
+
+    render(
+      <DiffView store={store} change={{ path: 'src/a.ts', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }} diff={diff} />,
+    );
+    expect(screen.queryByRole('note')).toBeNull();
   });
 });

@@ -46,6 +46,15 @@
   font-size: 13px;
 }
 
+/* 头部靠右、紧挨 Refresh 按钮的小字说明(显示的 diff 正在重读) */
+.cgv-header-note {
+  margin-left: auto;
+  color: var(--text-fg);
+  font-size: 11px;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+
 .cgv-refresh-btn {
   padding: 4px 10px;
   border: 1px solid var(--border-line);
@@ -129,6 +138,34 @@
 .cgv-amend-warning {
   color: var(--danger);
   font-weight: 500;
+}
+
+.cgv-hooks-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--danger-bg);
+  font-size: 12px;
+}
+
+.cgv-hooks-warning {
+  color: var(--text-fg);
+  /* visibleText 的输出可以是一长串没有断点的 <U+…>:允许任意处换行,不横向溢出 */
+  overflow-wrap: anywhere;
+}
+
+.cgv-hooks-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cgv-hooks-confirm-btn {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .cgv-commit-actions {
@@ -254,6 +291,13 @@
   background: transparent;
 }
 
+/* 不可操作行的说明:占满整行,排在状态与路径下面 */
+.cgv-row-note {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  white-space: normal;
+}
+
 .cgv-row-actions {
   display: flex;
   align-items: center;
@@ -334,6 +378,8 @@
   place-items: center;
   color: var(--text-fg);
   background: var(--bg-canvas);
+  /* visibleText 的输出可以是一长串没有断点的 <U+…>:允许任意处换行,不横向溢出 */
+  overflow-wrap: anywhere;
 }
 
 .cgv-line-jump,
@@ -452,6 +498,21 @@
   opacity: 0.55;
 }
 
+.cgv-symlink-note {
+  padding: 8px 10px;
+  color: var(--text-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.cgv-truncated-note {
+  padding: 8px 10px;
+  color: var(--text-fg);
+  font-size: 12px;
+  opacity: 0.7;
+}
+
 .cgv-line-add[onclick],
 .cgv-line-ctx[onclick] {
   cursor: pointer;
@@ -513,6 +574,8 @@
 .cgv-preview-error {
   color: var(--danger);
   font-size: 12px;
+  /* visibleText 的输出可以是一长串没有断点的 <U+…>:允许任意处换行,不横向溢出 */
+  overflow-wrap: anywhere;
 }
 
 .cgv-preview-warning {
@@ -624,6 +687,8 @@
   padding: 8px 10px;
   border-top: 1px solid var(--border-line);
   background: var(--bg-panel);
+  /* visibleText 的输出可以是一长串没有断点的 <U+…>:允许任意处换行,不横向溢出 */
+  overflow-wrap: anywhere;
 }
 
 .cgv-banner--info {

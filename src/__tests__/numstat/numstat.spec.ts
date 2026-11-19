@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { loadNumstat, parseNumstat } from '../../git/numstat';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(stdout: string): PluginShellExecResult {
   return {
@@ -49,7 +50,7 @@ describe('numstat parsing', () => {
     expect(parsed.get('a.txt')?.isBinary).toBe(false);
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'diff', '--numstat', '-z', 'HEAD'],
+      buildGitArgs(['diff', '--numstat', '-z', 'HEAD']),
       expect.objectContaining({ cwd: '/repo' }),
     );
   });

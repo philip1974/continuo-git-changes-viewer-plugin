@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { stageHunk } from '../../git/stage-hunk';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -24,11 +25,11 @@ describe('stageHunk shell wrapper', () => {
 
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'apply', '--cached', '--whitespace=nowarn', '-'],
+      buildGitArgs(['apply', '--cached', '--whitespace=nowarn', '-']),
       {
         cwd: '/repo',
         input: patch,
-        env: { GIT_OPTIONAL_LOCKS: '0' },
+        env: expect.objectContaining({ GIT_OPTIONAL_LOCKS: '0' }),
         timeoutMs: 10_000,
       },
     );

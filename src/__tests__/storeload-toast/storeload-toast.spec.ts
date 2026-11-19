@@ -40,8 +40,26 @@ function makeApp(notifications?: { show: ReturnType<typeof vi.fn> }): CoPluginAp
     commands: { register: vi.fn(() => ({ dispose: vi.fn() })) },
     ribbon: { register: vi.fn(() => ({ dispose: vi.fn() })) },
     workspace: { getRoot: vi.fn(async () => '/repo') },
-    fs: { requestScope: vi.fn(async () => 'grant') },
-    shell: { exec: vi.fn(), execStream: vi.fn() },
+    fs: {
+      requestScope: vi.fn(async () => 'grant'),
+      listDir: vi.fn(async () => []),
+      lstat: vi.fn(async () => {
+        throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
+      }),
+    },
+    // 受限仓库探测:git config --list 返回空配置,布局探测(rev-parse)返回"workspace 根即工作树顶层、
+    // git 目录在其内" = 可信仓库
+    shell: {
+      exec: vi.fn(async (_cmd: string, args: readonly string[]) => ({
+        stdout: args.includes('--is-inside-work-tree') ? 'true\n\n/repo/.git\n/repo/.git\n/repo\n' : '',
+        stderr: '',
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        truncated: false,
+      })),
+      execStream: vi.fn(),
+    },
     dock: { openPanel: vi.fn() },
     ...(notifications ? { notifications } : {}),
   } as unknown as CoPluginApp;

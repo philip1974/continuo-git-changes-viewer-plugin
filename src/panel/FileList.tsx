@@ -3,7 +3,7 @@ import { canDiscardFile } from '../git/can-discard-file';
 import { canStageFile } from '../git/can-stage-file';
 import type { SectionKind } from '../git/can-stage-hunk';
 import { canUnstageFile } from '../git/can-unstage-file';
-import type { FileChange } from '../git/status-scanner';
+import { isUnmerged, type FileChange } from '../git/status-scanner';
 import {
   selectChanged,
   selectStaged,
@@ -18,7 +18,18 @@ interface FileListProps {
   readonly onStageFile?: (change: FileChange, section: SectionKind) => void;
   readonly onUnstageFile?: (change: FileChange, section: SectionKind) => void;
   readonly onDiscardFile?: (change: FileChange, section: SectionKind) => void;
+  /** 提交正在进行(git-store 的 commitInFlight):文件级写操作按钮禁用。 */
+  readonly writesBlocked?: boolean;
 }
+
+// 提交正在进行时改暂存区,会让提交的内容不确定(取决于 Stage 与 `git commit` 谁先读写 index)。
+export const COMMIT_IN_PROGRESS_TITLE = 'A commit is in progress — wait for it to finish';
+export const COMMIT_IN_PROGRESS_MESSAGE =
+  'A commit is in progress. Nothing was changed — wait for it to finish and try again.';
+
+// 每个文件一行、没有虚拟化:status 条目极多(几万个未跟踪文件)时只渲染每段的前 MAX_SECTION_ROWS 行并说明;
+// 数据不裁剪(计数、已暂存数量、提交都按完整列表)。
+export const MAX_SECTION_ROWS = 2000;
 
 const statusIcon: Record<FileChange['status'], string> = {
   M: '~',
@@ -27,6 +38,18 @@ const statusIcon: Record<FileChange['status'], string> = {
   R: 'R',
   U: '?',
 };
+
+// 不可操作行(FileChange.inoperable):文件名是 POSIX 上合法、但插件不肯传给 git 的形式(`c:notes.txt`、`..\x`)。
+// 只显示——路径是纯文本,行不是按钮,没有任何操作;已暂存的要说明"提交会包含它"(用户必须能看见将要提交什么)。
+export const INOPERABLE_NOTE =
+  'Unsupported file name — cannot be viewed or changed here. Use git in a terminal.';
+export const INOPERABLE_STAGED_NOTE =
+  'Unsupported file name — cannot be viewed or changed here, but it is staged and a commit will include it. Use git in a terminal.';
+
+// 未合并的行(冲突):没有 Unstage / Discard(见 can-unstage-file / can-discard-file)。行上的标记说明原因。
+// 不说"然后在这里 stage":UU / AA / AU / UA 行没有 Stage 按钮(只有 UD / DD 有,见 can-stage-file)——如实指向终端。
+export const UNMERGED_NOTE =
+  'Unresolved merge conflict. Unstage and Discard are not available for it here: resolve the conflict in an editor or a terminal, then mark it resolved by running `git add` on it in a terminal.';
 
 function rowLabel(change: FileChange): string {
   return change.oldPath ? `${change.oldPath} -> ${change.path}` : change.path;
@@ -41,6 +64,7 @@ function Section({
   onStageFile,
   onUnstageFile,
   onDiscardFile,
+  writesBlocked,
 }: {
   readonly title: string;
   readonly items: readonly FileChange[];
@@ -50,8 +74,10 @@ function Section({
   readonly onStageFile?: (change: FileChange, section: SectionKind) => void;
   readonly onUnstageFile?: (change: FileChange, section: SectionKind) => void;
   readonly onDiscardFile?: (change: FileChange, section: SectionKind) => void;
+  readonly writesBlocked?: boolean;
 }) {
   if (items.length === 0) return null;
+  const rows = items.length > MAX_SECTION_ROWS ? items.slice(0, MAX_SECTION_ROWS) : items;
 
   return (
     <details className="cgv-section" open>
@@ -60,27 +86,48 @@ function Section({
         <span className="cgv-count">{items.length}</span>
       </summary>
       <ul>
-        {items.map((change) => (
+        {rows.map((change, index) => (
           <li
-            key={`${title}:${change.statusX}${change.statusY}:${change.path}`}
+            // 两类行的 key 空间互不重叠(`ro:` / `ok:` 前缀)。不可操作行的名字可能是解码之后才相同(两个不同的
+            // 非 UTF-8 字节序列都变成 U+FFFD):按行序号区分——这些行没有状态、不可操作,按位置复用无妨。可操作行的
+            // 路径在一个区里唯一,key 保持稳定(选择、滚动位置不受影响)。此前不可操作行是"路径 + `#序号`"、可操作行
+            // 是"路径":`x\..`(不可操作)与 `x\..#0`(可操作)撞 key,refresh 之后 Staged 区出现幽灵行。
+            key={change.inoperable ? `${title}:ro:${index}` : `${title}:ok:${change.statusX}${change.statusY}:${change.path}`}
             className="cgv-file-li"
           >
-            <button
-              className="cgv-file-row"
-              type="button"
-              onClick={() => store.getState().selectFile(change.path, mode)}
-            >
-              <span className="cgv-status">{statusIcon[change.status]}</span>
-              <span className="cgv-path">{rowLabel(change)}</span>
-              {change.kind === 'binary' ? <span className="cgv-badge">BIN</span> : null}
-            </button>
+            {change.inoperable ? (
+              <div className="cgv-file-row cgv-file-row--readonly">
+                <span className="cgv-status">{statusIcon[change.status]}</span>
+                <span className="cgv-path">{rowLabel(change)}</span>
+                <span className="cgv-row-note" role="note">
+                  {section === 'staged' ? INOPERABLE_STAGED_NOTE : INOPERABLE_NOTE}
+                </span>
+              </div>
+            ) : (
+              <button
+                className="cgv-file-row"
+                type="button"
+                onClick={() => store.getState().selectFile(change.path, mode)}
+              >
+                <span className="cgv-status">{statusIcon[change.status]}</span>
+                <span className="cgv-path">{rowLabel(change)}</span>
+                {change.kind === 'binary' ? <span className="cgv-badge">BIN</span> : null}
+                {isUnmerged(change) ? (
+                  <span className="cgv-badge cgv-conflict-badge" title={UNMERGED_NOTE}>
+                    CONFLICT
+                  </span>
+                ) : null}
+              </button>
+            )}
             <div className="cgv-row-actions">
               {onStageFile && canStageFile(change, section) ? (
                 <button
                   type="button"
                   className="cgv-row-action-btn cgv-stage-action"
-                  title={`Stage file ${change.path}`}
+                  // 未合并的行上 `git add` 的含义是"标记为已解决"
+                  title={writesBlocked ? COMMIT_IN_PROGRESS_TITLE : isUnmerged(change) ? `Mark ${change.path} as resolved (git add)` : `Stage file ${change.path}`}
                   aria-label={`Stage file ${change.path}`}
+                  disabled={writesBlocked}
                   onClick={() => onStageFile(change, section)}
                 >
                   ↑
@@ -90,8 +137,9 @@ function Section({
                 <button
                   type="button"
                   className="cgv-row-action-btn cgv-unstage-action"
-                  title={`Unstage file ${change.path}`}
+                  title={writesBlocked ? COMMIT_IN_PROGRESS_TITLE : `Unstage file ${change.path}`}
                   aria-label={`Unstage file ${change.path}`}
+                  disabled={writesBlocked}
                   onClick={() => onUnstageFile(change, section)}
                 >
                   ↓
@@ -101,8 +149,9 @@ function Section({
                 <button
                   type="button"
                   className="cgv-row-action-btn cgv-discard-btn"
-                  title={`Discard file ${change.path} (destructive)`}
+                  title={writesBlocked ? COMMIT_IN_PROGRESS_TITLE : `Discard file ${change.path} (destructive)`}
                   aria-label={`Discard file ${change.path}`}
+                  disabled={writesBlocked}
                   onClick={() => onDiscardFile(change, section)}
                 >
                   ×
@@ -112,6 +161,11 @@ function Section({
           </li>
         ))}
       </ul>
+      {items.length > rows.length ? (
+        <div className="cgv-truncated-note" role="note">
+          {`Showing the first ${rows.length.toLocaleString('en-US')} of ${items.length.toLocaleString('en-US')} files. Use git status in a terminal to see the rest.`}
+        </div>
+      ) : null}
     </details>
   );
 }
@@ -122,6 +176,7 @@ export function FileList({
   onStageFile,
   onUnstageFile,
   onDiscardFile,
+  writesBlocked = false,
 }: FileListProps) {
   const staged = selectStaged({ changes });
   const changed = selectChanged({ changes });
@@ -137,6 +192,7 @@ export function FileList({
         onStageFile={onStageFile}
         onUnstageFile={onUnstageFile}
         onDiscardFile={onDiscardFile}
+        writesBlocked={writesBlocked}
       />
       <Section
         title="Changed"
@@ -147,6 +203,7 @@ export function FileList({
         onStageFile={onStageFile}
         onUnstageFile={onUnstageFile}
         onDiscardFile={onDiscardFile}
+        writesBlocked={writesBlocked}
       />
       <Section
         title="Untracked"
@@ -157,6 +214,7 @@ export function FileList({
         onStageFile={onStageFile}
         onUnstageFile={onUnstageFile}
         onDiscardFile={onDiscardFile}
+        writesBlocked={writesBlocked}
       />
     </aside>
   );

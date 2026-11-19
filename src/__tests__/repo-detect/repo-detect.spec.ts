@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { detectRepo } from '../../git/repo-detect';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
+import { buildGitArgs } from '../../git/exec';
 
 function result(partial: Partial<PluginShellExecResult>): PluginShellExecResult {
   return {
@@ -35,7 +36,7 @@ describe('repo detection', () => {
     });
     expect(exec).toHaveBeenCalledWith(
       'git',
-      ['--no-optional-locks', 'rev-parse', '--show-prefix'],
+      buildGitArgs(['rev-parse', '--show-prefix']),
       expect.objectContaining({ cwd: '/repo' }),
     );
   });

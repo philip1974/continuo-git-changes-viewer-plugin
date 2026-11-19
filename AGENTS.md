@@ -7,14 +7,18 @@ work inside `~/Desktop/continuo-git-viewer-plugin/`.
 
 ## Hard Lines
 
-- Git behavior is read-only: no stage, discard, commit, stash, checkout, reset,
-  or clean.
-- Production source must use the Continuo SDK boundary, especially
-  `app.shell.exec` for git.
+- Git writes are limited to the explicit, user-initiated operations shipped
+  since v0.3: stage / unstage / discard (hunk and file level), commit and
+  amend. No stash, branch checkout, reset, clean, push or fetch, and no repo
+  mutation from background refresh or read paths.
+- Production source must use the Continuo SDK boundary; run git through
+  `gitExec` (`src/git/exec.ts`, on top of `app.shell.exec`) so the hardening
+  arguments stay in place.
 - Keep `GIT_OPTIONAL_LOCKS=0` and `--no-optional-locks` on git calls.
 - Large diffs must use the placeholder/degraded path.
-- Do not add a ribbon action in v0.1.
-- Jump-back remains an inline banner until the host SDK adds editor navigation.
+- Treat the opened folder as untrusted: repo-safety / repo-hooks checks stay
+  fail-closed, and working-tree files are never read through symbolic links.
+- Jump-back uses `app.editor.openFile`, with the inline banner as fallback.
 
 ## Workflow
 

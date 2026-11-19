@@ -89,6 +89,8 @@ async function renderHarness({
     load: async () => ({
       repoRoot: '/repo',
       changes: [{ path: 'src/a.ts', status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }],
+      // 与真实的 load 一致:列表连同它的指纹(面板拿当前指纹与 store 里这一份比较)
+      statusFingerprint: 'initial',
     }),
   });
   store.setState({ repoRoot: '/repo' });

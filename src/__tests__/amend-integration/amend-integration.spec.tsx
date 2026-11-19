@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { createGitStore } from '../../state/git-store';
+import { buildGitArgs } from '../../git/exec';
 
 afterEach(() => cleanup());
 
@@ -42,9 +43,13 @@ describe('amend integration', () => {
       changes: [{ path: 'src/a.ts', status: 'M', statusX: 'M', statusY: ' ', kind: 'text' }],
       commitMessage: 'new subject',
       amend: true,
+      amendHead: 'after', // 勾选 Amend 时的 HEAD,与下面 exec 对 rev-parse HEAD 的回答相同
+      statusFingerprint: 'fp', // 与下面 exec 对指纹 status 的回答相同:提交前确认通过
       refresh: vi.fn(async () => undefined),
     });
     const exec = vi.fn(async (_cmd: string, args: readonly string[]) => {
+      if (args.includes('--git-common-dir')) return result({ exitCode: 0, stdout: '.git\n' });
+      if (args.includes('--porcelain=v2')) return result({ exitCode: 0, stdout: 'fp' });
       if (args.includes('rev-parse')) return result({ exitCode: 0, stdout: args.includes('--verify') ? 'HEAD\n' : 'after\n' });
       if (args.includes('commit')) return result({ exitCode: 0 });
       if (args.includes('log')) return result({ exitCode: 0, stdout: 'new subject\n' });
@@ -52,6 +57,10 @@ describe('amend integration', () => {
     });
     const app = {
       shell: { exec },
+      fs: {
+        listDir: async () => [],
+        lstat: async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true, isSymlink: false }),
+      },
       notifications: { show: vi.fn() },
     } as unknown as CoPluginApp;
 
@@ -61,7 +70,7 @@ describe('amend integration', () => {
     await vi.waitFor(() => {
       expect(exec).toHaveBeenCalledWith(
         'git',
-        ['--no-optional-locks', 'commit', '--amend', '-F', '-'],
+        buildGitArgs(['commit', '--amend', '-F', '-']),
         expect.objectContaining({ input: 'new subject' }),
       );
       expect(store.getState().amend).toBe(false);

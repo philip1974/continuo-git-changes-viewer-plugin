@@ -7,6 +7,7 @@ import { GitViewerPanel } from '../../panel/GitViewerPanel';
 import type { CoPluginApp, PluginShellExecResult } from '../../sdk/types';
 import { createGitStore } from '../../state/git-store';
 import type { FileChange } from '../../git/status-scanner';
+import { buildGitArgs } from '../../git/exec';
 
 afterEach(() => {
   cleanup();
@@ -33,14 +34,23 @@ function renderWithChanges(
   const notifications = { show: vi.fn() };
   const shellExec = vi.fn(
     async (cmd: string, args: readonly string[], opts?: unknown) => {
-      if (args[0] === '--no-optional-locks' && args[1] === 'rev-parse') {
+      if (args.includes('rev-parse')) {
         return result({ exitCode: 0, stdout: 'HEAD\n' });
       }
+      // 文件级操作之前对 index 的只读查询(子模块条目 / 路径之下的条目):一律空;其余交给用例的 exec
+      if (args.includes('ls-files') || args.includes('ls-tree')) return result({ exitCode: 0 });
       return exec(cmd, args, opts);
     },
   );
   const app = {
     shell: { exec: shellExec },
+    // 工作树里被操作的路径:普通文件,其父级(`/repo/src`)是目录(stage / discard 之前的查看)
+    fs: {
+      lstat: async (path: string) => {
+        const isFile = /\.[a-z]+$/.test(path);
+        return { size: 1, mtimeMs: 0, isFile, isDirectory: !isFile, isSymlink: false };
+      },
+    },
     ...(withNotifications ? { notifications } : {}),
   } as unknown as CoPluginApp;
   const refresh = vi.fn(async () => undefined);
@@ -67,10 +77,24 @@ describe('file-level write-op integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stage file new.txt' }));
 
     await vi.waitFor(() => {
-      expect(exec).toHaveBeenCalledWith('git', ['--no-optional-locks', 'add', '--', 'new.txt'], expect.anything());
+      // 未跟踪行:名字来自 git 读目录,add 不固定 core.precomposeUnicode(见 exec T13)
+      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['add', '--', 'new.txt'], { untrackedPathArgs: true }), expect.anything());
       expect(refresh).toHaveBeenCalledTimes(1);
     });
     expect(notifications.show).toHaveBeenCalledWith({ kind: 'info', message: 'Staged new.txt' });
+  });
+
+  it('T35b stages a tracked Changed row with the byte-exact argument pin (core.precomposeUnicode=false)', async () => {
+    const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
+    const nfd = 'cafe\u0301.txt';
+    renderWithChanges([{ path: nfd, status: 'M', statusX: ' ', statusY: 'M', kind: 'text' }], exec);
+
+    fireEvent.click(screen.getByRole('button', { name: `Stage file ${nfd}` }));
+
+    await vi.waitFor(() => {
+      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['add', '--', nfd]), expect.anything());
+    });
+    expect(buildGitArgs(['add', '--', nfd])).toContain('core.precomposeUnicode=false');
   });
 
   it('T36 discards a Changed MM file with checkout -- and never HEAD --', async () => {
@@ -85,7 +109,7 @@ describe('file-level write-op integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard file' }));
 
     await vi.waitFor(() => {
-      expect(exec).toHaveBeenCalledWith('git', ['--no-optional-locks', 'checkout', '--', 'src/a.ts'], expect.anything());
+      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['checkout', '--', 'src/a.ts']), expect.anything());
       expect(refresh).toHaveBeenCalledTimes(1);
     });
     expect(exec.mock.calls[0]?.[1]).not.toContain('HEAD');
@@ -104,8 +128,8 @@ describe('file-level write-op integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Unstage file src/a.ts' }));
 
     await vi.waitFor(() => {
-      expect(exec).toHaveBeenNthCalledWith(1, 'git', ['--no-optional-locks', 'restore', '-h'], expect.anything());
-      expect(exec).toHaveBeenNthCalledWith(2, 'git', ['--no-optional-locks', 'restore', '--staged', '--', 'src/a.ts'], expect.anything());
+      expect(exec).toHaveBeenNthCalledWith(1, 'git', buildGitArgs(['restore', '-h']), expect.anything());
+      expect(exec).toHaveBeenNthCalledWith(2, 'git', buildGitArgs(['restore', '--staged', '--', 'src/a.ts']), expect.anything());
       expect(refresh).toHaveBeenCalledTimes(1);
     });
   });
@@ -145,5 +169,20 @@ describe('file-level write-op integration', () => {
         dismissable: true,
       });
     });
+  });
+  it('T40 Stage on an unmerged row (`UD`) runs the same git add, and the toast says what that meant: the conflict was marked resolved', async () => {
+    const exec = vi.fn().mockResolvedValue(result({ exitCode: 0 }));
+    const { notifications, refresh } = renderWithChanges(
+      [{ path: 'del1.txt', status: 'D', statusX: 'U', statusY: 'D', kind: 'text' }],
+      exec,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage file del1.txt' }));
+
+    await vi.waitFor(() => {
+      expect(exec).toHaveBeenCalledWith('git', buildGitArgs(['add', '--', 'del1.txt']), expect.anything());
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+    expect(notifications.show).toHaveBeenCalledWith({ kind: 'info', message: 'Marked del1.txt as resolved (staged)' });
   });
 });
